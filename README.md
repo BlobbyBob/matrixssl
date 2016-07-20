@@ -17,7 +17,7 @@ MatrixSSL is an embedded SSL and TLS implementation designed for small footprint
 
 ##Reporting Issues
 Please email support@matrixssl.org.
-Sensitive emails can be encrypted using the public key in this directory `pgp.asc`, Key fingerprint = `D6AD F1C5 E34E 696B 0953  556C 8BB2 B39A 2795 C6B3`.
+Sensitive emails can be encrypted using the public key in this directory [pgp.asc!](pgp.asc)`, Key fingerprint = `D6AD F1C5 E34E 696B 0953  556C 8BB2 B39A 2795 C6B3`.
 
 ##Features
 + < 50KB total footprint with crypto provider
