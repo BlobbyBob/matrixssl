@@ -157,7 +157,7 @@ enum PACKED {
 
 /** Public Key types for psPubKey_t */
 enum PACKED {
-	PS_NONE = 0,
+	PS_NOKEY = 0,
 	PS_RSA,
 	PS_ECC,
 	PS_DH

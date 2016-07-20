@@ -1391,6 +1391,47 @@ static int32 hexToBinary(unsigned char *hex, unsigned char *bin, int32 binlen)
 #endif /* USE_PKCS5 */
 
 #ifdef USE_RSA
+int32_t pkcs1ParsePubFile(psPool_t *pool, const char *fileName, psRsaKey_t *key)
+{
+	unsigned char	*DERout;
+	unsigned char	sha1KeyHash[SHA1_HASH_SIZE];
+	const unsigned char	*p, *end;
+	int32_t			rc, oi;
+	uint16_t		DERlen, seqlen, plen;
+	
+	/* Had to tweak pkcs1DecodePrivFile to accept PUBLIC KEY headers */
+	if ((rc = pkcs1DecodePrivFile(pool, fileName, NULL, &DERout, &DERlen))
+			< PS_SUCCESS) {
+		return rc;
+	}
+	
+	p = DERout;
+	end = p + DERlen;
+	
+	if (getAsnSequence(&p, (int32)(end - p), &seqlen) < 0) {
+		psTraceCrypto("Couldn't parse PKCS#1 RSA public key file\n");
+		goto pubKeyFail;
+	}
+	if (getAsnAlgorithmIdentifier(&p, (int32)(end - p), &oi, &plen) < 0) {
+		psTraceCrypto("Couldn't parse PKCS#1 RSA public key file\n");
+		goto pubKeyFail;
+	}
+	if (oi != OID_RSA_KEY_ALG) {
+		psTraceCrypto("Couldn't parse PKCS#1 RSA public key file\n");
+		goto pubKeyFail;
+	}
+	if (psRsaParseAsnPubKey(pool, &p,(int32)(end - p), key, sha1KeyHash) < 0) {
+		psTraceCrypto("Couldn't parse PKCS#1 RSA public key file\n");
+		goto pubKeyFail;
+	}
+
+	psFree(DERout, pool);
+	return PS_SUCCESS;
+	
+pubKeyFail:
+	psFree(DERout, pool);
+	return PS_PARSE_FAIL;
+}
 /******************************************************************************/
 /**
 	Parse a PEM format private key file.
@@ -1476,6 +1517,15 @@ int32_t pkcs1DecodePrivFile(psPool_t *pool, const char *fileName,
 			((end = strstr(start, "-----END")) != NULL) &&
 			((endTmp = strstr(end, "PRIVATE KEY-----")) != NULL)) {
 		start += strlen("PRIVATE KEY-----");
+		while (*start == '\x0d' || *start == '\x0a') {
+			start++;
+		}
+		PEMlen = (uint32)(end - start);
+	} else if (((start = strstr((char*)keyBuf, "-----BEGIN")) != NULL) &&
+			((start = strstr((char*)keyBuf, "PUBLIC KEY-----")) != NULL) &&
+			((end = strstr(start, "-----END")) != NULL) &&
+			((endTmp = strstr(end, "PUBLIC KEY-----")) != NULL)) {
+		start += strlen("PUBLIC KEY-----");
 		while (*start == '\x0d' || *start == '\x0a') {
 			start++;
 		}

@@ -286,10 +286,11 @@ int32 psAesTestGCM(void)
 	psAesGcm_t	dCtx;
 	unsigned char		plaintext[4128];
 	unsigned char		ciphertext[4128];
-#ifndef USE_ONLY_DECRYPT_GCM_WITH_TAG
+	unsigned char		ciphertext_rand[4128];
+	unsigned char		plaintext_rand[4128];
 	unsigned char		tag[16];
-#endif
 	unsigned char       ciphertext_with_tag[4144];
+	unsigned char       iv[12];
 	static unsigned char taglen[3] = { 8, 12, 16 };
 	static char *tagmsg[] = {
 		"	AES-GCM-%d known vector decrypt (taglen=8) test... ",
@@ -808,6 +809,60 @@ int32 psAesTestGCM(void)
 			printf("PASSED\n");
 		}
 
+		if (i == 1) {
+			_psTraceInt("	AES-GCM-%d long known vector random encrypt test... ", tests[i].keylen * 8);
+		} else {
+			_psTraceInt("	AES-GCM-%d known vector random encrypt test... ", tests[i].keylen * 8);
+		}
+		memcpy(iv, tests[i].iv, 12);
+		psAesInitGCM(&eCtx, tests[i].key, tests[i].keylen);
+		res = psAesReadyGCMRandomIV(&eCtx, iv, tests[i].aad, tests[i].aadlen,
+									NULL);
+		if (res != PS_SUCCESS) {
+			memset(ciphertext_rand, 0, sizeof ciphertext_rand);
+		} else {
+			if (tests[i].ptlen > 1024) {
+					/* Try multipart */
+					psAesEncryptGCM(&eCtx, tests[i].pt, ciphertext_rand,
+									1024);
+					psAesEncryptGCM(&eCtx, tests[i].pt + 1024,
+									ciphertext_rand + 1024,
+									tests[i].ptlen - 1024);
+			} else {
+					psAesEncryptGCM(&eCtx, tests[i].pt, ciphertext_rand,
+									tests[i].ptlen);
+			}
+			psAesGetGCMTag(&eCtx, 16, tag);
+		}
+
+		if ((tests[i].ptlen >= 16 &&
+			 memcmp(ciphertext_rand, tests[i].ct, tests[i].ptlen) == 0) ||
+				(memcmp(tag, tests[i].tag, 16) == 0)) {
+			printf("FAILED: Random IV failed or not used.\n");
+			res = PS_FAILURE;
+		} else {
+			psAesInitGCM(&dCtx, tests[i].key, tests[i].keylen);
+			psAesReadyGCM(&dCtx, iv, tests[i].aad, tests[i].aadlen);
+			if (psAesDecryptGCM2(&dCtx, ciphertext_rand, plaintext_rand,
+								 tests[i].ptlen,
+								 tag, 16) != PS_SUCCESS ||
+				memcmp(plaintext_rand, tests[i].pt, tests[i].ptlen) != 0) {
+					printf("FAILED: psAesDecryptGCM2 failed\n");
+					res = PS_FAILURE;
+			} else {
+#ifdef USE_VERBOSE_RANDOM_GCM
+					printf("PASSED [iv=%02x%02x%02x%02x%02x%02x"
+						   "%02x%02x%02x%02x%02x%02x]\n",
+						   iv[0], iv[1], iv[2], iv[3],
+						   iv[4], iv[5], iv[6], iv[7],
+						   iv[8], iv[9], iv[10], iv[11]);
+#else
+					printf("PASSED\n");
+#endif
+			}
+		}
+		psAesClearGCM(&eCtx);
+
 #ifndef USE_ONLY_DECRYPT_GCM_WITH_TAG
 		_psTraceInt("	AES-GCM-%d known vector decrypt (tagless) test... ", tests[i].keylen * 8);
 		psAesInitGCM(&dCtx, tests[i].key, tests[i].keylen);
@@ -845,6 +900,23 @@ int32 psAesTestGCM(void)
 		memset(plaintext, 0x0, 32);
 #endif /* !defined USE_ONLY_DECRYPT_GCM_WITH_TAG */
 
+#ifndef USE_LIBSODIUM_AES_GCM
+		_psTraceInt("	AES-GCM-%d known vector decrypt2 test... ", tests[i].keylen * 8);
+		psAesInitGCM(&dCtx, tests[i].key, tests[i].keylen);
+		psAesReadyGCM(&dCtx, tests[i].iv, tests[i].aad, tests[i].aadlen);
+		if (psAesDecryptGCM2(&dCtx, tests[i].ct, plaintext, tests[i].ptlen,
+							 tests[i].tag, 16) != PS_SUCCESS ||
+			memcmp(plaintext, tests[i].pt, tests[i].ptlen) != 0) {
+			printf("FAILED: psAesDecryptGCM2 failed\n");
+			res = PS_FAILURE;
+		} else {
+			printf("PASSED\n");
+		}
+
+		psAesClearGCM(&dCtx);
+		memset(plaintext, 0x0, 32);
+#endif /* !defined USE_LIBSODIUM_AES_GCM */
+
 		for(l = 0; l < (int32) sizeof(taglen); l++) {
 			_psTraceInt(tagmsg[l], tests[i].keylen * 8);
 			memset(plaintext, 0x11, sizeof(plaintext));
@@ -871,15 +943,33 @@ int32 psAesTestGCM(void)
 			memset(plaintext, 0x11, sizeof(plaintext));
 			memset(ciphertext_with_tag, 0x22, sizeof(ciphertext_with_tag));
 			memcpy(ciphertext_with_tag, tests[i].ct, tests[i].ptlen);
-			memcpy(ciphertext_with_tag + tests[i].ptlen, tests[i].tag, taglen[l]);
+			memcpy(ciphertext_with_tag + tests[i].ptlen, tests[i].tag,
+				   taglen[l]);
 			ciphertext_with_tag[tests[i].ptlen + taglen[l] - 1]++;
 			psAesInitGCM(&dCtx, tests[i].key, tests[i].keylen);
 			psAesReadyGCM(&dCtx, tests[i].iv, tests[i].aad, tests[i].aadlen);
-			if (psAesDecryptGCM(&dCtx, ciphertext_with_tag, tests[i].ptlen + taglen[l],
+			if (psAesDecryptGCM(&dCtx, ciphertext_with_tag,
+								tests[i].ptlen + taglen[l],
 								plaintext, tests[i].ptlen) != PS_SUCCESS) {
-				printf("PASSED\n");
+
+				psAesClearGCM(&dCtx);
+				psAesInitGCM(&dCtx, tests[i].key, tests[i].keylen);
+				psAesReadyGCM(&dCtx, tests[i].iv, tests[i].aad,
+							  tests[i].aadlen);
+				if (psAesDecryptGCM2(&dCtx, tests[i].ct,
+									 plaintext, tests[i].ptlen,
+									 ciphertext_with_tag + tests[i].ptlen,
+									 taglen[l]) != PS_SUCCESS) {
+						printf("PASSED\n");
+				} else {
+						printf("FAILED: verify accepts invalid tag (%s)\n",
+							   "psAesDecryptGCM2");
+						res = PS_FAILURE;
+				}
+
 			} else {
-				printf("FAILED: verify accepts invalid tag\n");
+					printf("FAILED: verify accepts invalid tag (%s)\n",
+						   "psAesDecryptGCM");
 				res = PS_FAILURE;
 			}
 		}

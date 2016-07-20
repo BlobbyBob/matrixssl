@@ -551,6 +551,11 @@ x = (((uint64)((y)[0] & 255))<<56)|(((uint64)((y)[1] & 255))<<48)| \
 	BLOCKSIZE <= 1 ? (unsigned char)0 : \
 	(unsigned char)(BLOCKSIZE - ((LEN) & (BLOCKSIZE - 1)))
 
+#ifdef  USE_CRL
+extern int32_t psCrlOpen();
+extern void psCrlClose();
+#endif
+
 #endif /* _h_PS_CRYPTOLIB */
 
 /******************************************************************************/

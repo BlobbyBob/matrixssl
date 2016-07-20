@@ -173,6 +173,8 @@ enum {
 	id_ce_issuerAltName = 18,
 	id_ce_subjectDirectoryAttributes = 9,
 	id_ce_basicConstraints = 19,
+	id_ce_cRLNumber = 20,
+	id_ce_issuingDistributionPoint = 28,
 	id_ce_nameConstraints = 30,
 	id_ce_policyConstraints = 36,
 	id_ce_extKeyUsage = 37,
@@ -264,6 +266,8 @@ typedef enum {
 	OID_ENUM(id_ce_policyConstraints),
 	OID_ENUM(id_ce_extKeyUsage),
 	OID_ENUM(id_ce_cRLDistributionPoints),
+	OID_ENUM(id_ce_cRLNumber),
+	OID_ENUM(id_ce_issuingDistributionPoint),
 	OID_ENUM(id_ce_inhibitAnyPolicy),
 	OID_ENUM(id_ce_freshestCRL),
 	OID_ENUM(id_pe_authorityInfoAccess),
@@ -319,6 +323,8 @@ typedef struct {
 #endif /* USE_FULL_CERT_PARSE */
 #ifdef USE_CRL
 	x509GeneralName_t			*crlDist;
+	unsigned char				*crlNum;
+	int32						crlNumLen;
 #endif
 } x509v3extensions_t;
 
@@ -326,11 +332,27 @@ typedef struct {
 
 #ifdef USE_CRL
 typedef struct x509revoked {
-	psPool_t			*pool;
 	unsigned char		*serial;
 	uint16_t			serialLen;
 	struct x509revoked	*next;
 } x509revoked_t;
+
+typedef struct psCRL {
+	psPool_t			*pool;
+	int32_t				authenticated; /* Has this CRL been authenticated */
+	unsigned char		sigHash[MAX_HASH_SIZE];
+	int32_t				sigHashLen;
+	int32				nextUpdateType;
+	char				*nextUpdate; /* Only concerned about expiration */
+	int32_t				sigAlg; /* OID_SHA1_RSA_SIG */
+	unsigned char		*sig;
+	uint16_t			sigLen;
+	uint16_t			expired;
+	x509DNattributes_t	issuer;
+	x509v3extensions_t	extensions;
+	x509revoked_t		*revoked;
+	struct psCRL		*next;
+} psX509Crl_t;
 #endif
 
 
@@ -366,8 +388,8 @@ typedef struct psCert {
 	x509v3extensions_t	extensions;
 	int32				authStatus; /* See psX509AuthenticateCert doc */
 	uint32				authFailFlags; /* Flags for extension check failures */
-#ifdef USE_CRL
-	x509revoked_t		*revoked;
+#ifdef USE_CRL /* Use for OCSP later as well? */
+	int32				revokedStatus;
 #endif
 	unsigned char		sigHash[MAX_HASH_SIZE];
 #endif /* USE_CERT_PARSE */
@@ -434,6 +456,9 @@ extern int32_t parseOCSPResponse(psPool_t *pool, int32_t len,
 					mOCSPResponse_t *response);
 extern int32_t validateOCSPResponse(psPool_t *pool, psX509Cert_t *trustedOCSP,
 					psX509Cert_t *srvCerts,	mOCSPResponse_t *response);
+extern int32_t matrixSslWriteOCSPRequest(psPool_t *pool, psX509Cert_t *cert,
+					psX509Cert_t *certIssuer, unsigned char **request,
+					uint32_t *requestLen, int32_t flags);
 #endif
 
 /******************************************************************************/

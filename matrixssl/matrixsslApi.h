@@ -41,8 +41,8 @@
 extern "C" {
 #endif
 
-#include "core/coreApi.h"
-#include "crypto/cryptoApi.h"
+#include "../core/coreApi.h"
+#include "../crypto/cryptoApi.h"
 
 #include "matrixsslConfig.h"
 #include "matrixssllib.h"
@@ -107,16 +107,6 @@ PSPUBLIC int32	matrixSslLoadPkcs12(sslKeys_t *keys,
 						const unsigned char *importPass, int32 ipasslen,
 						const unsigned char *macPass, int32 mpasslen,
 						int32 flags);
-#ifdef USE_CRL
-PSPUBLIC int32 matrixSslGetCRL(sslKeys_t *keys,
-						int32 (*crlCb)(psPool_t *pool, psX509Cert_t *CA,
-						int append, char *url, uint32 urlLen),
-						int32 *numLoaded);
-/* memAllcocUserPtr is for TMP_PKI */
-PSPUBLIC int32 matrixSslLoadCRL(psPool_t *pool, psX509Cert_t *CA, int append,
-						const char *CRLbin, int32 CRLbinLen,
-						void *poolUserPtr);
-#endif
 #if defined(USE_OCSP) && defined(USE_SERVER_SIDE_SSL)
 PSPUBLIC int32_t matrixSslLoadOCSPResponse(sslKeys_t *keys,
 						const unsigned char *OCSPResponseBuf,

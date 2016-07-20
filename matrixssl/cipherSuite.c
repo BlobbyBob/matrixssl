@@ -791,18 +791,18 @@ const static sslCipherSpec_t	supportedCiphers[] = {
 
 /* Ephemeral ciphersuites */
 #ifdef USE_TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
-	{TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
-		CS_ECDHE_ECDSA,
-		CRYPTO_FLAGS_AES256 | CRYPTO_FLAGS_GCM | CRYPTO_FLAGS_SHA3,
+	{TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,	/* ident */
+		CS_ECDHE_ECDSA,							/* type */
+		CRYPTO_FLAGS_AES256 | CRYPTO_FLAGS_GCM | CRYPTO_FLAGS_SHA3, /* flags */
 		0,			/* macSize */
 		32,			/* keySize */
 		4,			/* ivSize */
 		0,			/* blocksize */
-		csAesGcmInit,
-		csAesGcmEncrypt,
-		csAesGcmDecrypt,
-		NULL,
-		NULL},
+		csAesGcmInit,	/* init */
+		csAesGcmEncrypt,	/* encrypt */
+		csAesGcmDecrypt,	/* decrypt */
+		NULL,	/* generateMac */
+		NULL},	/* verifyMac */
 #endif /* USE_TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384 */
 
 #ifdef USE_TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
@@ -1678,10 +1678,10 @@ int32_t matrixSslSetCipherSuiteEnabledStatus(ssl_t *ssl, uint16_t cipherId,
 */
 				if (flags == PS_TRUE) {
 					/* Unset the disabled bit */
-					disabledCipherFlags[i >> 5] &= ~(1 < (i & 31));
+					disabledCipherFlags[i >> 5] &= ~(1 << (i & 31));
 				} else {
 					/* Set the disabled bit */
-					disabledCipherFlags[i >> 5] |= 1 < (i & 31);
+					disabledCipherFlags[i >> 5] |= 1 << (i & 31);
 				}
 				return PS_SUCCESS;
 			} else {
@@ -2457,105 +2457,134 @@ const sslCipherSpec_t *sslGetCipherSpec(const ssl_t *ssl, uint16_t id)
 
 	i = 0;
 	do {
-		if (supportedCiphers[i].ident == id) {
-			/* Double check we support the requsted hash algorithm */
+		if (supportedCiphers[i].ident != id) {
+			continue;
+		}
+		/* Double check we support the requsted hash algorithm */
 #ifndef USE_MD5
-			if (supportedCiphers[i].flags & CRYPTO_FLAGS_MD5) {
-				return NULL;
-			}
+		if (supportedCiphers[i].flags & CRYPTO_FLAGS_MD5) {
+			return NULL;
+		}
 #endif
 #ifndef USE_SHA1
-			if (supportedCiphers[i].flags & CRYPTO_FLAGS_SHA1) {
-				return NULL;
-			}
+		if (supportedCiphers[i].flags & CRYPTO_FLAGS_SHA1) {
+			return NULL;
+		}
 #endif
 #if !defined(USE_SHA256) && !defined(USE_SHA384)
-			if (supportedCiphers[i].flags & CRYPTO_FLAGS_SHA2) {
-				return NULL;
-			}
+		if (supportedCiphers[i].flags & CRYPTO_FLAGS_SHA2) {
+			return NULL;
+		}
 #endif
-			/* Double check we support the requsted weak cipher algorithm */
+		/* Double check we support the requsted weak cipher algorithm */
 #ifndef USE_ARC4
-			if (supportedCiphers[i].flags &
-				(CRYPTO_FLAGS_ARC4INITE | CRYPTO_FLAGS_ARC4INITD)) {
-				return NULL;
-			}
+		if (supportedCiphers[i].flags &
+			(CRYPTO_FLAGS_ARC4INITE | CRYPTO_FLAGS_ARC4INITD)) {
+			return NULL;
+		}
 #endif
 #ifndef USE_3DES
-			if (supportedCiphers[i].flags & CRYPTO_FLAGS_3DES) {
-				return NULL;
-			}
+		if (supportedCiphers[i].flags & CRYPTO_FLAGS_3DES) {
+			return NULL;
+		}
 #endif
 #ifdef USE_SERVER_SIDE_SSL
-			/* Globally disabled? */
-			if (disabledCipherFlags[i >> 5] & (1 < (i & 31))) {
-				psTraceIntInfo("Matched cipher suite %d but disabled by user\n",
-					id);
-				return NULL;
-			}
-			/* Disabled for session? */
-			if (id != 0) { /* Disable NULL_WITH_NULL_NULL not possible */
-				for (j = 0; j < SSL_MAX_DISABLED_CIPHERS; j++) {
-					if (ssl->disabledCiphers[j] == id) {
-						psTraceIntInfo("Matched cipher suite %d but disabled by user\n",
-							id);
-						return NULL;
-					}
-				}
-			}
-#endif /* USE_SERVER_SIDE_SSL */
-#ifdef USE_TLS_1_2
-			/* Unusable because protocol doesn't allow? */
-#ifdef USE_DTLS
-			if (ssl->majVer == DTLS_MAJ_VER &&
-					ssl->minVer != DTLS_1_2_MIN_VER) {
-				if (supportedCiphers[i].flags & CRYPTO_FLAGS_SHA3 ||
-						supportedCiphers[i].flags & CRYPTO_FLAGS_SHA2) {
-					psTraceIntInfo("Matched cipher suite %d but only allowed in DTLS 1.2\n",
-							id);
-					return NULL;
-				}
-			}
-			if (!(ssl->flags & SSL_FLAGS_DTLS)) {
-#endif
-			if (ssl->minVer != TLS_1_2_MIN_VER) {
-				if (supportedCiphers[i].flags & CRYPTO_FLAGS_SHA3 ||
-						supportedCiphers[i].flags & CRYPTO_FLAGS_SHA2) {
-					psTraceIntInfo("Matched cipher suite %d but only allowed in TLS 1.2\n",
-							id);
-					return NULL;
-				}
-			}
-
-			if (ssl->minVer == TLS_1_2_MIN_VER) {
-				if (supportedCiphers[i].flags & CRYPTO_FLAGS_MD5) {
-					psTraceIntInfo("Not allowing MD5 suite %d in TLS 1.2\n",
+		/* Globally disabled? */
+		if (disabledCipherFlags[i >> 5] & (1 << (i & 31))) {
+			psTraceIntInfo("Matched cipher suite %d but disabled by user\n",
+				id);
+			return NULL;
+		}
+		/* Disabled for session? */
+		if (id != 0) { /* Disable NULL_WITH_NULL_NULL not possible */
+			for (j = 0; j < SSL_MAX_DISABLED_CIPHERS; j++) {
+				if (ssl->disabledCiphers[j] == id) {
+					psTraceIntInfo("Matched cipher suite %d but disabled by user\n",
 						id);
 					return NULL;
 				}
 			}
+		}
+#endif /* USE_SERVER_SIDE_SSL */
+#ifdef USE_TLS_1_2
+		/* Unusable because protocol doesn't allow? */
 #ifdef USE_DTLS
+		if (ssl->majVer == DTLS_MAJ_VER &&
+				ssl->minVer != DTLS_1_2_MIN_VER) {
+			if (supportedCiphers[i].flags & CRYPTO_FLAGS_SHA3 ||
+					supportedCiphers[i].flags & CRYPTO_FLAGS_SHA2) {
+				psTraceIntInfo(
+					"Matched cipher suite %d but only allowed in DTLS 1.2\n", id);
+				return NULL;
 			}
+		}
+		if (!(ssl->flags & SSL_FLAGS_DTLS)) {
+#endif
+		if (ssl->minVer < TLS_1_2_MIN_VER) {
+			if (supportedCiphers[i].flags & CRYPTO_FLAGS_SHA3 ||
+					supportedCiphers[i].flags & CRYPTO_FLAGS_SHA2) {
+				psTraceIntInfo(
+					"Matched cipher suite %d but only allowed in TLS 1.2\n", id);
+				return NULL;
+			}
+		}
+		if (ssl->minVer == TLS_1_2_MIN_VER) {
+			if (supportedCiphers[i].flags & CRYPTO_FLAGS_MD5) {
+				psTraceIntInfo("Not allowing MD5 suite %d in TLS 1.2\n",
+					id);
+				return NULL;
+			}
+		}
+#ifdef USE_DTLS
+		}
 #endif
 #endif /* TLS_1_2 */
 
-			/*	The suite is available.  Want to reject if current key material
-				does not support? */
+		/** Check restrictions by HTTP2 (set by ALPN extension).
+			This should filter out all ciphersuites specified in:
+				https://tools.ietf.org/html/rfc7540#appendix-A
+		"Note: This list was assembled from the set of registered TLS
+		cipher suites at the time of writing.  This list includes those
+		cipher suites that do not offer an ephemeral key exchange and
+		those that are based on the TLS null, stream, or block cipher type
+		(as defined in Section 6.2.3 of [TLS12]).  Additional cipher
+		suites with these properties could be defined; these would not be
+		explicitly prohibited."
+		*/
+		if (ssl->flags & SSL_FLAGS_HTTP2) {
+			/** Only allow AEAD ciphers. */
+			if (!(supportedCiphers[i].flags & CRYPTO_FLAGS_GCM) &&
+				!(supportedCiphers[i].flags & CRYPTO_FLAGS_CHACHA)) {
+
+				return NULL;
+			}
+			/** Only allow ephemeral key exchange. */
+			switch (supportedCiphers[i].type) {
+			case CS_DHE_RSA:
+			case CS_ECDHE_ECDSA:
+			case CS_ECDHE_RSA:
+				break;
+			default:
+				return NULL;
+			}
+		}
+
+		/*	The suite is available.  Want to reject if current key material
+			does not support? */
 #ifdef VALIDATE_KEY_MATERIAL
-			if (ssl->keys != NULL) {
-				if (haveKeyMaterial(ssl, supportedCiphers[i].type, 0)
-						== PS_SUCCESS) {
-					return &supportedCiphers[i];
-				}
-				psTraceIntInfo("Matched cipher suite %d but no supporting keys\n",
-					id);
-			} else {
+		if (ssl->keys != NULL) {
+			if (haveKeyMaterial(ssl, supportedCiphers[i].type, 0)
+					== PS_SUCCESS) {
 				return &supportedCiphers[i];
 			}
-#else
+			psTraceIntInfo("Matched cipher suite %d but no supporting keys\n",
+				id);
+		} else {
 			return &supportedCiphers[i];
-#endif /* VALIDATE_KEY_MATERIAL */
 		}
+#else
+		return &supportedCiphers[i];
+#endif /* VALIDATE_KEY_MATERIAL */
 	} while (supportedCiphers[i++].ident != SSL_NULL_WITH_NULL_NULL) ;
 
 	return NULL;

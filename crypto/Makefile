@@ -29,6 +29,7 @@ SRC:=\
 	digest/md2.c \
 	keyformat/asn1.c \
 	keyformat/base64.c \
+	keyformat/crl.c \
 	keyformat/pkcs.c \
 	keyformat/x509.c \
 	layer/matrix.c \

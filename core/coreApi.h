@@ -163,12 +163,15 @@ PSPUBLIC int32		psGetFileBuf(psPool_t *pool, const char *fileName,
 #endif /* MATRIX_USE_FILE_SYSTEM */
 
 #ifdef USE_MULTITHREADING
-PSPUBLIC int32		psCreateMutex(psMutex_t *mutex);
-PSPUBLIC int32		psLockMutex(psMutex_t *mutex);
-PSPUBLIC int32		psUnlockMutex(psMutex_t *mutex);
+#define PS_SHARED	0x1
+PSPUBLIC int32_t	psCreateMutex(psMutex_t *mutex, uint32_t flags);
+PSPUBLIC int32_t	psLockMutex(psMutex_t *mutex);
+PSPUBLIC int32_t	psUnlockMutex(psMutex_t *mutex);
 PSPUBLIC void		psDestroyMutex(psMutex_t *mutex);
 #else
-#define psCreateMutex(A)	(PS_SUCCESS)
+/** @note These are defines rather than inline functions because it allows
+the caller to not allocate a mutex that will never be used. */
+#define psCreateMutex(A, B)	(PS_SUCCESS)
 #define psLockMutex(A)		(PS_SUCCESS)
 #define psUnlockMutex(A)	(PS_SUCCESS)
 #define psDestroyMutex(A)

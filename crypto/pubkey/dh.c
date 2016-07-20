@@ -259,6 +259,21 @@ int32_t psDhGenKey(psPool_t *pool, uint16_t keysize,
 	int32_t		rc;
 	pstm_int	p, g;
 
+	if (keysize > pLen) {
+		psTraceCrypto("psDhGenKey: keysize > pLen\n");
+		return PS_FAIL;
+	}
+	switch(pLen) {
+	case 128:
+	case 192:
+	case 256:
+	case 384:
+	case 512:
+		break;
+	default:
+		psTraceCrypto("psDhGenKey: invalid keysize\n");
+		return PS_FAIL;
+	}
 	/* Convert the p and g into ints and make keys */
 	if ((rc = pstm_init_for_read_unsigned_bin(pool, &p, pLen)) != PS_SUCCESS) {
 		return rc;
@@ -298,6 +313,10 @@ int32_t psDhGenKeyInts(psPool_t *pool, uint16_t keysize,
 	uint16_t		privsize;
 
 	if (key == NULL) {
+		return PS_ARG_FAIL;
+	}
+	/* Detect parameters with too small g. */
+	if (pstm_count_bits(g) < 2) {
 		return PS_ARG_FAIL;
 	}
 	privsize = keysize;
@@ -412,6 +431,18 @@ int32_t psDhGenSharedSecret(psPool_t *pool,
 	}
 
 	if ((err = pstm_read_unsigned_bin(&p, pBin, pBinLen)) != PS_SUCCESS) {
+		goto error;
+	}
+	/* Check key->pub is within correct range 2 <= pub < p - 1. */
+	if (pstm_count_bits(&pubKey->pub) < 2) {
+		err = PS_FAILURE;
+		goto error;
+	}
+	if ((err = pstm_add_d(pool, &pubKey->pub, 1, &tmp)) != PSTM_OKAY) {
+		goto error;
+	}
+	if (pstm_cmp(&p, &tmp) != PSTM_GT) {
+		err = PS_FAILURE;
 		goto error;
 	}
 	if ((err = pstm_exptmod(pool, &pubKey->pub, &privKey->priv, &p,

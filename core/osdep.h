@@ -197,7 +197,12 @@ extern void	osdepEntropyClose(void);
  #endif
 #endif
 
-#if defined(POSIX)
+#if defined(POSIX) || (defined(WIN32) && _MSC_VER >= 1600/*MSVC2010*/)
+ #if defined(WIN32)
+  #include <windows.h>
+  #define strcasecmp lstrcmpiA
+  #define snprintf _snprintf
+ #endif 
  #include <stdint.h>
  typedef int32_t int32;
  typedef uint32_t uint32;
@@ -400,8 +405,8 @@ PSPUBLIC void _psErrorStr(const char *msg, const char *val);
 */
 #ifdef USE_MULTITHREADING
 
-extern int32 osdepMutexOpen(void);
-extern int32 osdepMutexClose(void);
+extern int32_t osdepMutexOpen(void);
+extern void osdepMutexClose(void);
 
 #if defined(WIN32)
  typedef CRITICAL_SECTION psMutex_t;
@@ -415,7 +420,6 @@ extern int32 osdepMutexClose(void);
 #else
  #error psMutex_t must be defined
 #endif /* OS specific mutex */
-
 #endif /* USE_MULTITHREADING */
 
 /******************************************************************************/

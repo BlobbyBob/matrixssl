@@ -35,7 +35,7 @@
 #include "../coreApi.h"
 
 #ifdef WIN32
-#include <windows.h>
+#include <wincrypt.h>
 
 /******************************************************************************/
 /* TIME */
@@ -99,30 +99,32 @@ int32 psCompareTime(psTime_t a, psTime_t b, void *userPtr)
 
 #ifdef USE_MULTITHREADING
 
-int osdepMutexOpen(void)
+int32_t osdepMutexOpen(void)
 {
 	return PS_SUCCESS;
 }
 
-int osdepMutexClose(void)
+void osdepMutexClose(void)
 {
+}
+
+int32_t psCreateMutex(psMutex_t *mutex, uint32_t flags)
+{
+	if (flags) {
+		psErrorInt("psCreateMutex unsupported flag %u\n", flags);
+		return PS_PLATFORM_FAIL;
+	}
+	InitializeCriticalSection(mutex);	/* Does not return a value */
 	return PS_SUCCESS;
 }
 
-/* PScore Public API implementations */
-int32 psCreateMutex(psMutex_t *mutex)
-{
-	InitializeCriticalSection(mutex);
-	return PS_SUCCESS;
-}
-
-int32 psLockMutex(psMutex_t *mutex)
+int32_t psLockMutex(psMutex_t *mutex)
 {
 	EnterCriticalSection(mutex);
 	return PS_SUCCESS;
 }
 
-int32 psUnlockMutex(psMutex_t *mutex)
+int32_t psUnlockMutex(psMutex_t *mutex)
 {
 	LeaveCriticalSection(mutex);
 	return PS_SUCCESS;
@@ -136,7 +138,6 @@ void psDestroyMutex(psMutex_t *mutex)
 
 /******************************************************************************/
 /* ENTROPY */
-
 static HCRYPTPROV		hProv;	/* Crypto context for random bytes */
 
 int osdepEntropyOpen(void)
@@ -175,7 +176,7 @@ void osdepTraceClose(void)
 
 void _psTrace(const char *msg)
 {
-	printf(msg);
+	printf("%s", msg);
 }
 
 /* Message should contain one %s, unless value is NULL */
@@ -184,7 +185,7 @@ void _psTraceStr(const char *message, const char *value)
 	if (value) {
 		printf(message, value);
 	} else {
-		printf(message);
+		printf("%s", message);
 	}
 }
 

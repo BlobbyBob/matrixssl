@@ -516,7 +516,7 @@ int32 matrixSslGetWritebuf(ssl_t *ssl, unsigned char **buf, uint32 requestedLen)
 	Now that requiredLen has been confirmed/created, return number of available
 	plaintext bytes
 */
-	if (requestedLen < (uint32)ssl->maxPtFrag) {
+	if (requestedLen <= (uint32)ssl->maxPtFrag) {
 		requestedLen = sz - overhead;
 		if (requestedLen > (uint32)ssl->maxPtFrag) {
 			requestedLen = ssl->maxPtFrag;
@@ -1507,82 +1507,6 @@ int32 matrixSslIsSessionCompressionOn(ssl_t *ssl)
 		return PS_TRUE;
 	}
 	return PS_FALSE;
-}
-#endif
-
-#ifdef USE_CRL
-/*
-	Called after key load if CRL location is expected to be embedded in the CA.
-	The user callback will be invoked with the URL and the responsibility of
-	the callback is to fetch the CRL and load it to the CA with matrixSslLoadCRL
-
-	The numLoaded parameter indicates how many successful CRLs were loaded
-	if there are multiple CA files being processed here.
-
-	Return codes:
-	< 0 - Error loading a CRL.  numLoaded indicates if some success
-	0 - No errors encountered.  numLoaded could be 0 if no CRLs found
-*/
-int32 matrixSslGetCRL(sslKeys_t	*keys, int32 (*crlCb)(psPool_t *pool,
-			psX509Cert_t *CA, int append, char *url, uint32 urlLen),
-			int32 *numLoaded)
-{
-	psX509Cert_t		*CA;
-	x509GeneralName_t	*gn;
-	unsigned char		*crlURI;
-	int32				rc, crlURILen;
-
-	if (keys->CAcerts == NULL || crlCb == NULL) {
-		return PS_ARG_FAIL;
-	}
-	CA = keys->CAcerts;
-
-	*numLoaded = rc = 0;
-	while (CA) {
-		if (CA->extensions.bc.cA > 0 && CA->extensions.crlDist != NULL) {
-			gn = CA->extensions.crlDist;
-			while (gn) {
-				if (gn->id == 6) { /* Only pass on URI types */
-					crlURI = gn->data;
-					crlURILen = gn->dataLen;
-					/* Invoke user callback to go fetch and load the CRL.
-						Do not use the append flag.  The specification says
-						that multiple names must be mechanims to access the
-						same CRL. */
-					if (crlCb(keys->pool, CA, 0, (char*)crlURI,
-							crlURILen) < 0) {
-						rc = -1;
-					}
-					(*numLoaded)++; /* Callback successfully loaded this CRL */
-				} else {
-					psTraceIntInfo("Unsupported CRL distro point format %d\n",
-						gn->id);
-				}
-				gn = gn->next;
-			}
-		}
-		CA = CA->next;
-	}
-	return rc;
-}
-
-/*
-	If user already has a CRL buffer handy or call from the callback to load
-	a fetched one
-
-	Return codes:
-	< 0 - Error loading CRL
-	>= 0 - Success
-*/
-int32 matrixSslLoadCRL(psPool_t *pool, psX509Cert_t *CA, int append,
-						const char *CRLbin, int32 CRLbinLen, void *poolUserPtr)
-{
-	if (CA == NULL) {
-		return PS_ARG_FAIL;
-	}
-
-	return psX509ParseCrl(pool, CA, append, (unsigned char*)CRLbin, CRLbinLen,
-		poolUserPtr);
 }
 #endif
 

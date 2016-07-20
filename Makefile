@@ -18,12 +18,12 @@ libs:
 	$(MAKE) --directory=crypto
 	$(MAKE) --directory=matrixssl
 
-tests:
+tests: libs
 	$(MAKE) --directory=crypto/test
 	$(MAKE) --directory=matrixssl/test
 
 # Note apps is also a direct subdirectory
-apps:
+apps: libs
 	$(MAKE) --directory=apps/ssl
 	$(MAKE) --directory=apps/dtls
 

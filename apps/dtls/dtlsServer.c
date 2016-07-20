@@ -1270,6 +1270,7 @@ static void closeClientList()
 }
 
 #else
+
 /******************************************************************************/
 /*
     Stub main for compiling without dtls enabled

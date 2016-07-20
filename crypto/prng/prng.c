@@ -48,7 +48,7 @@ static short	gPrngInit = 0;
 void psOpenPrng(void)
 {
 #ifdef USE_MULTITHREADING
-	psCreateMutex(&prngLock);
+	psCreateMutex(&prngLock, 0);
 #endif
 	/* NOTE: if a PRNG is enabled, the low level psGetEntropy call can't
 		have a useful userPtr context becuase there will be no session

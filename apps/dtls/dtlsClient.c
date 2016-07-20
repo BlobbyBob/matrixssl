@@ -1092,7 +1092,7 @@ static int32 certCb(ssl_t *ssl, psX509Cert_t *cert, int32 alert)
 int32 main(int32 argc, char **argv)
 {
 	printf("USE_DTLS and USE_CLIENT_SIDE_SSL must be enabled in " \
-			"matrixsslConfig.h at build time to run this application\n");
+		"matrixsslConfig.h at build time to run this application\n");
 	return -1;
 }
 #endif /* USE_DTLS && USE_CLIENT_SIDE_SSL */

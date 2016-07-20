@@ -305,17 +305,24 @@ int32 parseClientHello(ssl_t *ssl, unsigned char **cp, unsigned char *end)
 				suiteLen);
 			return MATRIXSSL_ERROR;
 		}
-		/*	Now is 'suiteLen' bytes of the supported cipher suite list,
-			listed in order of preference.  Loop through and find the
-			first cipher suite we support. */
+		/* Now is 'suiteLen' bytes of the supported cipher suite list,
+			listed in order of preference. */
 		if (end - c < suiteLen) {
 			ssl->err = SSL_ALERT_DECODE_ERROR;
 			psTraceInfo("Malformed clientHello message\n");
 			return MATRIXSSL_ERROR;
 		}
-
-		/* Do want to make one entire pass of the cipher suites now
-			to search for SCSV if secure rehandshakes are on */
+		/* We do not choose a ciphersuite yet, as the cipher we choose
+			may depend on an extension sent by the client. For example, 
+			ALPN for HTTP/2 limits which suites we can negotiate, and
+			ELLIPTIC_CURVE/ELLIPTIC_POINT extensions may not match with
+			what we have available and we would have to fall back to a
+			non-ECC cipher.
+		  Still, make one entire pass of the cipher suites now
+			to search for SCSV if secure rehandshakes are on. This is
+			the exception because SCSV is not a true ciphersuite, but
+			more like an extension that can be "hidden" for pre-TLS1.0
+			implementations. */
 		suiteEnd = c + suiteLen;
 		while (c < suiteEnd) {
 			cipher = *c << 8; c++;
@@ -340,7 +347,6 @@ int32 parseClientHello(ssl_t *ssl, unsigned char **cp, unsigned char *end)
 				}
 			}
 		}
-		
 		/*	Compression parameters */
 		if (end - c < 1) {
 			ssl->err = SSL_ALERT_DECODE_ERROR;
@@ -1673,7 +1679,7 @@ PROTOCOL_DETERMINED:
 /******************************************************************************/
 
 int32 parseServerKeyExchange(ssl_t *ssl,
-							unsigned char hsMsgHash[SHA384_HASH_SIZE],
+							unsigned char hsMsgHash[SHA512_HASH_SIZE],
 							unsigned char **cp,	unsigned char *end)
 {
 	unsigned char		*c;
@@ -1689,7 +1695,7 @@ int32 parseServerKeyExchange(ssl_t *ssl,
 	uint32				skeHashSigAlg;
 #endif
 #ifdef USE_RSA_CIPHER_SUITE
-    unsigned char       sigOut[SHA384_HASH_SIZE];
+    unsigned char       sigOut[MAX_HASH_SIZE];
 #endif
 #ifdef USE_ECC_CIPHER_SUITE
 	uint32				res;

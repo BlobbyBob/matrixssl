@@ -31,6 +31,7 @@
 		DD7AB35B1B979E3B0047DE55 /* asn1.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = asn1.c; sourceTree = "<group>"; };
 		DD7AB35C1B979E3B0047DE55 /* asn1.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = asn1.h; sourceTree = "<group>"; };
 		DD7AB3601B979E3B0047DE55 /* base64.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = base64.c; sourceTree = "<group>"; };
+		87EA02501CF4ED69001F4ECA /* crl.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = crl.c; sourceTree = "<group>"; };
 		DD7AB3621B979E3B0047DE55 /* pkcs.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = pkcs.c; sourceTree = "<group>"; };
 		DD7AB3641B979E3B0047DE55 /* x509.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = x509.c; sourceTree = "<group>"; };
 		DD7AB3651B979E3B0047DE55 /* x509.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = x509.h; sourceTree = "<group>"; };
@@ -115,6 +116,7 @@
 				DD7AB35C1B979E3B0047DE55 /* asn1.h */,
 				DD7AB35B1B979E3B0047DE55 /* asn1.c */,
 				DD7AB3601B979E3B0047DE55 /* base64.c */,
+				87EA02501CF4ED69001F4ECA /* crl.c */,
 				DD7AB3621B979E3B0047DE55 /* pkcs.c */,
 				DD7AB3651B979E3B0047DE55 /* x509.h */,
 				DD7AB3641B979E3B0047DE55 /* x509.c */,

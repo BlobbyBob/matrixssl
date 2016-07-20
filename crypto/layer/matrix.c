@@ -64,6 +64,9 @@ int32_t psCryptoOpen(const char *config)
 		return PS_FAILURE;
 	}
 	psOpenPrng();
+#ifdef USE_CRL
+	psCrlOpen();
+#endif
 	return 0;
 }
 
@@ -73,6 +76,9 @@ void psCryptoClose(void)
 		*g_config = 'N';
 		psClosePrng();
 		psCoreClose();
+#ifdef USE_CRL
+		psCrlClose();
+#endif
 	}
 }
 

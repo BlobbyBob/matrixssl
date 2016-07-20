@@ -186,6 +186,14 @@ extern "C" {
 
 /******************************************************************************/
 /**
+	Experimental support for process-shared server session cache.
+	This allows forked copies of a process to use the same session cache.
+	@pre Supported for POSIX environments only currently.
+*/
+//#define USE_SHARED_SESSION_CACHE /**< @note Experimental */
+
+/******************************************************************************/
+/**
 	- USE_TLS versions must 'stack' for compiling purposes
 		- must enable TLS if enabling TLS 1.1
 		- must enable TLS 1.1 if enabling TLS 1.2
@@ -397,6 +405,7 @@ extern "C" {
 #define SSL_FLAGS_AEAD_R		(1<<21)
 #define SSL_FLAGS_NONCE_W		(1<<22)
 #define SSL_FLAGS_NONCE_R		(1<<23)
+#define SSL_FLAGS_HTTP2			(1<<24)
 
 #define SSL_FLAGS_INTERCEPTOR	(1<<30)
 #define SSL_FLAGS_EAP_FAST		(1<<31)
@@ -644,11 +653,12 @@ static __inline uint16_t HASH_SIG_MASK(uint8_t hash, uint8_t sig)
 #define EXT_MAX_FRAGMENT_LEN				 1
 #define EXT_TRUSTED_CA_KEYS					 3
 #define EXT_TRUNCATED_HMAC					 4
-#define EXT_STATUS_REQUEST					 5 /* TODO: rm interceptor dup */
+#define EXT_STATUS_REQUEST					 5	/* OCSP */
 #define EXT_ELLIPTIC_CURVE					10	/* Client-send only */
 #define EXT_ELLIPTIC_POINTS					11
 #define EXT_SIGNATURE_ALGORITHMS			13
 #define EXT_ALPN							16
+#define EXT_SIGNED_CERTIFICATE_TIMESTAMP	18
 #define EXT_EXTENDED_MASTER_SECRET			23
 #define EXT_SESSION_TICKET					35
 #define EXT_RENEGOTIATION_INFO				0xFF01
@@ -1090,9 +1100,6 @@ struct ssl {
 
 	sslSec_t		sec;			/* Security structure */
 
-//TODO
-//	tlsSessionKeys_t	skeys;
-
 	sslKeys_t		*keys;			/* SSL public and private keys */
 
 	pkaAfter_t		pkaAfter[2];	/* Cli-side cli-auth = two PKA in flight */
@@ -1411,7 +1418,7 @@ extern int32 parseServerHelloExtensions(ssl_t *ssl, int32 hsLen,
 extern int32 parseServerHelloDone(ssl_t *ssl, int32 hsLen, unsigned char **cp,
 				unsigned char *end);
 extern int32 parseServerKeyExchange(ssl_t *ssl,
-				unsigned char hsMsgHash[SHA384_HASH_SIZE],
+				unsigned char hsMsgHash[SHA512_HASH_SIZE],
 				unsigned char **cp,	unsigned char *end);
 #ifdef USE_OCSP
 extern int32 parseCertificateStatus(ssl_t *ssl, int32 hsLen, unsigned char **cp,

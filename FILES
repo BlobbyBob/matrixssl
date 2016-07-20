@@ -5,6 +5,14 @@ Makefile
 	Top level Makefile. Builds core, crypto, matrixssl and apps
 common.mk
 	Top level file for common make definitions.
+pgp.asc
+	Public GPG key for MatrixSSL code signatures and vulnerability reporting
+INSTALL
+	Compile and run instructions
+LICENSE
+	GPLv2 License
+CHANGES.md
+	Changelog for latest packaged version
 
 matrixssl/
 	This directory contains files the implement the SSL and TLS protocol.
@@ -19,7 +27,7 @@ crypto/
 	symmetric/
 		Symmetric ciphers (AES-GCM, etc.)
 	keyformat/
-		Decode/encode Certificates and keys (X.509, .pem, etc.)
+		Decode/encode Certificates, keys, CRL (X.509, .pem, etc.)
 	pubkey/
 		RSA, ECC and DH operations
 	math/

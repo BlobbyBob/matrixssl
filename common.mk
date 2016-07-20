@@ -85,11 +85,11 @@ ifdef MATRIX_DEBUG
  OPT:=-O0 -g -DDEBUG -Wall
  #OPT+=-Wconversion
  STRIP:=test # no-op
-else
+endif
+ifndef MATRIX_DEBUG
+ OPT:=-O3 -Wall		# Default compile for speed
  ifneq (,$(findstring -none,$(CCARCH)))
   OPT:=-Os -Wall	# Compile bare-metal for size
- else
-  OPT:=-O3 -Wall	# Compile all others for speed
  endif
  STRIP:=strip
 endif
@@ -98,7 +98,8 @@ CFLAGS+=$(OPT)
 # Detect multicore and do parallel build. Uncomment if desired:
 #> ifneq (,$(findstring -linux,$(CCARCH)))
 #>  JOBS:=-j$(shell grep -ic processor /proc/cpuinfo)
-#> else ifneq (,$(findstring apple,$(CCARCH)))
+#> endif
+#> ifneq (,$(findstring apple,$(CCARCH)))
 #>  JOBS:=-j$(shell sysctl -n machdep.cpu.thread_count)
 #> endif
 
@@ -120,15 +121,17 @@ ifneq (,$(findstring x86_64-,$(CCARCH)))
    CFLAGS+=-maes -mpclmul -msse4.1
    STROPTS+=", AES-NI ASM"
   endif
- else ifneq (,$(findstring apple,$(CCARCH)))
+ endif
+ ifneq (,$(findstring apple,$(CCARCH)))
   ifeq ($(shell sysctl -n hw.optional.aes),1)
    CFLAGS+=-maes -mpclmul -msse4.1
    STROPTS+=", AES-NI ASM"
   endif
  endif
+endif
 
-# 32 Bit Intel Edison Target
-else ifneq (,$(findstring i586-,$(CCARCH)))
+# 32 Bit Intel Target
+ifneq (,$(findstring i586-,$(CCARCH)))
  CFLAGS+=-m32
  ifneq (,$(findstring edison,$(shell uname -n)))
   ifneq (,$(findstring -O3,$(OPT)))
@@ -140,22 +143,25 @@ else ifneq (,$(findstring i586-,$(CCARCH)))
  else
   STROPTS+=", 32-bit Intel RSA/ECC ASM"
  endif
+endif
 
-# 32 Bit Intel Target
-else ifneq (,$(findstring i686-,$(CCARCH)))
+# 32 Bit Intel Target Alternate
+ifneq (,$(findstring i686-,$(CCARCH)))
  CFLAGS+=-m32
  STROPTS+=", 32-bit Intel RSA/ECC ASM"
+endif
 
 # MIPS Target
-else ifneq (,$(findstring mips-,$(CCARCH)))
+ifneq (,$(findstring mips-,$(CCARCH)))
  STROPTS+=", 32-bit MIPS RSA/ECC ASM"
+endif
 
 # MIPS64 Target 
-else ifneq (,$(filter mips%64-,$(CCARCH)))
-# STROPTS+=", 64-bit MIPS64 RSA/ECC ASM"
+ifneq (,$(filter mips%64-,$(CCARCH)))
+endif
 
 # ARM Target
-else ifneq (,$(findstring arm,$(CCARCH)))
+ifneq (,$(findstring arm,$(CCARCH)))
  STROPTS+=", 32-bit ARM RSA/ECC ASM"
  ifneq (,$(findstring linux-,$(CCARCH)))
   HARDWARE:=$(shell sed -n '/Hardware[ \t]*: / s/// p' /proc/cpuinfo)
@@ -189,13 +195,14 @@ else ifneq (,$(findstring arm,$(CCARCH)))
    undefine HARDWARE
   endif
  endif
-
 endif
 
 ifdef MATRIX_DEBUG
 CFLAGS+=-ffunction-sections -fdata-sections
-else
-CFLAGS+=-ffunction-sections -fdata-sections -fomit-frame-pointer
+endif
+ifndef MATRIX_DEBUG
+CFLAGS_OMIT_FRAMEPOINTER=-fomit-frame-pointer
+CFLAGS+=-ffunction-sections -fdata-sections $(CFLAGS_OMIT_FRAMEPOINTER)
 endif
 
 # If we're using clang (it may be invoked via 'cc' or 'gcc'),
@@ -220,15 +227,20 @@ ifdef USE_OPENSSL_CRYPTO
   # Statically link against a given openssl tree
   CFLAGS+=-I$(OPENSSL_ROOT)/include
   LDFLAGS+=$(OPENSSL_ROOT)/libcrypto.a -ldl
- else ifneq (,$(findstring -apple,$(CCARCH)))
+ endif
+ ifneq (,$(findstring -apple,$(CCARCH)))
   # Dynamically link against the sytem default openssl tree
   # Apple has deprecated the built in openssl, so supress warnings here
   CFLAGS+=-Wno-error=deprecated-declarations -Wno-deprecated-declarations
   LDFLAGS+=-lcrypto
- else ifneq (,$(findstring -linux,$(CCARCH)))
+  OPENSSL_ROOT=included_in_the_OS
+ endif
+ ifneq (,$(findstring -linux,$(CCARCH)))
   # Dynamically link against the sytem default openssl tree
   LDFLAGS+=-lcrypto
- else
+  OPENSSL_ROOT=shall_be_included_in_distribution
+ endif
+ ifndef OPENSSL_ROOT
   $(error Please define OPENSSL_ROOT)
  endif
  CFLAGS+=-DUSE_OPENSSL_CRYPTO
@@ -242,7 +254,8 @@ ifdef USE_LIBSODIUM_CRYPTO
   # Statically link against a given libsodium
   CFLAGS+=-I$(LIBSODIUM_ROOT)/include
   LDFLAGS+=$(LIBSODIUM_ROOT)/.libs/libsodium.a
- else
+ endif
+ ifndef LIBSODIUM_ROOT
   $(error Please define LIBSODIUM_ROOT)
  endif
  CFLAGS+=-DUSE_LIBSODIUM_CRYPTO
@@ -254,23 +267,27 @@ ifneq (,$(findstring -linux,$(CCARCH)))
  OSDEP:=POSIX
  #For USE_HIGHRES_TIME
  LDFLAGS+=-lrt
+endif
 
 # OS X Target
-else ifneq (,$(findstring -apple,$(CCARCH)))
+ifneq (,$(findstring -apple,$(CCARCH)))
  OSDEP:=POSIX
  CFLAGS+=-isystem -I/usr/include
+endif
 
 # Bare Metal / RTOS Target
-else ifneq (,$(findstring -none,$(CCARCH)))
+ifneq (,$(findstring -none,$(CCARCH)))
  OSDEP:=METAL
  CFLAGS+=-fno-exceptions -fno-unwind-tables -fno-non-call-exceptions -fno-asynchronous-unwind-tables -ffreestanding -fno-builtin -nostartfiles
  ifneq (,$(findstring cortex-,$(CPU)))
   CFLAGS+=-mthumb -mcpu=$(CPU) -mslow-flash-data
   ifeq (cortex-m4,$(CPU))
    CFLAGS+=-mcpu=cortex-m4 -mtune=cortex-m4
-  else ifeq (cortex-m3,$(CPU))
+  endif
+  ifeq (cortex-m3,$(CPU))
    CFLAGS+=-mcpu=cortex-m3 -mtune=cortex-m3 -mfpu=vpf
-  else ifeq (cortex-m0,$(CPU))
+  endif
+  ifeq (cortex-m0,$(CPU))
    CFLAGS+=-mcpu=cortex-m0 -mtune=cortex-m0 -mfpu=vpf
   endif
  endif

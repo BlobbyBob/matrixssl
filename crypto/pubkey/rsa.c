@@ -655,6 +655,11 @@ int32_t psRsaEncryptPriv(psPool_t *pool, psRsaKey_t *key,
 	int32_t			err;
 	uint16_t		size, olen;
 
+	/** @security We follow the FIPS 186 recommendation for minimum data to sign. */
+	if (inlen < 28) {
+		psTraceCrypto("Error inlen < 28 bytes in psRsaEncryptPriv\n");
+		return PS_ARG_FAIL;
+	}
 	size = key->size;
 	if (outlen < size) {
 		psTraceCrypto("Error on bad outlen parameter to psRsaEncryptPriv\n");

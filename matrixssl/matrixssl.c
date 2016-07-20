@@ -54,14 +54,21 @@ static int32 verifyReadKeys(psPool_t *pool, sslKeys_t *keys, void *poolUserPtr);
 	Static session table for session cache and lock for multithreaded env
 */
 #ifdef USE_MULTITHREADING
-static psMutex_t			sessionTableLock;
+static psMutex_t			g_sessionTableLock;
 #ifdef USE_STATELESS_SESSION_TICKETS
 static psMutex_t			g_sessTicketLock;
 #endif
-#endif /* USE_MULTITHREADING */
+#endif
 
-static sslSessionEntry_t	sessionTable[SSL_SESSION_TABLE_SIZE];
-static DLListEntry          sessionChronList;
+#ifdef USE_SHARED_SESSION_CACHE
+#include <sys/mman.h>
+#include <fcntl.h>
+static sslSessionEntry_t	*g_sessionTable;
+#else
+static sslSessionEntry_t	g_sessionTable[SSL_SESSION_TABLE_SIZE];
+#endif
+
+static DLListEntry          g_sessionChronList;
 static void initSessionEntryChronList(void);
 
 #endif /* USE_SERVER_SIDE_SSL */
@@ -89,14 +96,13 @@ static int32 matrixSslLoadKeyMaterialMem(sslKeys_t *keys,
 */
 static char	g_config[32] = "N";
 
-int32 matrixSslOpenWithConfig(const char *config)
+int32_t matrixSslOpenWithConfig(const char *config)
 {
-	unsigned long clen;
+	unsigned long	clen;
+	uint32_t		shared;
+	int32_t			rc;
 	
-	/* Use copyright to avoid compiler warning about it being unused */
-	if (*copyright != 'C') {
-		return PS_FAILURE;
-	}
+	(void)copyright; /* Prevent compiler warning. */
 	if (*g_config == 'Y') {
 		return PS_SUCCESS; /* Function has been called previously */
 	}
@@ -107,32 +113,48 @@ int32 matrixSslOpenWithConfig(const char *config)
 		psErrorStr( "MatrixSSL config mismatch.\n" \
 					"Library: " MATRIXSSL_CONFIG \
 					"\nCurrent: %s\n", config);
-		return -1;
+		return PS_FAIL;
 	}
 	if (psCryptoOpen(config + clen) < 0) {
 		psError("pscrypto open failure\n");
-		return PS_FAILURE;
+		return PS_FAIL;
 	}
 
-
 #ifdef USE_SERVER_SIDE_SSL
-	memset(sessionTable, 0x0,
+#ifdef USE_SHARED_SESSION_CACHE
+	g_sessionTable = (sslSessionEntry_t *)mmap(NULL,
+		sizeof(sslSessionEntry_t) * SSL_SESSION_TABLE_SIZE,
+		PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+	if (g_sessionTable == MAP_FAILED) {
+		psError("error creating shared memory\n");
+		return PS_PLATFORM_FAIL;
+	}
+	psTraceStrInfo("Shared sessionTable = %p\n", g_sessionTable);
+	shared = PS_SHARED;
+#else
+	shared = 0;
+#endif
+	memset(g_sessionTable, 0x0,
 		sizeof(sslSessionEntry_t) * SSL_SESSION_TABLE_SIZE);
-
 	initSessionEntryChronList();
-#ifdef USE_MULTITHREADING
-	psCreateMutex(&sessionTableLock);
+
+	if ((rc = psCreateMutex(&g_sessionTableLock, shared)) < 0) {
+		return rc;
+	}
 #ifdef USE_STATELESS_SESSION_TICKETS
-	psCreateMutex(&g_sessTicketLock);
+	if ((rc = psCreateMutex(&g_sessTicketLock, shared)) < 0) {
+		return rc;
+	}
 #endif /* USE_STATELESS_SESSION_TICKETS */
-#endif /* USE_MULTITHREADING */
 #endif /* USE_SERVER_SIDE_SSL */
 
 #ifdef USE_DTLS
-	matrixDtlsSetPmtu(-1);
 #ifdef USE_SERVER_SIDE_SSL
-	dtlsGenCookieSecret();
+	if ((rc = dtlsGenCookieSecret()) < 0) {
+		return rc;
+	}
 #endif
+	matrixDtlsSetPmtu(-1);
 #endif /* USE_DTLS */
 
 	return PS_SUCCESS;
@@ -144,24 +166,29 @@ int32 matrixSslOpenWithConfig(const char *config)
 void matrixSslClose(void)
 {
 #ifdef USE_SERVER_SIDE_SSL
-	int32		i;
+	int		i;
 
-#ifdef USE_MULTITHREADING
-	psLockMutex(&sessionTableLock);
-#endif /* USE_MULTITHREADING */
+	if (psLockMutex(&g_sessionTableLock) < 0) {
+		psTraceInfo("Warning: closing lock mutex failed\n");
+	}
 	for (i = 0; i < SSL_SESSION_TABLE_SIZE; i++) {
-		if (sessionTable[i].inUse > 1) {
+		if (g_sessionTable[i].inUse > 1) {
 			psTraceInfo("Warning: closing while session still in use\n");
 		}
 	}
-	memset(sessionTable, 0x0,
+	memset(g_sessionTable, 0x0,
 		sizeof(sslSessionEntry_t) * SSL_SESSION_TABLE_SIZE);
-#ifdef USE_MULTITHREADING
-	psUnlockMutex(&sessionTableLock);
-	psDestroyMutex(&sessionTableLock);
-#endif /* USE_MULTITHREADING */
+	if (psUnlockMutex(&g_sessionTableLock) < 0) {
+		psTraceInfo("Warning: closing unlock mutex failed\n");
+	}
+	psDestroyMutex(&g_sessionTableLock);
+#ifdef USE_SHARED_SESSION_CACHE
+	if (munmap(g_sessionTable,
+			sizeof(sslSessionEntry_t) * SSL_SESSION_TABLE_SIZE) != 0) {
+		psTraceInfo("Warning: munmap call failed.\n");
+	}
+#endif
 #endif /* USE_SERVER_SIDE_SSL */
-
 	psCryptoClose();
 	*g_config = 'N';
 }
@@ -190,7 +217,7 @@ int32_t matrixSslNewKeys(sslKeys_t **keys, void *memAllocUserPtr)
 	lkeys->poolUserPtr = memAllocUserPtr;
 
 #if  defined(USE_ECC) || defined(REQUIRE_DH_PARAMS)
-	rc = psCreateMutex(&lkeys->cache.lock);
+	rc = psCreateMutex(&lkeys->cache.lock, 0);
 	if (rc < 0) {
 		psFree(lkeys, pool);
 		return rc;
@@ -1837,14 +1864,14 @@ void matrixSslSetCertValidator(ssl_t *ssl, sslCertCb_t certValidator)
 static void initSessionEntryChronList(void)
 {
 	uint32	i;
-	DLListInit(&sessionChronList);
+	DLListInit(&g_sessionChronList);
 	/* Assign every session table entry with their ID from the start */
 	for (i = 0; i < SSL_SESSION_TABLE_SIZE; i++) {
-		DLListInsertTail(&sessionChronList, &sessionTable[i].chronList);
-		sessionTable[i].id[0] = (unsigned char)(i & 0xFF);
-		sessionTable[i].id[1] = (unsigned char)((i & 0xFF00) >> 8);
-		sessionTable[i].id[2] = (unsigned char)((i & 0xFF0000) >> 16);
-		sessionTable[i].id[3] = (unsigned char)((i & 0xFF000000) >> 24);
+		DLListInsertTail(&g_sessionChronList, &g_sessionTable[i].chronList);
+		g_sessionTable[i].id[0] = (unsigned char)(i & 0xFF);
+		g_sessionTable[i].id[1] = (unsigned char)((i & 0xFF00) >> 8);
+		g_sessionTable[i].id[2] = (unsigned char)((i & 0xFF0000) >> 16);
+		g_sessionTable[i].id[3] = (unsigned char)((i & 0xFF000000) >> 24);
 	}
 }
 
@@ -1889,27 +1916,21 @@ int32 matrixRegisterSession(ssl_t *ssl)
 	Iterate the session table, looking for an empty entry (cipher null), or
 	the oldest entry that is not in use
 */
-#ifdef USE_MULTITHREADING
-	psLockMutex(&sessionTableLock);
-#endif /* USE_MULTITHREADING */
+	psLockMutex(&g_sessionTableLock);
 
-	if (DLListIsEmpty(&sessionChronList)) {
+	if (DLListIsEmpty(&g_sessionChronList)) {
 		/* All in use */
-#ifdef USE_MULTITHREADING
-		psUnlockMutex(&sessionTableLock);
-#endif /* USE_MULTITHREADING */
+		psUnlockMutex(&g_sessionTableLock);
 		return PS_LIMIT_FAIL;
 
 	}
 	/* GetHead Detaches */
-	pList = DLListGetHead(&sessionChronList);
+	pList = DLListGetHead(&g_sessionChronList);
 	sess = DLListGetContainer(pList, sslSessionEntry_t, chronList);
 	id = sess->id;
 	i = (id[3] << 24) + (id[2] << 16) + (id[1] << 8) + id[0];
 	if (i >= SSL_SESSION_TABLE_SIZE) {
-#ifdef USE_MULTITHREADING
-		psUnlockMutex(&sessionTableLock);
-#endif /* USE_MULTITHREADING */
+		psUnlockMutex(&g_sessionTableLock);
 		return PS_LIMIT_FAIL;
 	}
 
@@ -1917,10 +1938,10 @@ int32 matrixRegisterSession(ssl_t *ssl)
 	Register the incoming masterSecret and cipher, which could still be null,
 	depending on when we're called.
 */
-	memcpy(sessionTable[i].masterSecret, ssl->sec.masterSecret,
+	memcpy(g_sessionTable[i].masterSecret, ssl->sec.masterSecret,
 		SSL_HS_MASTER_SIZE);
-	sessionTable[i].cipher = ssl->cipher;
-	sessionTable[i].inUse += 1;
+	g_sessionTable[i].cipher = ssl->cipher;
+	g_sessionTable[i].inUse += 1;
 /*
 	The sessionId is the current serverRandom value, with the first 4 bytes
 	replaced with the current cache index value for quick lookup later.
@@ -1931,26 +1952,24 @@ int32 matrixRegisterSession(ssl_t *ssl)
 	random used to generate the master key, even if he had not seen it
 	initially.
 */
-	memcpy(sessionTable[i].id + 4, ssl->sec.serverRandom,
+	memcpy(g_sessionTable[i].id + 4, ssl->sec.serverRandom,
 		min(SSL_HS_RANDOM_SIZE, SSL_MAX_SESSION_ID_SIZE) - 4);
 	ssl->sessionIdLen = SSL_MAX_SESSION_ID_SIZE;
 
-	memcpy(ssl->sessionId, sessionTable[i].id, SSL_MAX_SESSION_ID_SIZE);
+	memcpy(ssl->sessionId, g_sessionTable[i].id, SSL_MAX_SESSION_ID_SIZE);
 /*
 	startTime is used to check expiry of the entry
 
 	The versions are stored, because a cached session must be reused
 	with same SSL version.
 */
-	psGetTime(&sessionTable[i].startTime, ssl->userPtr);
-	sessionTable[i].majVer = ssl->majVer;
-	sessionTable[i].minVer = ssl->minVer;
+	psGetTime(&g_sessionTable[i].startTime, ssl->userPtr);
+	g_sessionTable[i].majVer = ssl->majVer;
+	g_sessionTable[i].minVer = ssl->minVer;
 
-	sessionTable[i].extendedMasterSecret = ssl->extFlags.extended_master_secret;
+	g_sessionTable[i].extendedMasterSecret = ssl->extFlags.extended_master_secret;
 	
-#ifdef USE_MULTITHREADING
-	psUnlockMutex(&sessionTableLock);
-#endif /* USE_MULTITHREADING */
+	psUnlockMutex(&g_sessionTableLock);
 	return i;
 }
 
@@ -1972,12 +1991,10 @@ int32 matrixClearSession(ssl_t *ssl, int32 remove)
 	if (i >= SSL_SESSION_TABLE_SIZE) {
 		return PS_LIMIT_FAIL;
 	}
-#ifdef USE_MULTITHREADING
-	psLockMutex(&sessionTableLock);
-#endif /* USE_MULTITHREADING */
-	sessionTable[i].inUse -= 1;
-	if (sessionTable[i].inUse == 0) {
-		DLListInsertTail(&sessionChronList, &sessionTable[i].chronList);
+	psLockMutex(&g_sessionTableLock);
+	g_sessionTable[i].inUse -= 1;
+	if (g_sessionTable[i].inUse == 0) {
+		DLListInsertTail(&g_sessionChronList, &g_sessionTable[i].chronList);
 	}
 
 /*
@@ -1990,14 +2007,12 @@ int32 matrixClearSession(ssl_t *ssl, int32 remove)
 		ssl->sessionIdLen = 0;
 		ssl->flags &= ~SSL_FLAGS_RESUMED;
 		/* Always preserve the id for chronList */
-		memset(sessionTable[i].id + 4, 0x0, SSL_MAX_SESSION_ID_SIZE - 4);
-		memset(sessionTable[i].masterSecret, 0x0, SSL_HS_MASTER_SIZE);
-		sessionTable[i].extendedMasterSecret = 0;
-		sessionTable[i].cipher = NULL;
+		memset(g_sessionTable[i].id + 4, 0x0, SSL_MAX_SESSION_ID_SIZE - 4);
+		memset(g_sessionTable[i].masterSecret, 0x0, SSL_HS_MASTER_SIZE);
+		g_sessionTable[i].extendedMasterSecret = 0;
+		g_sessionTable[i].cipher = NULL;
 	}
-#ifdef USE_MULTITHREADING
-	psUnlockMutex(&sessionTableLock);
-#endif /* USE_MULTITHREADING */
+	psUnlockMutex(&g_sessionTableLock);
 	return PS_SUCCESS;
 }
 
@@ -2021,13 +2036,9 @@ int32 matrixResumeSession(ssl_t *ssl)
 	id = ssl->sessionId;
 
 	i = (id[3] << 24) + (id[2] << 16) + (id[1] << 8) + id[0];
-#ifdef USE_MULTITHREADING
-	psLockMutex(&sessionTableLock);
-#endif /* USE_MULTITHREADING */
-	if (i >= SSL_SESSION_TABLE_SIZE || sessionTable[i].cipher == NULL) {
-#ifdef USE_MULTITHREADING
-		psUnlockMutex(&sessionTableLock);
-#endif /* USE_MULTITHREADING */
+	psLockMutex(&g_sessionTableLock);
+	if (i >= SSL_SESSION_TABLE_SIZE || g_sessionTable[i].cipher == NULL) {
+		psUnlockMutex(&g_sessionTableLock);
 		return PS_LIMIT_FAIL;
 	}
 /*
@@ -2035,46 +2046,38 @@ int32 matrixResumeSession(ssl_t *ssl)
 	Expiration is done on daily basis (86400 seconds)
 */
 	psGetTime(&accessTime, ssl->userPtr);
-	if ((memcmp(sessionTable[i].id, id,
+	if ((memcmp(g_sessionTable[i].id, id,
 			(uint32)min(ssl->sessionIdLen, SSL_MAX_SESSION_ID_SIZE)) != 0) ||
-			(psDiffMsecs(sessionTable[i].startTime,	accessTime, ssl->userPtr) >
-			SSL_SESSION_ENTRY_LIFE) || (sessionTable[i].majVer != ssl->majVer)
-			|| (sessionTable[i].minVer != ssl->minVer)) {
-#ifdef USE_MULTITHREADING
-		psUnlockMutex(&sessionTableLock);
-#endif /* USE_MULTITHREADING */
+			(psDiffMsecs(g_sessionTable[i].startTime,	accessTime, ssl->userPtr) >
+			SSL_SESSION_ENTRY_LIFE) || (g_sessionTable[i].majVer != ssl->majVer)
+			|| (g_sessionTable[i].minVer != ssl->minVer)) {
+		psUnlockMutex(&g_sessionTableLock);
 		return PS_FAILURE;
 	}
 	
 	/* Enforce the RFC 7627 rules for resumpion and extended master secret.
 		Essentially, a resumption must use (or not use) the extended master
 		secret extension in step with the orginal connection */
-	if (sessionTable[i].extendedMasterSecret == 0 &&
+	if (g_sessionTable[i].extendedMasterSecret == 0 &&
 			ssl->extFlags.extended_master_secret == 1) {
-#ifdef USE_MULTITHREADING
-		psUnlockMutex(&sessionTableLock);
-#endif /* USE_MULTITHREADING */
+		psUnlockMutex(&g_sessionTableLock);
 		return PS_FAILURE;
 	}
-	if (sessionTable[i].extendedMasterSecret == 1 &&
+	if (g_sessionTable[i].extendedMasterSecret == 1 &&
 			ssl->extFlags.extended_master_secret == 0) {
-#ifdef USE_MULTITHREADING
-		psUnlockMutex(&sessionTableLock);
-#endif /* USE_MULTITHREADING */
+		psUnlockMutex(&g_sessionTableLock);
 		return PS_FAILURE;
 	}
 
 	/* Looks good */
-	memcpy(ssl->sec.masterSecret, sessionTable[i].masterSecret,
+	memcpy(ssl->sec.masterSecret, g_sessionTable[i].masterSecret,
 		SSL_HS_MASTER_SIZE);
-	ssl->cipher = sessionTable[i].cipher;
-	sessionTable[i].inUse += 1;
-	if (sessionTable[i].inUse == 1) {
-		DLListRemove(&sessionTable[i].chronList);
+	ssl->cipher = g_sessionTable[i].cipher;
+	g_sessionTable[i].inUse += 1;
+	if (g_sessionTable[i].inUse == 1) {
+		DLListRemove(&g_sessionTable[i].chronList);
 	}
-#ifdef USE_MULTITHREADING
-	psUnlockMutex(&sessionTableLock);
-#endif /* USE_MULTITHREADING */
+	psUnlockMutex(&g_sessionTableLock);
 
 	return PS_SUCCESS;
 }
@@ -2105,28 +2108,22 @@ int32 matrixUpdateSession(ssl_t *ssl)
 /*
 	If there is an error on the session, invalidate for any future use
 */
-#ifdef USE_MULTITHREADING
-	psLockMutex(&sessionTableLock);
-#endif /* USE_MULTITHREADING */
-	sessionTable[i].inUse += ssl->flags & SSL_FLAGS_CLOSED ? -1 : 0;
-	if (sessionTable[i].inUse == 0) {
+	psLockMutex(&g_sessionTableLock);
+	g_sessionTable[i].inUse += ssl->flags & SSL_FLAGS_CLOSED ? -1 : 0;
+	if (g_sessionTable[i].inUse == 0) {
 		/* End of the line */
-		DLListInsertTail(&sessionChronList, &sessionTable[i].chronList);
+		DLListInsertTail(&g_sessionChronList, &g_sessionTable[i].chronList);
 	}
 	if (ssl->flags & SSL_FLAGS_ERROR) {
-		memset(sessionTable[i].masterSecret, 0x0, SSL_HS_MASTER_SIZE);
-		sessionTable[i].cipher = NULL;
-#ifdef USE_MULTITHREADING
-		psUnlockMutex(&sessionTableLock);
-#endif /* USE_MULTITHREADING */
+		memset(g_sessionTable[i].masterSecret, 0x0, SSL_HS_MASTER_SIZE);
+		g_sessionTable[i].cipher = NULL;
+		psUnlockMutex(&g_sessionTableLock);
 		return PS_FAILURE;
 	}
-	memcpy(sessionTable[i].masterSecret, ssl->sec.masterSecret,
+	memcpy(g_sessionTable[i].masterSecret, ssl->sec.masterSecret,
 		SSL_HS_MASTER_SIZE);
-	sessionTable[i].cipher = ssl->cipher;
-#ifdef USE_MULTITHREADING
-	psUnlockMutex(&sessionTableLock);
-#endif /* USE_MULTITHREADING */
+	g_sessionTable[i].cipher = ssl->cipher;
+	psUnlockMutex(&g_sessionTableLock);
 	return PS_SUCCESS;
 }
 
@@ -2145,9 +2142,7 @@ int32 matrixSslDeleteSessionTicketKey(sslKeys_t *keys, unsigned char name[16])
 {
 	psSessionTicketKeys_t	*lkey, *prev;
 
-#ifdef USE_MULTITHREADING
 	psLockMutex(&g_sessTicketLock);
-#endif
 	lkey = keys->sessTickets;
 	prev = NULL;
 	while (lkey) {
@@ -2158,33 +2153,25 @@ int32 matrixSslDeleteSessionTicketKey(sslKeys_t *keys, unsigned char name[16])
 					/* no more list == no more session ticket support */
 					psFree(lkey, keys->pool);
 					keys->sessTickets = NULL;
-#ifdef USE_MULTITHREADING
 					psUnlockMutex(&g_sessTicketLock);
-#endif
 					return PS_SUCCESS;
 				}
 				/* first in list but not alone */
 				keys->sessTickets = lkey->next;
 				psFree(lkey, keys->pool);
-#ifdef USE_MULTITHREADING
 				psUnlockMutex(&g_sessTicketLock);
-#endif
 				return PS_SUCCESS;
 			}
 			/* Middle of list.  Join previous with our next */
 			prev->next = lkey->next;
 			psFree(lkey, keys->pool);
-#ifdef USE_MULTITHREADING
 			psUnlockMutex(&g_sessTicketLock);
-#endif
 			return PS_SUCCESS;
 		}
 		prev = lkey;
 		lkey = lkey->next;
 	}
-#ifdef USE_MULTITHREADING
 	psUnlockMutex(&g_sessTicketLock);
-#endif
 	return PS_FAILURE; /* not found */
 
 }
@@ -2220,16 +2207,12 @@ int32 matrixSslLoadSessionTicketKeys(sslKeys_t *keys,
 		return PS_LIMIT_FAIL;
 	}
 
-#ifdef USE_MULTITHREADING
 	psLockMutex(&g_sessTicketLock);
-#endif
 	if (keys->sessTickets == NULL) {
 		/* first one */
 		keys->sessTickets = psMalloc(keys->pool, sizeof(psSessionTicketKeys_t));
 		if (keys->sessTickets == NULL) {
-#ifdef USE_MULTITHREADING
 			psUnlockMutex(&g_sessTicketLock);
-#endif
 			return PS_MEM_FAIL;
 		}
 		keylist = keys->sessTickets;
@@ -2243,16 +2226,12 @@ int32 matrixSslLoadSessionTicketKeys(sslKeys_t *keys,
 		}
 		if (i > SSL_SESSION_TICKET_LIST_LEN) {
 			psTraceInfo("Session ticket list > SSL_SESSION_TICKET_LIST_LEN\n");
-#ifdef USE_MULTITHREADING
 			psUnlockMutex(&g_sessTicketLock);
-#endif
 			return PS_LIMIT_FAIL;
 		}
 		keylist = psMalloc(keys->pool, sizeof(psSessionTicketKeys_t));
 		if (keylist == NULL) {
-#ifdef USE_MULTITHREADING
 			psUnlockMutex(&g_sessTicketLock);
-#endif
 			return PS_MEM_FAIL;
 		}
 		prev->next = keylist;
@@ -2264,9 +2243,7 @@ int32 matrixSslLoadSessionTicketKeys(sslKeys_t *keys,
 	memcpy(keylist->name, name, 16);
 	memcpy(keylist->hashkey, hashkey, hashkeyLen);
 	memcpy(keylist->symkey, symkey, symkeyLen);
-#ifdef USE_MULTITHREADING
 	psUnlockMutex(&g_sessTicketLock);
-#endif
 	return PS_SUCCESS;
 }
 
@@ -2494,9 +2471,7 @@ int32 matrixUnlockSessionTicket(ssl_t *ssl, unsigned char *in, int32 inLen)
 	}
 	c = in;
 	len = inLen;
-#ifdef USE_MULTITHREADING
 	psLockMutex(&g_sessTicketLock);
-#endif
 	if (getTicketKeys(ssl, c, &keys) < 0) {
 		psTraceInfo("No key found for session ticket\n");
 		/* We've been unlocked in getTicketKeys */
@@ -2522,9 +2497,7 @@ int32 matrixUnlockSessionTicket(ssl_t *ssl, unsigned char *in, int32 inLen)
 	psAesDecryptCBC(&ctx, c + 16, c + 16, len - 16 - 16 - L_HASHLEN);
 	psAesClearCBC(&ctx);
 	keys->inUse = 0;
-#ifdef USE_MULTITHREADING
 	psUnlockMutex(&g_sessTicketLock);
-#endif
 
 	/* decrypted marker */
 	enc = c + 16;

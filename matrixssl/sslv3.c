@@ -233,25 +233,29 @@ int32_t sslGenerateFinishedHash(psMd5Sha1_t *md,
 {
 	psMd5_t				omd5;
 	psSha1_t			osha1;
+	psMd5Sha1_t			md5sha1;
 	unsigned char		ihash[SHA1_HASH_SIZE];
 
+
+	psMd5Sha1Cpy(&md5sha1, md);
 /*
 	md5Hash = MD5(master_secret + pad2 +
 		MD5(handshake_messages + sender + master_secret + pad1));
 */
 	if (senderFlags >= 0) {
-		psMd5Update(&md->md5,
+		psMd5Update(&md5sha1.md5,
 			(senderFlags & SSL_FLAGS_SERVER) ? SENDER_SERVER : SENDER_CLIENT, 4);
 	}
-	psMd5Update(&md->md5, masterSecret, SSL_HS_MASTER_SIZE);
-	psMd5Update(&md->md5, pad1, sizeof(pad1));
-	psMd5Final(&md->md5, ihash);
+	psMd5Update(&md5sha1.md5, masterSecret, SSL_HS_MASTER_SIZE);
+	psMd5Update(&md5sha1.md5, pad1, sizeof(pad1));
+	psMd5Final(&md5sha1.md5, ihash);
 
 	psMd5Init(&omd5);
 	psMd5Update(&omd5, masterSecret, SSL_HS_MASTER_SIZE);
 	psMd5Update(&omd5, pad2, sizeof(pad2));
 	psMd5Update(&omd5, ihash, MD5_HASH_SIZE);
 	psMd5Final(&omd5, out);
+
 /*
 	The SHA1 hash is generated in the same way, except only 40 bytes
 	of pad1 and pad2 are used due to a mistake in the original SSL3 spec.
@@ -261,12 +265,12 @@ int32_t sslGenerateFinishedHash(psMd5Sha1_t *md,
 		SHA1(handshake_messages + sender + master_secret + pad1));
 */
 	if (senderFlags >= 0) {
-		psSha1Update(&md->sha1,
+		psSha1Update(&md5sha1.sha1,
 			(senderFlags & SSL_FLAGS_SERVER) ? SENDER_SERVER : SENDER_CLIENT, 4);
 	}
-	psSha1Update(&md->sha1, masterSecret, SSL_HS_MASTER_SIZE);
-	psSha1Update(&md->sha1, pad1, 40);
-	psSha1Final(&md->sha1, ihash);
+	psSha1Update(&md5sha1.sha1, masterSecret, SSL_HS_MASTER_SIZE);
+	psSha1Update(&md5sha1.sha1, pad1, 40);
+	psSha1Final(&md5sha1.sha1, ihash);
 
 	psSha1Init(&osha1);
 	psSha1Update(&osha1, masterSecret, SSL_HS_MASTER_SIZE);

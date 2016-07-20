@@ -587,6 +587,21 @@ void psAesReadyGCM(psAesGcm_t *ctx,
 	ctx->a_len = aadLen;
 }
 
+int32_t psAesReadyGCMRandomIV(psAesGcm_t *ctx,
+							  unsigned char IV[12],
+							  const unsigned char *aad, uint16_t aadLen,
+							  void *poolUserPtr)
+{
+		int32_t res;
+
+		res = psGetPrng(NULL, IV, 12, poolUserPtr);
+		if (res == 12) {
+			res = PS_SUCCESS;
+			psAesReadyGCM(ctx, IV, aad, aadLen);
+		}
+		return res;
+}
+
 /* Encrypt pt to ct and update the internal hash state */
 void psAesEncryptGCM(psAesGcm_t *ctx,
 				const unsigned char *pt, unsigned char *ct,
@@ -620,6 +635,22 @@ int32_t psAesDecryptGCM(psAesGcm_t *ctx,
 	gcm_transform(ctx, pt, ct, ptLen, ctx->IV, PS_AES_DECRYPT);
 	gcm_final(ctx, digest);
 	if (memcmpct(digest, ct + ptLen, tlen) != 0) {
+		return PS_AUTH_FAIL;
+	}
+	return PS_SUCCESS;
+}
+
+/* Decrypt ct to pt and verify hash in ct */
+int32_t psAesDecryptGCM2(psAesGcm_t *ctx,
+				const unsigned char *ct,
+				unsigned char *pt, uint32_t len,
+				const unsigned char *tag, uint32_t tagLen)
+{
+	unsigned char	tagTmp[16];
+
+	gcm_transform(ctx, pt, ct, len, ctx->IV, PS_AES_DECRYPT);
+	gcm_final(ctx, tagTmp);
+	if (memcmpct(tag, tagTmp, tagLen) != 0) {
 		return PS_AUTH_FAIL;
 	}
 	return PS_SUCCESS;

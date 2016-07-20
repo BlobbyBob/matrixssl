@@ -114,6 +114,21 @@ void psAesReadyGCM(psAesGcm_t *ctx,
 	psGhashPad(ctx);
 }
 
+int32_t psAesReadyGCMRandomIV(psAesGcm_t *ctx,
+							  unsigned char IV[12],
+							  const unsigned char *aad, uint16_t aadLen,
+							  void *poolUserPtr)
+{
+		int32_t res;
+
+		res = psGetPrng(NULL, IV, 12, poolUserPtr);
+		if (res == 12) {
+			res = PS_SUCCESS;
+			psAesReadyGCM(ctx, IV, aad, aadLen);
+		}
+		return res;
+}
+
 /******************************************************************************/
 /*
 	Internal gcm crypt function that uses direction to determine what gets
@@ -232,6 +247,23 @@ int32_t psAesDecryptGCM(psAesGcm_t *ctx,
 	psAesGetGCMTag(ctx, tagLen, tag);
 
 	if (memcmpct(tag, ct + ptLen, tagLen) != 0) {
+		psTraceCrypto("GCM didn't authenticate\n");
+		return PS_AUTH_FAIL;
+	}
+	return PS_SUCCESS;
+}
+
+int32_t psAesDecryptGCM2(psAesGcm_t *ctx,
+						 const unsigned char *ct,
+						 unsigned char *pt, uint32_t len,
+						 const unsigned char *tag, uint32_t tagLen)
+{
+	unsigned char	tagTmp[AES_BLOCKLEN];
+
+	psAesEncryptGCMx(ctx, ct, pt, len, 0);
+	psAesGetGCMTag(ctx, AES_BLOCKLEN, tagTmp);
+
+	if (memcmpct(tag, tagTmp, tagLen) != 0) {
 		psTraceCrypto("GCM didn't authenticate\n");
 		return PS_AUTH_FAIL;
 	}

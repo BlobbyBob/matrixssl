@@ -234,9 +234,30 @@ static int32_t extensionCb(ssl_t *ssl,
 				uint16_t extType, uint8_t extLen, void *e);
 
 #ifdef USE_CRL
-static int32 crlCb(psPool_t *pool, psX509Cert_t *CA, int append,
-				char *url, uint32 urlLen);
+static int32 fetchCRL(psPool_t *pool, char *url, uint32_t urlLen,
+					unsigned char **crlBuf, uint32_t *crlBufLen);
+static int32_t fetchParseAndAuthCRLfromCert(psPool_t *pool, psX509Cert_t *cert,
+					psX509Cert_t *potentialIssuers);
+
+/* Enable the example on how to fetch CRLs mid-handshake.  If disabled, the
+	example will show how to halt the handshake to go out and fetch and retry
+	the connection (command line option -n must be specified for multiple
+	connection attempts) */
+//#define MIDHANDSHAKE_CRL_FETCH
+
+#ifndef MIDHANDSHAKE_CRL_FETCH
+/* In the example where we stop the handhsake to go fetch the CRL files, we
+	need storage to hold the CRL URL distribution points since those are 
+	coming from the server cert chain which we do not keep around */
+#define CRL_MAX_SERVER_CERT_CHAIN 3
+#define CRL_MAX_URL_LEN		256
+static unsigned char  g_crlDistURLs[CRL_MAX_SERVER_CERT_CHAIN][CRL_MAX_URL_LEN];
+
+static int32_t fetchParseAndAuthCRLfromUrl(psPool_t *pool, unsigned char *url,
+					uint32_t urlLen, psX509Cert_t *potentialIssuers);
+static void fetchSavedCRL(psX509Cert_t *potentialIssuers);
 #endif
+#endif /* USE_CRL */
 
 
 /******************************************************************************/
@@ -750,8 +771,8 @@ static int32 process_cmd_options(int32 argc, char **argv)
 	strcpy(g_ip,		  "127.0.0.1");
 	g_bytes_requested    = 0;
 	g_send_closure_alert = 1;
-	g_ciphers            = 1;
-	g_cipher[0]          = 47;
+	g_ciphers            = 0;
+	g_cipher[0]          = 0;
 	g_disableCertNameChk = 0;
 	g_key_len            = 1024;
 	g_new                = 1;
@@ -863,9 +884,6 @@ int32 main(int32 argc, char **argv)
 	sslSessionId_t		*sid = NULL;
 	struct g_sslstats	stats;
 	unsigned char		*CAstream;
-#ifdef USE_CRL
-	int32			numLoaded;
-#endif
 #ifdef WIN32
 	WSADATA			wsaData;
 	WSAStartup(MAKEWORD(1, 1), &wsaData);
@@ -875,7 +893,7 @@ int32 main(int32 argc, char **argv)
 		_psTrace("MatrixSSL library init failure.  Exiting\n");
 		return rc;
 	}
-
+	
 	if (matrixSslNewKeys(&keys, NULL) < 0) {
 		_psTrace("MatrixSSL library key init failure.  Exiting\n");
 		return -1;
@@ -1059,10 +1077,10 @@ int32 main(int32 argc, char **argv)
 #endif /* USE_PSK_CIPHER_SUITE */
 
 #ifdef USE_CRL
-	if (matrixSslGetCRL(keys, crlCb, &numLoaded) < 0) {
-		_psTrace("WARNING: A CRL failed to load\n");
-	}
-	_psTraceInt("CRLs loaded: %d\n", numLoaded);
+	/* One initialization step that can be taken is to run through the CA
+		files and see if any CRL URL distribution points are present.
+		Fetch the CRL and load into the cache if found */
+	fetchParseAndAuthCRLfromCert(NULL, keys->CAcerts, keys->CAcerts);
 #endif
 
 	memset(&stats, 0x0, sizeof(struct g_sslstats));
@@ -1078,6 +1096,19 @@ int32 main(int32 argc, char **argv)
 
 	for (i = 0; i < g_new; i++) {
 		matrixSslNewSessionId(&sid, NULL);
+#ifdef USE_CRL
+#ifndef MIDHANDSHAKE_CRL_FETCH
+		/* This is part of the example for an application that has chosen to
+			fail a handshake if the CRL was not available during the first
+			attempted connection.  In this case, the CRL URL distribution points
+			have been saved aside in g_crlDistURLs and now we will go out and
+			fetch those CRLs and load them into the library cache so they
+			will be available on this next connection attempt. */
+		if (g_crlDistURLs[0][0] == 'h') { /* assumption is "http" */
+			fetchSavedCRL(keys->CAcerts);
+		}
+#endif
+#endif
 		rc = httpsClientConnection(keys, sid, &stats);
 		if (rc < 0) {
 			printf("F %d/%d\n", i, g_new);
@@ -1321,20 +1352,289 @@ static int32 certCb(ssl_t *ssl, psX509Cert_t *cert, int32 alert)
 		_psTrace("ERROR: Problem in certificate validation.  Exiting.\n");
 	}
 
+
+#ifdef USE_CRL
+	/* Examples on how to look at the CRL status for the cert chain and fetch
+		CRLs if they have not been loaded */
+	{
+	psX509Crl_t *expired;
+#ifdef MIDHANDSHAKE_CRL_FETCH
+	/* Will pause this handshake to go out and fetch a CRL via HTTP GET,
+		re-check for revocation and continue on if it all checks out */
+	int retryOnce = 0;
+RETRY_CRL_TEST_ONCE:
+#else
+	/* Perhaps the more standard way is to stop the handshake if the CRLs have
+		not been fetched.  Go fetch them and retry the SSL connection from
+		scratch.  The connection reattempt will only occur if the -n command
+		line option has been set to something greater than 1 */
+	int				count = 0;
+	uint32_t		urlLen;
+	unsigned char	*url;
+#endif
+
+	/* Loop to look at the CRL status of each cert in the chain */
+	for (next = cert; next != NULL; next = next->next) {
+		switch (next->revokedStatus) {
+		case CRL_CHECK_CRL_EXPIRED:
+			_psTrace("Have CRL but it is expired.  Fetching new one\n");
+			/* Remove the CRL from the table */
+			expired = psCRL_GetCRLForCert(next);
+			if (expired) {
+				psAssert(expired->expired);
+				psCRL_Delete(expired);
+			} else {
+				_psTrace("Unexpected combo of expired but no CRL found\n");
+			}
+			/* MOVING INTO CRL_CHECK_EXPECTED ON PURPOSE TO REFETCH */
+		case CRL_CHECK_EXPECTED:
+			/* There was a CRL distribution point in this cert but we didn't
+				have the CRL to test against */
+#ifdef MIDHANDSHAKE_CRL_FETCH
+			/* It is an application choice to go out and fetch CRLs in the
+				middle of the handshake like this.  It's probably not advised
+				to do this but here is an example if you'd like to do so */
+			/* Only attempt this once so we don't get stuck in a loop */
+			if (retryOnce) {
+				_psTrace("Cert was not able to be tested against a CRL\n");
+				alert = SSL_ALERT_CERTIFICATE_UNKNOWN;
+				break;
+			}
+			_psTrace("Cert expects CRL.  Mid-handshake attempt being made\n");
+			/* This fetchParseAndAuthCRLfromCert will work on "next" as a chain
+				so it is correct that the server cert will look for the first
+				instance of CHECK_EXPECTED and pass that as the start of
+				chain to work upon */
+			fetchParseAndAuthCRLfromCert(NULL, next, ssl->keys->CAcerts);
+			/* If all went well, every cert in the server chain will have an
+				updated status */
+			retryOnce++;
+			goto RETRY_CRL_TEST_ONCE;
+#else /* MIDHANSHAKE_CRL_FETCH */
+
+			//if (next->extensions.ak.keyId) {
+			//	psTraceBytes("cert ak", next->extensions.ak.keyId, 20);
+			//}
+			_psTrace("Cert expects CRL. Failing handshake to go fetch it\n");
+			/* A more typical case if CRL testing is expected to be done is
+				to halt the handshake now, go out and fetch the CRLs and
+				try the connection again */
+			/* Not clear which alert should be associated with this 
+				application level decision.  Let's call it UNKNOWN */
+			alert = SSL_ALERT_CERTIFICATE_UNKNOWN;
+			
+			/* Save aside the CRL URL distribution points to fetch after
+				control is given back when this handshake is done. Correct
+				to pick up from the current cert and work up as far as
+				possible */
+			if (count < CRL_MAX_SERVER_CERT_CHAIN) {
+				memset(g_crlDistURLs[count], 0, CRL_MAX_URL_LEN);
+				psX509GetCRLdistURL(next, (char**)&url, &urlLen);
+				if (urlLen > CRL_MAX_URL_LEN) {
+					_psTraceInt("CLR URL distribution point longer than %d\n",
+						CRL_MAX_URL_LEN);
+				} else {
+					memcpy(g_crlDistURLs[count], url, urlLen);
+					count++;
+				}
+			} else {
+				_psTraceInt("Server cert chain was longer than %d\n",
+					CRL_MAX_SERVER_CERT_CHAIN);
+			}
+			
+			break;
+			
+#endif /* MIDHANDSHAKE_CRL_FETCH */
+			break;
+
+		case CRL_CHECK_NOT_EXPECTED:
+			_psTrace("Cert didn't specify a CRL distribution point\n");
+			break;
+		case CRL_CHECK_PASSED_AND_AUTHENTICATED:
+			_psTrace("Cert passed CRL test and CRL was authenticated\n");
+			break;
+		case CRL_CHECK_PASSED_BUT_NOT_AUTHENTICATED:
+			_psTrace("Cert passed CRL test but CRL was not authenticated\n");
+			break;
+		case CRL_CHECK_REVOKED_AND_AUTHENTICATED:
+			_psTrace("Cert was revoked by an authenticated CRL\n");
+			alert = SSL_ALERT_CERTIFICATE_REVOKED;
+			break;
+		case CRL_CHECK_REVOKED_BUT_NOT_AUTHENTICATED:
+			_psTrace("Cert was revoked but the CRL wasn't authenticated\n");
+			alert = SSL_ALERT_CERTIFICATE_REVOKED;
+			break;
+		default:
+			break;
+		}
+	}
+	} /* End CRL local code block */
+#endif
+
 	if (g_trace && alert == 0 && cert) {
 		_psTraceStr("SUCCESS: Validated cert for: %s.\n", cert->subject.commonName);
 	}
 
 #endif /* !USE_ONLY_PSK_CIPHER_SUITE */
 	return alert;
+} /* end certificate callback */
+
+
+/******************************************************************************/
+#ifdef USE_CRL
+
+#ifndef MIDHANDSHAKE_CRL_FETCH
+/* Part of example for halting handshake because no CRL was available.  Now
+	we have closed that handshake and are fetching the CRLs that were set
+	aside during the certificate callback.  We use our list of CA files as
+	potential issuers here so we can attempt a round of CRL authentications.
+	This authentication round will save time during the next handshake */
+static void fetchSavedCRL(psX509Cert_t *potentialIssuers)
+{
+	int i;
+	
+	/* Test for 'h' is assuming URL to begin with "http" */
+	for (i = 0; i < CRL_MAX_SERVER_CERT_CHAIN && g_crlDistURLs[i][0] == 'h';
+			i++) {
+		fetchParseAndAuthCRLfromUrl(NULL, g_crlDistURLs[i],
+			strlen((char*)g_crlDistURLs[i]), potentialIssuers);
+		memset(g_crlDistURLs[i], 0, CRL_MAX_URL_LEN);
+	}
 }
 
-#ifdef USE_CRL
-/* Basic example of matrixSslGetCRL callback for downloading a CRL from a given
-	URL	and	passing	the CRL contents to matrixSslLoadCRL
+/* Fetch a CRL give an URL.  Once you have it, check to see if it can be
+	authenticated by any of the "potentialIssuers"
+	
+	Regardless of authentication status, add any CRL that is found
+	to the global cache for	access inside the library during internal
+	authentications */
+static int32_t fetchParseAndAuthCRLfromUrl(psPool_t *pool, unsigned char *url,
+					uint32_t urlLen, psX509Cert_t *potentialIssuers)
+{
+	unsigned char	*crlBuf;
+	uint32_t		crlBufLen;
+	psX509Crl_t		*crl;
+	psX509Cert_t	*ic;
+	
+	/* url need not be freed.  It points into cert structure */
+	if (fetchCRL(NULL, (char*)url, urlLen, &crlBuf, &crlBufLen) < 0){
+		_psTrace("Unable to fetch CRL\n");
+		return -1;
+	}
+	/* Convert the CRL stream into our structure */
+	if (psX509ParseCRL(pool, &crl, crlBuf, crlBufLen) < 0) {
+		_psTrace("Unable to parse CRL\n");
+		psFree(crlBuf, pool);
+		return -1;
+	}
+	psFree(crlBuf, pool);
+			
+	/* Adding the CRL to the global cache.  This local crl is now the
+		same memory as the entry in the global cache and is managed
+		there.  Freeing will now be	done with psCRL_DeleteAll at
+		application closure */
+	psCRL_Update(crl, 1); /* The 1 will delete old CRLs */
+			
+	/* Important to separate the concept of the CRL authentication
+		from the cert authentication.  Here, we run through the
+		list of potential issuers the caller thinks could work */
+	for (ic = potentialIssuers; ic != NULL; ic = ic->next) {
+		if (psX509AuthenticateCRL(ic, crl, NULL) > 0) {
+			_psTrace("NOTE: Able to authenticate CRL\n");
+			break; /* Stop looking */
+		}
+	}
+	return PS_SUCCESS;
+}
+#endif /* ifndef MIDHANDSHAKE_CRL_FETCH */
 
+
+/* Take the CRL Distribution URL from the "cert" (may be a chain) and go fetch
+	the CRL.  Once you have it, check to see if it can be authenticated by any
+	of the "potentialIssuers" OR by the "cert" chain itself.
+	
+	Regardless of authentication status, add any CRL that is found
+	to the global cache for	access inside the library during internal
+	authentications */
+static int32_t fetchParseAndAuthCRLfromCert(psPool_t *pool, psX509Cert_t *cert,
+					psX509Cert_t *potentialIssuers)
+{
+	char			*url;
+	unsigned char	*crlBuf;
+	uint32_t		urlLen, crlBufLen;
+	psX509Crl_t		*crl;
+	psX509Cert_t	*sc, *ic;
+	int32			numLoaded = 0;
+	
+	sc = cert;
+	while(sc) {
+		if (psX509GetCRLdistURL(sc, &url, &urlLen) > 0) {
+			/* url need not be freed.  It points into cert structure */
+			if (fetchCRL(NULL, url, urlLen, &crlBuf, &crlBufLen) < 0){
+				_psTrace("Unable to fetch CRL\n");
+				sc = sc->next;
+				continue;
+			}
+			/* Convert the CRL stream into our structure */
+			if (psX509ParseCRL(pool, &crl, crlBuf, crlBufLen) < 0) {
+				_psTrace("Unable to parse CRL\n");
+				psFree(crlBuf, pool);
+				sc = sc->next;
+				continue;
+			}
+			psFree(crlBuf, pool);
+			
+			/* Adding the CRL to the global cache.  This local crl is now the
+				same memory as the entry in the global cache and is managed
+				there.  Freeing will now be	done with psCRL_DeleteAll at
+				application closure */
+			psCRL_Update(crl, 1); /* The 1 will delete old CRLs */
+			++numLoaded;
+			
+			/* Important to separate the concept of the CRL authentication
+				from the cert authentication.  Here, we run through the
+				list of potential issuers the caller thinks could work */
+			for (ic = potentialIssuers; ic != NULL; ic = ic->next) {
+				if (psX509AuthenticateCRL(ic, crl, NULL) > 0) {
+					_psTrace("NOTE: Able to authenticate CRL\n");
+					break; /* Stop looking */
+				}
+			}
+			if (crl->authenticated == 0) {
+				/* If none of our potential issuers were able to authenticate,
+					let's just run through our own "cert" chain as well.
+					The reason we are doing this is to allow this function
+					to handle cases where the "cert" is part of a server
+					cert chain where the issuer is included as part of that
+					CERTIFICATE message.  That is what we are testing here.
+					The potentialIssuers will typically be the loaded CA
+					files and that will catch the cases where the parent-most
+					certificate of the server chain will need to be 
+					authenticated */
+				for (ic = cert; ic != NULL; ic = ic->next) {
+					if (psX509AuthenticateCRL(ic, crl, NULL) > 0) {
+						_psTrace("NOTE: Able to authenticate CRL\n");
+						break; /* Stop looking */
+					}
+				}
+			}
+			
+			/* Regardless of whether or not we could authenticate the CRL,
+				run the function that recalculates the revokedStatus of
+				the certificate itself.  REQUIRES g_CRL */
+			psCRL_determineRevokedStatus(sc);
+		}
+		sc = sc->next;
+	}
+	_psTraceInt("CRLs loaded: %d\n", numLoaded);
+	return PS_SUCCESS;
+}
+
+/* Example function to retrieve a CRL using HTTP GET over POSIX sockets.
+	crlBuf is allocated by this routine and must be freed via psFree 
+	
 	< 0 - Error loading CRL
-	> 0 - Success
+	0 - Success
 */
 static unsigned char crl_getHdr[] = "GET ";
 #define GET_OH_LEN		4
@@ -1347,26 +1647,28 @@ static unsigned char crl_acceptHdr[] = "\r\nAccept: */*\r\n\r\n";
 
 #define HOST_ADDR_LEN	64	/* max to hold 'www.something.com' */
 #define GET_REQ_LEN		128	/* max to hold http GET request */
-#define CRL_BUF_SIZE	4096	/* max size of incoming CRL */
 
-int32 crlCb(psPool_t *pool, psX509Cert_t *CA, int append, char *url,
-				uint32 urlLen)
+#define HTTP_REPLY_CHUNK_SIZE	2048
+
+int32 fetchCRL(psPool_t *pool, char *url, uint32_t urlLen,
+			unsigned char **crlBuf, uint32_t *crlBufLen)
 {
 	SOCKET			fd;
 	struct hostent	*ip;
 	struct in_addr	intaddr;
 	char			*pageStart, *replyPtr, *ipAddr;
 	char			hostAddr[HOST_ADDR_LEN], getReq[GET_REQ_LEN];
-	char			crlBuf[CRL_BUF_SIZE];
 	int				hostAddrLen, getReqLen, pageLen;
-	int32			transferred;
+	int32			transferred, sawOK, sawContentLength, grown;
 	int32			err, httpUriLen, port, offset;
-	uint32			crlBinLen;
+	unsigned char	crlChunk[HTTP_REPLY_CHUNK_SIZE];
+	unsigned char	*crlBin; /* allocated */
+	uint32_t		crlBinLen;
 
 	/* Is URI in expected URL form? */
 	if (strstr(url, "http://") == NULL) {
 		if (strstr(url, "https://") == NULL) {
-			_psTraceStr("crlCb: Unsupported CRL URI: %s\n", url);
+			_psTraceStr("fetchCRL: Unsupported CRL URI: %s\n", url);
 			return -1;
 		}
 		httpUriLen = 8;
@@ -1378,25 +1680,25 @@ int32 crlCb(psPool_t *pool, psX509Cert_t *CA, int append, char *url,
 
 	/* Parsing host and page and setting up IP address and GET request */
 	if ((pageStart = strchr(url + httpUriLen, '/')) == NULL) {
-		_psTrace("crlCb: No host/page divider found\n");
+		_psTrace("fetchCRL: No host/page divider found\n");
 		return -1;
 	}
 	if ((hostAddrLen = (int)(pageStart - url) - httpUriLen) > HOST_ADDR_LEN) {
-		_psTrace("crlCb: HOST_ADDR_LEN needs to be increased\n");
+		_psTrace("fetchCRL: HOST_ADDR_LEN needs to be increased\n");
 		return -1; /* ipAddr too small to hold */
 	}
 
 	memset(hostAddr, 0, HOST_ADDR_LEN);
 	memcpy(hostAddr, url + httpUriLen, hostAddrLen);
 	if ((ip = gethostbyname(hostAddr)) == NULL) {
-		_psTrace("crlCb: gethostbyname failed\n");
+		_psTrace("fetchCRL: gethostbyname failed\n");
 		return -1;
 	}
 
 	memcpy((char *) &intaddr, (char *) ip->h_addr_list[0],
 		(size_t) ip->h_length);
 	if ((ipAddr = inet_ntoa(intaddr)) == NULL) {
-		_psTrace("crlCb: inet_ntoa failed\n");
+		_psTrace("fetchCRL: inet_ntoa failed\n");
 		return -1;
 	}
 
@@ -1404,7 +1706,7 @@ int32 crlCb(psPool_t *pool, psX509Cert_t *CA, int append, char *url,
 	getReqLen = pageLen + hostAddrLen + GET_OH_LEN + HTTP_OH_LEN +
 		HOST_OH_LEN + ACCEPT_OH_LEN;
 	if (getReqLen > GET_REQ_LEN) {
-		_psTrace("crlCb: GET_REQ_LEN needs to be increased\n");
+		_psTrace("fetchCRL: GET_REQ_LEN needs to be increased\n");
 		return -1;
 	}
 
@@ -1430,7 +1732,7 @@ int32 crlCb(psPool_t *pool, psX509Cert_t *CA, int append, char *url,
 	/* Connect and send */
 	fd = lsocketConnect(ipAddr, port, &err);
 	if (fd == INVALID_SOCKET || err != PS_SUCCESS) {
-		_psTraceInt("crlCb: socketConnect failed: %d\n", err);
+		_psTraceInt("fetchCRL: socketConnect failed: %d\n", err);
 		return PS_PLATFORM_FAIL;
 	}
 
@@ -1438,7 +1740,7 @@ int32 crlCb(psPool_t *pool, psX509Cert_t *CA, int append, char *url,
 	offset = 0;
 	while (getReqLen) {
 		if ((transferred = send(fd, getReq + offset, getReqLen, 0)) < 0) {
-			_psTraceInt("crlCb: socket send failed: %d\n", errno);
+			_psTraceInt("fetchCRL: socket send failed: %d\n", errno);
 			close(fd);
 			return PS_PLATFORM_FAIL;
 		}
@@ -1446,45 +1748,138 @@ int32 crlCb(psPool_t *pool, psX509Cert_t *CA, int append, char *url,
 		offset += transferred;
 	}
 
-	/* Not a good full recv */
-	if ((transferred = recv(fd, crlBuf, CRL_BUF_SIZE, 0)) <= 0) {
-		_psTrace("crlCb: socket recv closed or failed\n");
-		close(fd);
-		return PS_PLATFORM_FAIL;
-	}
-	if (transferred == CRL_BUF_SIZE) {
-		/* CRL larger than max */
-		_psTrace("crlCb: CRL_BUF_SIZE needs to be increased\n");
-		close(fd);
-		return -1;
+	/* Get a chunk at a time so we can peek at the size on the first chunk
+		and allocate the correct CRL size */
+	crlBin = NULL;
+	*crlBuf = NULL;
+	*crlBufLen = 0;
+	sawOK = sawContentLength = 0;
+	
+	/* This recv loop is not 100%.  The parse is looking for a few specific
+		strings in the HTTP header to get initial status, content length,
+		and \r\n\r\n for beginning of CRL data. If a recv happens to fall right
+		on the boundary of any of these patterns, the behavior is undefined.
+		There are some asserts sprinked around to notify if this happens.
+		It SHOULD be sufficient to keep a decent size HTTP_REPLLY_CHUNK_SIZE
+		that you can be pretty sure will hold the entire HTTP header but
+		the "recv" call itself is also a factor in how many bytes will be
+		recevied in the first call */
+	while ((transferred = recv(fd, crlChunk, HTTP_REPLY_CHUNK_SIZE, 0)) > 0) {
+	
+		if (crlBin == NULL) {
+			/* Still getting the details of the HTTP response */
+			/* Did we get an OK response? */
+			if (sawOK == 0) {
+				if (strstr((const char *)crlChunk, "200 OK") == NULL) {
+					/* First chunk. Should be plenty large enough to hold */
+					_psTrace("fetchCRL: server reply was not '200 OK'\n");
+					close(fd);
+					return -1;
+				}
+				sawOK++;
+			}
+			/* Length parse */
+			if (sawContentLength == 0) {
+				if ((replyPtr = strstr((const char *)crlChunk,
+						"Content-Length: ")) == NULL) {
+					
+					/* Apparently Content-Length is not always going to be
+						there.  See if we have the end of the header instead */
+					if ((replyPtr = strstr((const char *)crlChunk, "\r\n\r\n"))
+							== NULL) {
+						continue; /* saw neither. keep trying */
+					}
+					/* Saw \r\n\r\n but no Content-Length: can't allocate full
+						CRL buffer at once so work in chunks */
+					crlBinLen = HTTP_REPLY_CHUNK_SIZE;
+				} else {
+					/* Got the Content-Length: as expected */
+					sawContentLength++;
+				
+					/* Possible cut off right at Content-Length here which
+						would be a pain.  This assert is seeing if there are
+						at least 8 more bytes in the chunk to read the
+						integer out of.  If you hit this, some partial 
+						parsing will need to be instrumented... or change
+						the chunk size if this is truly a chunk boundary */
+					psAssert((replyPtr + 16) <
+						(char*)&(crlChunk[HTTP_REPLY_CHUNK_SIZE - 24]));
+					
+					
+					/* Magic 16 is length of "Content-Length: " */
+					crlBinLen = (int)atoi(replyPtr + 16);
+				}
+			}
+			
+		
+			/* Data begins after CRLF CRLF */
+			if ((replyPtr = strstr((const char *)crlChunk, "\r\n\r\n"))
+					== NULL) {
+				continue;
+			}
+			/* Possible cut off right at data start here which
+				would be a pain.  This assert is seeing if there are
+				4 more bytes in the chunk to advance past.  If you hit this,
+				some partial parsing will need to be instrumented... or change
+				the chunk size if this is truly a chunk boundary */
+			psAssert((replyPtr+4) < (char*)&(crlChunk[HTTP_REPLY_CHUNK_SIZE]));
+			replyPtr += 4; /* Move past that "\r\n\r\n" to get to start */
+
+			/* Allocate the CRL buffer. Will be full size if sawContentLength */
+			if ((crlBin = psMalloc(pool, crlBinLen)) == NULL) {
+				_psTrace("fetchCRL: Memory allocation error for CRL buffer\n");
+				close(fd);
+				return -1;
+			}
+
+			/* So how much do we actually have to copy our of first chunk? */
+			transferred = transferred - (replyPtr - (char*)crlChunk);
+			
+			if (sawContentLength) {
+				/* Will march crlBin forward so just assign output crlBuf now */
+				*crlBuf = crlBin;
+				*crlBufLen = crlBinLen;
+				memcpy(crlBin, replyPtr, transferred);
+				crlBin += transferred;
+				psAssert((crlBin - *crlBuf) <= crlBinLen);
+			} else {
+				grown = 1;
+				/* Keep track of index to monitor size */
+				crlBinLen = transferred;
+				memcpy(crlBin, replyPtr, transferred);
+			}
+		} else {
+			/* subsequent recv calls */
+			if (sawContentLength) {
+				memcpy(crlBin, crlChunk, transferred);
+				crlBin += transferred;
+				psAssert((crlBin - *crlBuf) <= crlBinLen);
+			} else {
+				if (transferred + crlBinLen > (HTTP_REPLY_CHUNK_SIZE * grown)) {
+					/* not enough room.  psRealloc */
+					grown++;
+					crlBin = psRealloc(crlBin, HTTP_REPLY_CHUNK_SIZE * grown,
+						pool);
+				}
+				memcpy(crlBin + crlBinLen, crlChunk, transferred);
+				crlBinLen += transferred;
+			}
+		}
 	}
 	close(fd);
-
-	/* Did we get an OK response? */
-	if (strstr(crlBuf, "200 OK") == NULL) {
-		_psTrace("crlCb: server reply was not '200 OK'\n");
-		return -1;
-	}
-	/* Length parse */
-	if ((replyPtr = strstr(crlBuf, "Content-Length: ")) == NULL) {
-		return -1;
-	}
-	crlBinLen = (int)atoi(replyPtr + 16);
-
-	/* Data begins after CRLF CRLF */
-	if ((replyPtr = strstr(crlBuf, "\r\n\r\n")) == NULL) {
-		return -1;
-	}
-	/* A sanity test that the length matches the remainder */
-	if ((transferred - (replyPtr - crlBuf) - 4) != crlBinLen) {
-		return -1;
+	if (sawContentLength == 0) {
+		/* These have been changing as we grow */
+		*crlBuf = crlBin;
+		*crlBufLen = crlBinLen;
+	} else {
+		psAssert(crlBinLen == (crlBin - *crlBuf));
 	}
 
-	/* Lastly, pass the CRL to matrixSslLoadCRL to parse, perform signature
-		validation, and cache the revoked certificates for this CA */
-	return matrixSslLoadCRL(pool, CA, append, replyPtr + 4, crlBinLen, NULL);
+	return 0;
+
 }
-#endif
+#endif /* USE_CRL */
+
 
 /******************************************************************************/
 /*

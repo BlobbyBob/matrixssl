@@ -66,6 +66,15 @@ extern "C" {
 #endif
 #endif
 
+#ifdef USE_SHARED_SESSION_CACHE
+#ifndef POSIX
+#error "USE_SHARED_SESSION_CACHE only implemented for POSIX platforms."
+#endif
+#ifndef USE_MULTITHREADING
+#error "USE_MULTITHREADING required for USE_SHARED_MESSAGE_CACHE."
+#endif
+#endif
+
 /******************************************************************************/
 /*
 	SHA1 and MD5 are essential elements for SSL key derivation during protocol

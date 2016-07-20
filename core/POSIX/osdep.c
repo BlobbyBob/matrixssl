@@ -205,7 +205,7 @@ int64_t psDiffUsecs(psTime_t then, psTime_t now)
 		now.tv_sec--;
 		now.tv_nsec += 1000000000L; /* borrow 1 second worth of nsec */
 	}
-	return (int32)((now.tv_sec - then.tv_sec) * 1000) +
+	return (int32)((now.tv_sec - then.tv_sec) * 1000000) +
 		((now.tv_nsec - then.tv_nsec)/ 1000);
 }
 
@@ -232,44 +232,48 @@ int32 psCompareTime(psTime_t a, psTime_t b, void *userPtr)
 	MUTEX FUNCTIONS
 */
 /******************************************************************************/
-static pthread_mutexattr_t attr;
-/*
-	Module open and close
-*/
-int osdepMutexOpen(void)
-{
-	int32	rc;
 
+int32_t osdepMutexOpen(void)
+{
+	return PS_SUCCESS;
+}
+
+void osdepMutexClose(void)
+{
+}
+
+int32_t psCreateMutex(psMutex_t *mutex, uint32_t flags)
+{
+	pthread_mutexattr_t		attr;
+	int						rc;
+
+	if (flags & ~PS_SHARED) {
+		psErrorInt("psCreateMutex unsupported flag %u\n", flags);
+		return PS_PLATFORM_FAIL;
+	}
 	if ((rc = pthread_mutexattr_init(&attr)) < 0) {
 		psErrorInt("pthread_mutexattr_init failed %d\n", rc);
 		return PS_PLATFORM_FAIL;
 	}
-	return PS_SUCCESS;
-}
-
-int osdepMutexClose(void)
-{
-	if (pthread_mutexattr_destroy(&attr) != 0) {
-		psTraceCore("pthread_mutex_destroy failed\n");
-	}
-	return PS_SUCCESS;
-}
-
-/*
-	PScore Public API implementations
-*/
-int32 psCreateMutex(psMutex_t *mutex)
-{
-	int32 err;
-
-	if ((err = pthread_mutex_init(mutex, &attr)) != 0) {
-		psTraceIntCore("pthread_mutex_init failed %d\n", err);
+	if ((flags & PS_SHARED) &&
+			(rc = pthread_mutexattr_setpshared(&attr,
+			PTHREAD_PROCESS_SHARED)) < 0) {
+		pthread_mutexattr_destroy(&attr);
+		psErrorInt("pthread_mutexattr shared failed %d\n", rc);
 		return PS_PLATFORM_FAIL;
 	}
+	if ((rc = pthread_mutex_init(mutex, &attr)) != 0) {
+		pthread_mutexattr_destroy(&attr);
+		psErrorInt("pthread_mutex_init failed %d\n", rc);
+		return PS_PLATFORM_FAIL;
+	}
+	if (pthread_mutexattr_destroy(&attr) != 0) {
+		psTraceCore("pthread_mutexattr_destroy failed\n");
+	}
 	return PS_SUCCESS;
 }
 
-int32 psLockMutex(psMutex_t *mutex)
+int32_t psLockMutex(psMutex_t *mutex)
 {
 	if (pthread_mutex_lock(mutex) != 0) {
 		psTraceCore("pthread_mutex_lock failed\n");
@@ -278,7 +282,7 @@ int32 psLockMutex(psMutex_t *mutex)
 	return PS_SUCCESS;
 }
 
-int32 psUnlockMutex(psMutex_t *mutex)
+int32_t psUnlockMutex(psMutex_t *mutex)
 {
 	if (pthread_mutex_unlock(mutex) != 0) {
 		psTraceCore("pthread_mutex_unlock failed\n");

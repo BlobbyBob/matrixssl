@@ -2,7 +2,7 @@
  *	@file    rsaperf.c
  *	@version $Format:%h%d$
  *
- *	RSA performance testing	.
+ *	RSA performance testing.
  */
 /*
  *	Copyright (c) 2013-2016 INSIDE Secure Corporation
@@ -441,21 +441,22 @@ int main(int argc, char **argv)
 #endif /* SIGN_OP */
 
 #ifdef VERIFY_OP
-		/* TODO: find a good way to time more than a single decrypt */
+		static const unsigned char sigdata[] = "Test message to be signed - at least 28 bytes";
 		memset(in, 0x0, keysize);
-		memcpy(in, "hello", 5);
-		if (psRsaEncryptPriv(misc, &privkey, in, 5, out, keysize, pkaInfo) < 0) {
+		memcpy(in, sigdata, sizeof(sigdata));
+		if (psRsaEncryptPriv(misc, &privkey, in, sizeof(sigdata), out, keysize, pkaInfo) < 0) {
 			_psTrace("	FAILED VERIFY PREP\n");
 		}
 		memset(in, 0x0, keysize);
 
+		/* TODO: find a good way to time more than a single decrypt */
 		psGetTime(&start, NULL);
 		/* coverity[swapped_arguments] */
-		if (psRsaDecryptPub(pool, &privkey, out, keysize, in, 5, pkaInfo) < 0) {
+		if (psRsaDecryptPub(pool, &privkey, out, keysize, in, sizeof(sigdata), pkaInfo) < 0) {
 			_psTrace("	FAILED VERIFY OPERATION\n");
 		}
 		psGetTime(&end, NULL);
-		if (memcmp(in, "hello", 5) != 0) {
+		if (memcmp(in, sigdata, sizeof(sigdata)) != 0) {
 			_psTrace("	FAILED VERIFY VERIFY\n");
 		}
 		_psTraceInt(TIME_UNITS "/verify ", t = psDiffMsecs(start, end, NULL));

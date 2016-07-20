@@ -1685,8 +1685,10 @@ int32_t pstm_mulmod(psPool_t *pool, const pstm_int *a, const pstm_int *b,
 
 /******************************************************************************/
 /*
- *	y = g**x (mod b)
- *	Some restrictions... x must be positive and < b
+ *	y = g**x (mod p)
+ *	Some restrictions...
+ *		x must be positive and < p
+ *		p must be positive, odd, and [512,1024,1536,2048,3072,4096] bits
  */
 int32_t pstm_exptmod(psPool_t *pool, const pstm_int *G, const pstm_int *X,
 				const pstm_int *P, pstm_int *Y)
@@ -1698,6 +1700,19 @@ int32_t pstm_exptmod(psPool_t *pool, const pstm_int *G, const pstm_int *X,
 	int16		bitcpy, bitcnt, mode, digidx, x, y, winsize;
 	uint32		paDlen;
 
+	x = pstm_count_bits(P);
+	switch(x) {
+	case 512:
+	case 1024:
+	case 1536:
+	case 2048:
+	case 3072:
+	case 4096:
+		break;
+	default:
+		psTraceIntCrypto("pstm_exptmod prime size failed: %hu\n", x);
+		return -1;
+	}
 	/* set window size from what user set as optimization */
 	x = pstm_count_bits(X);
 	if (x < 50) {
@@ -1999,6 +2014,9 @@ static void pstm_reverse(unsigned char *s, uint16_t len)
 	uint16_t		ix, iy;
 	unsigned char	t;
 
+	if (len == 0) {
+		return;
+	}
 	ix = 0;
 	iy = len - 1;
 	while (ix < iy) {

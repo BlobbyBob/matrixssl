@@ -688,6 +688,14 @@ static int dealWithAlpnExt(ssl_t *ssl, const unsigned char *c, unsigned short ex
 		i--;
 	}
 
+	/** HTTP2 places some constraints on TLS configuration, so flag
+		that here for checking later (in choosing cipher suite, etc).
+		@see https://tools.ietf.org/html/rfc7540#section-9.2
+	*/
+	if ((ssl->alpnLen == 2) && memcmp(ssl->alpn, "h2", 2) = 0) {
+		ssl->flags |= SSL_FLAGS_HTTP2;
+	}
+
 	return PS_SUCCESS;
 }
 #endif /* USE_ALPN */

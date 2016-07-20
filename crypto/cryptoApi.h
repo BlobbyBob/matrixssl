@@ -39,7 +39,7 @@
 extern "C" {
 #endif
 
-#include "core/coreApi.h" /* Must be included first */
+#include "../core/coreApi.h" /* Must be included first */
 #include "cryptoConfig.h" /* Must be included second */
 #include "cryptolib.h"
 
@@ -194,12 +194,21 @@ PSPUBLIC int32_t psAesInitGCM(psAesGcm_t *ctx,
 PSPUBLIC void psAesReadyGCM(psAesGcm_t *ctx,
 						const unsigned char IV[AES_IVLEN],
 						const unsigned char *aad, uint16_t aadLen);
+PSPUBLIC int32_t psAesReadyGCMRandomIV(psAesGcm_t *ctx,
+						unsigned char IV[12],
+				  		const unsigned char *aad, uint16_t aadLen,
+						void *poolUserPtr);
 PSPUBLIC void psAesEncryptGCM(psAesGcm_t *ctx,
 						const unsigned char *pt, unsigned char *ct,
 						uint32_t len);
 PSPUBLIC int32_t psAesDecryptGCM(psAesGcm_t *ctx,
 						const unsigned char *ct, uint32_t ctLen,
 						unsigned char *pt, uint32_t ptLen);
+
+PSPUBLIC int32_t psAesDecryptGCM2(psAesGcm_t *ctx,
+						const unsigned char *ct,
+				  		unsigned char *pt, uint32_t len,
+				  		const unsigned char *tag, uint32_t tagLen);
 
 PSPUBLIC void psAesDecryptGCMtagless(psAesGcm_t *ctx,
 						const unsigned char *ct, unsigned char *pt,
@@ -660,8 +669,34 @@ PSPUBLIC int32 psX509AuthenticateCert(psPool_t *pool, psX509Cert_t *subjectCert,
 					void *hwCtx, void *poolUserPtr);
 #endif
 #ifdef USE_CRL
-PSPUBLIC int32 psX509ParseCrl(psPool_t *pool, psX509Cert_t *CA, int append,
-					unsigned char *crlBin, int32 crlBinLen, void *poolUserPtr);
+#define CRL_CHECK_EXPECTED	5 /* cert had a dist point but not fetched yet */
+#define CRL_CHECK_NOT_EXPECTED	6 /* cert didn't have dist point */
+#define CRL_CHECK_PASSED_AND_AUTHENTICATED 7 /* all completely good */
+#define CRL_CHECK_PASSED_BUT_NOT_AUTHENTICATED 8 /* had CRL but no auth done */
+#define CRL_CHECK_REVOKED_AND_AUTHENTICATED 9
+#define CRL_CHECK_REVOKED_BUT_NOT_AUTHENTICATED 10
+#define CRL_CHECK_CRL_EXPIRED	11 /* CRL expired.  Revocation not tested */
+
+
+PSPUBLIC int32_t psX509ParseCRL(psPool_t *pool, psX509Crl_t **crl,
+					unsigned char *crlBin, int32 crlBinLen);
+PSPUBLIC void	 psX509FreeCRL(psX509Crl_t *crl);
+PSPUBLIC int32_t psX509GetCRLdistURL(psX509Cert_t *cert, char **url,
+					uint32_t *urlLen);
+PSPUBLIC int32_t psX509AuthenticateCRL(psX509Cert_t *CA, psX509Crl_t *CRL,
+					void *poolUserPtr);
+
+/* CRL global cache management */
+PSPUBLIC int psCRL_Update(psX509Crl_t *crl, int deleteExisting);
+PSPUBLIC int psCRL_Insert(psX509Crl_t *crl);
+PSPUBLIC int psCRL_Remove(psX509Crl_t *crl); /* Doesn't delete! */
+PSPUBLIC int psCRL_Delete(psX509Crl_t *crl);
+PSPUBLIC void psCRL_RemoveAll();
+PSPUBLIC void psCRL_DeleteAll();
+PSPUBLIC psX509Crl_t* psCRL_GetCRLForCert(psX509Cert_t *cert);
+PSPUBLIC int32_t psCRL_isRevoked(psX509Cert_t *cert, psX509Crl_t *CRL);
+PSPUBLIC int32_t psCRL_determineRevokedStatus(psX509Cert_t *cert);
+
 #endif /* USE_CRL */
 #endif /* USE_X509 */
 

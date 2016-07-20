@@ -1,6 +1,67 @@
 MatrixSSL Release Notes
 ========
 
+#Changes in 3.8.4
+--------
+> **Version 3.8.4**
+> July 2016
+> *&copy; INSIDE Secure - 2016 - All Rights Reserved*
+
+1. FEATURES AND IMPROVEMENTS
+ - Coverity coverage
+ - HTTP/2 restrictions via ALPN
+ - Enhanced example apps
+ - Process shared Session Cache
+ - Enhanced CRL and OCSP support
+ - Windows support for certificate date validation
+2. BUG FIXES
+ - Critical parsing bug for RSA encrypted blobs
+ - Additional restrictions on bignum operations
+ - Fixed error in disabled cipher flags
+ - Fixed error in DTLS encoding
+ - SSLv3 only support fixed
+ - Assembly compatibility with more compilers
+
+#1 FEATURES AND IMPROVEMENTS
+
+##Coverity coverage
+MatrixSSL now has zero outstanding defects in [Coverity Static Analysis](https://scan.coverity.com/projects/matrixssl-matrixssl).
+
+##HTTP/2 restrictions via ALPN
+MatrixSSL server code will automatically evaluate the ALPN extension and appropriately restrict the cipher suites and key exchange methods if the HTTP/2 protocol is being used. Per the [HTTP/2 spec](https://tools.ietf.org/html/rfc7540#appendix-A), only AEAD cipher suites and Ephemeral key exchange methods are allowed.
+
+##Enhanced example apps
+Example applications now take additional command line options and also support CRL request and response generation.
+
+##Process shared Session Cache
+Minimal support for a process-shared server session resumption cache is now supported via process-shared mutexes on Linux.
+
+##Enhanced CRL and OCSP support
+A new file _crypto/keyformat/crl.c_ defines additional apis for more complex CRL (Certificate Revocation List) and OCSP support.
+
+##Windows support for certificate date validation
+Previously only Posix based platforms were supported.
+
+#2 BUG FIXES
+
+##Critical parsing bug for RSA encrypted blobs
+Security Researcher [Hanno Böck](https://hboeck.de/) reported several issues related to RSA and bignum operations. An error in parsing a maliciously formatted public key block could produce a remotely triggered crash in SSL server parsing. Additional restrictions on the values provided to RSA and DH operations were also added, although an exploit has not been found.
+
+##Additional restrictions on bignum operations
+The MatrixSSL bignum library, located in _crypto/math/_ was optimized and reduced in size to support only key sizes and operations used by standard RSA, ECC and DH operations (those apis present in _crypto/cryptoApi.h_). Additional constraint checking has been added to the code to prevent unsupported key sizes and values. Users requiring generic bignum operations should take a look at libtomcrypt, GMP, Python or OpenSSL.
+
+##Fixed error in disabled cipher flags
+The optional disabling or enabling of specific ciphers at runtime per session was recently broken (now fixed) due to an errant flags calculation using `<` instead of `<<`.
+
+##Fixed error in DTLS encoding
+An error was returned if attempting to encode a DTLS message exactly the PMTU size.
+
+##SSLv3 only support fixed
+SSLv3 mode is not recommended for deployment, but had become broken in a recent build. It can now be enabled again.
+
+## Assembly compatibility with more compilers
+Fixed "invalid register constraints" error on some versions of GCC and LLVM for ARM, MIPS and x86_64.
+
 #Changes in 3.8.3
 --------
 > **Version 3.8.3**

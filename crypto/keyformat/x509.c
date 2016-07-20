@@ -104,6 +104,8 @@ static const struct {
 	OID_LIST(id_ce, id_ce_policyConstraints),
 	OID_LIST(id_ce, id_ce_extKeyUsage),
 	OID_LIST(id_ce, id_ce_cRLDistributionPoints),
+	OID_LIST(id_ce, id_ce_cRLNumber),
+	OID_LIST(id_ce, id_ce_issuingDistributionPoint),
 	OID_LIST(id_ce, id_ce_inhibitAnyPolicy),
 	OID_LIST(id_ce, id_ce_freshestCRL),
 	OID_LIST(id_pe, id_pe_authorityInfoAccess),
@@ -139,10 +141,6 @@ static int32_t issuedBefore(rfc_e rfc, const psX509Cert_t *cert);
 #ifdef USE_RSA
 static int32_t x509ConfirmSignature(const unsigned char *sigHash,
 				const unsigned char *sigOut, uint16_t sigLen);
-#endif
-
-#ifdef USE_CRL
-static void x509FreeRevoked(x509revoked_t **revoked);
 #endif
 
 #endif /* USE_CERT_PARSE */
@@ -1011,6 +1009,9 @@ void x509FreeExtensions(x509v3extensions_t *extensions)
 
 	x509GeneralName_t		*active, *inc;
 
+	if (extensions == NULL) {
+		return;
+	}
 	if (extensions->san) {
 		active = extensions->san;
 		while (active != NULL) {
@@ -1022,6 +1023,9 @@ void x509FreeExtensions(x509v3extensions_t *extensions)
 	}
 
 #ifdef USE_CRL
+	if (extensions->crlNum) {
+		psFree(extensions->crlNum, extensions->pool);
+	}
 	if (extensions->crlDist) {
 		active = extensions->crlDist;
 		while (active != NULL) {
@@ -1099,7 +1103,7 @@ void psX509FreeCert(psX509Cert_t *cert)
 		if (curr->uniqueSubjectId)		psFree(curr->uniqueSubjectId, pool);
 
 
-		if (curr->publicKey.type != PS_NONE) {
+		if (curr->publicKey.type != PS_NOKEY) {
 			switch (curr->pubKeyAlgorithm) {
 #ifdef USE_RSA
 			case OID_RSA_KEY_ALG:
@@ -1116,13 +1120,10 @@ void psX509FreeCert(psX509Cert_t *cert)
 				psAssert(0);
 				break;
 			}
-			curr->publicKey.type = PS_NONE;
+			curr->publicKey.type = PS_NOKEY;
 		}
 
 		x509FreeExtensions(&curr->extensions);
-#ifdef USE_CRL
-		x509FreeRevoked(&curr->revoked);
-#endif
 #endif /* USE_CERT_PARSE */
 		next = curr->next;
 		psFree(curr, pool);
@@ -1546,7 +1547,7 @@ static void psTraceOid(uint32_t oid[MAX_OID_LEN], uint8_t oidlen)
 	found = 0;
 	for (j = 0; oid_list[j].oid[0] != 0 && !found; j++) {
 		for (i = 0; i < oidlen; i++) {
-			if ((uint8_t)(oid[i] & 0xFF) != oid_list[j].oid[i]) {
+			if ((uint16_t)(oid[i] & 0xFFFF) != oid_list[j].oid[i]) {
 				break;
 			}
 			if ((i + 1) == oidlen) {
@@ -1924,8 +1925,26 @@ KNOWN_EXT:
 				break;
 
 #ifdef USE_CRL
+			case OID_ENUM(id_ce_cRLNumber):
+				/* A required extension within a CRL.  Our getSerialNum is 
+					the version of getInteger that allows very large
+					numbers.  Spec says this could be 20 octets long */
+				if (getSerialNum(pool, &p, (int32)(extEnd - p),
+						&(extensions->crlNum), &len) < 0) {
+					psTraceCrypto("Error parsing ak.serialNum\n");
+					return PS_PARSE_FAIL;
+				}
+				extensions->crlNumLen = len;
+				break;
+				
+			case OID_ENUM(id_ce_issuingDistributionPoint):
+				/* RFC 3280 - Although the extension is critical, conforming
+				implementations are not required to support this extension. */
+				p++;
+				p = p + (fullExtLen - (p - extStart));
+				break;
+			
 			case OID_ENUM(id_ce_cRLDistributionPoints):
-
 				if (getAsnSequence(&p, (int32)(extEnd - p), &fullExtLen) < 0) {
 					psTraceCrypto("Error parsing authKeyId extension\n");
 					return PS_PARSE_FAIL;
@@ -2311,21 +2330,73 @@ static int32 issuedBefore(rfc_e rfc, const psX509Cert_t *cert)
 
 /******************************************************************************/
 /**
+	Pulls the year, month and day out of the certificate notBefore and
+	notAfter dates.
+*/
+static int32 getDateComponents(psX509Cert_t *cert, int beforeOrAfter,
+				unsigned int *y, unsigned short *m, unsigned short *d)
+{
+	unsigned char	*c;
+	int32			timeType;
+
+	if (beforeOrAfter == 0) {
+		/* Parse the 'not before' date */
+		if ((c = (unsigned char *)cert->notBefore) == NULL) {
+			return PS_FAILURE;
+		}
+		timeType = cert->notBeforeTimeType;
+	} else {
+		/* Parse the 'not after' date */
+		if ((c = (unsigned char *)cert->notAfter) == NULL) {
+			return PS_FAILURE;
+		}
+		timeType = cert->notAfterTimeType;
+	}
+	/* UTCTIME, defined in 1982, has just a 2 digit year */
+	/* year as unsigned int handles over/underflows */
+	if (timeType == ASN_UTCTIME) {
+		if (!asciidate(c, ASN_UTCTIME))  {
+			return PS_FAILURE;
+		}
+		*y = 2000 + 10 * (c[0] - '0') + (c[1] - '0'); c += 2;
+		/* Years from '96 through '99 are in the 1900's */
+		if (*y >= 2096) {
+			*y -= 100;
+		}
+	}
+	else {
+		if (!asciidate(c, 0))  {
+			return PS_FAILURE;
+		}
+		*y = 1000 * (c[0] - '0') + 100 * (c[1] - '0') +
+			10 * (c[2] - '0') + (c[3] - '0'); c += 4;
+	}
+	/* month,day as unsigned short handles over/underflows */
+	*m = 10 * (c[0] - '0') + (c[1] - '0'); c += 2;
+	*d = 10 * (c[0] - '0') + (c[1] - '0');
+	/* Must have been issued at least when X509v3 was added */
+	if (*y < 1996 || *m < 1 || *m > 12 || *d < 1 || *d > 31) {
+		return PS_FAILURE;
+	}
+	return PS_SUCCESS;
+}
+
+/**
 	Validate the dates in the cert to machine date.
 	SECURITY - always succeeds on systems without date support
 	Returns
-		0 on success
-		PS_CERT_AUTH_FAIL_DATE if date is out of range
+		0 on parse success (FAIL_DATE_FLAG could be set)
 		PS_FAILURE on parse error
 */
 static int32 validateDateRange(psX509Cert_t *cert)
 {
+	unsigned int	y;
+	unsigned short	m, d;
+
 #ifdef POSIX
 	struct tm		t;
 	time_t			rawtime;
-	unsigned char	*c;
-	unsigned int	y;
-	unsigned short	m, d;
+
 
 	time(&rawtime);
 	localtime_r(&rawtime, &t);
@@ -2333,35 +2404,10 @@ static int32 validateDateRange(psX509Cert_t *cert)
 	t.tm_mon++;
 	t.tm_year += 1900;
 
-	/* Validate the 'not before' date */
-	if ((c = (unsigned char *)cert->notBefore) == NULL) {
+	if (getDateComponents(cert, 0, &y, &m, &d) < 0) {
 		return PS_FAILURE;
 	}
-	/* UTCTIME, defined in 1982, has just a 2 digit year */
-	/* year as unsigned int handles over/underflows */
-	if (cert->notBeforeTimeType == ASN_UTCTIME) {
-		if (!asciidate(c, ASN_UTCTIME))  {
-			return PS_FAILURE;
-		}
-		y =  2000 + 10 * (c[0] - '0') + (c[1] - '0'); c += 2;
-		/* Years from '96 through '99 are in the 1900's */
-		if (y >= 2096) {
-			y -= 100;
-		}
-	} else {
-		if (!asciidate(c, 0))  {
-			return PS_FAILURE;
-		}
-		y = 1000 * (c[0] - '0') + 100 * (c[1] - '0') +
-			10 * (c[2] - '0') + (c[3] - '0'); c += 4;
-	}
-	/* month,day as unsigned short handles over/underflows */
-	m = 10 * (c[0] - '0') + (c[1] - '0'); c += 2;
-	d = 10 * (c[0] - '0') + (c[1] - '0');
-	/* Must have been issued at least when X509v3 was added */
-	if (y < 1996 || m < 1 || m > 12 || d < 1 || d > 31) {
-		return PS_FAILURE;
-	}
+	
 	if (t.tm_year < (int)y) {
 		cert->authFailFlags |= PS_CERT_AUTH_FAIL_DATE_FLAG;
 	} else if (t.tm_year == (int)y) {
@@ -2372,33 +2418,7 @@ static int32 validateDateRange(psX509Cert_t *cert)
 		}
 	}
 
-	/* Validate the 'not after' date */
-	if ((c = (unsigned char *)cert->notAfter) == NULL) {
-		return PS_FAILURE;
-	}
-	/* UTCTIME, defined in 1982, has just a 2 digit year */
-	/* year as unsigned int handles over/underflows */
-	if (cert->notAfterTimeType == ASN_UTCTIME) {
-		if (!asciidate(c, ASN_UTCTIME))  {
-			return PS_FAILURE;
-		}
-		y =  2000 + 10 * (c[0] - '0') + (c[1] - '0'); c += 2;
-		/* Years from '96 through '99 are in the 1900's */
-		if (y >= 2096) {
-			y -= 100;
-		}
-	} else {
-		if (!asciidate(c, 0))  {
-			return PS_FAILURE;
-		}
-		y = 1000 * (c[0] - '0') + 100 * (c[1] - '0') +
-			10 * (c[2] - '0') + (c[3] - '0'); c += 4;
-	}
-	/* month,day as unsigned short handles over/underflows */
-	m = 10 * (c[0] - '0') + (c[1] - '0'); c += 2;
-	d = 10 * (c[0] - '0') + (c[1] - '0');
-	/* Must have been issued at least when X509v3 was added */
-	if (y < 1996 || m < 1 || m > 12 || d < 1 || d > 31) {
+	if (getDateComponents(cert, 1, &y, &m, &d) < 0) {
 		return PS_FAILURE;
 	}
 	if (t.tm_year > (int)y) {
@@ -2412,16 +2432,50 @@ static int32 validateDateRange(psX509Cert_t *cert)
 	}
 	return 0;
 #else
-/* Warn if we are skipping the date validation checks. */
+
 #ifdef WIN32
-#pragma message("CERTIFICATE DATE VALIDITY NOT SUPPORTED ON THIS PLATFORM.")
+
+	SYSTEMTIME	sysTime;
+
+	GetSystemTime(&sysTime);
+	if (getDateComponents(cert, 0, &y, &m, &d) < 0) {
+		return PS_FAILURE;
+	}
+	if (sysTime.wYear < (int)y) {
+		cert->authFailFlags |= PS_CERT_AUTH_FAIL_DATE_FLAG;
+	}
+	else if (sysTime.wYear == (int)y) {
+		if (sysTime.wMonth < m) {
+			cert->authFailFlags |= PS_CERT_AUTH_FAIL_DATE_FLAG;
+		}
+		else if (sysTime.wMonth == m && sysTime.wDay < d) {
+			cert->authFailFlags |= PS_CERT_AUTH_FAIL_DATE_FLAG;
+		}
+	}
+	if (getDateComponents(cert, 1, &y, &m, &d) < 0) {
+		return PS_FAILURE;
+	}
+	if (sysTime.wYear >(int)y) {
+		cert->authFailFlags |= PS_CERT_AUTH_FAIL_DATE_FLAG;
+	}
+	else if (sysTime.wYear == (int)y) {
+		if (sysTime.wMonth > m) {
+			cert->authFailFlags |= PS_CERT_AUTH_FAIL_DATE_FLAG;
+		}
+		else if (sysTime.wMonth == m && sysTime.wDay > d) {
+			cert->authFailFlags |= PS_CERT_AUTH_FAIL_DATE_FLAG;
+		}
+	}
+	return 0;
 #else
+	/* Warn if we are skipping the date validation checks. */
 #warning "CERTIFICATE DATE VALIDITY NOT SUPPORTED ON THIS PLATFORM."
-#endif
 	cert->authFailFlags |= PS_CERT_AUTH_FAIL_DATE_FLAG;
 	return 0;
+#endif /* WIN32 */
 #endif /* POSIX */
 }
+
 
 /******************************************************************************/
 /*
@@ -2858,9 +2912,6 @@ int32 psX509AuthenticateCert(psPool_t *pool, psX509Cert_t *subjectCert,
 	unsigned char	*tempSig = NULL;
 #endif /* USE_RSA */
 	psPool_t	*pkiPool = NULL;
-#ifdef USE_CRL
-	x509revoked_t	*curr, *next;
-#endif
 #ifdef USE_PKCS1_PSS
 	uint16_t		pssLen;
 #endif
@@ -2925,22 +2976,13 @@ int32 psX509AuthenticateCert(psPool_t *pool, psX509Cert_t *subjectCert,
 		}
 
 #ifdef USE_CRL
-		/* Does this issuer have a list of revoked serial numbers that needs
-			to be checked? */
-		if (ic->revoked) {
-			curr = ic->revoked;
-			while (curr != NULL) {
-				next = curr->next;
-				if (curr->serialLen == sc->serialNumberLen) {
-					if (memcmp(curr->serial, sc->serialNumber, curr->serialLen)
-							== 0) {
-						sc->authStatus = PS_CERT_AUTH_FAIL_REVOKED;
-						return -1;
-					}
-				}
-				curr = next;
-			}
-
+		/* This function operates on the global cache */
+		psCRL_determineRevokedStatus(sc);
+		/* The only status that is going to make us terminate the connection
+			immediately is if we find REVOKED_AND_AUTHENTICATED */
+		if (sc->revokedStatus == CRL_CHECK_REVOKED_AND_AUTHENTICATED) {
+			sc->authStatus = PS_CERT_AUTH_FAIL_REVOKED;
+			return PS_CERT_AUTH_FAIL_REVOKED;
 		}
 #endif
 
@@ -3332,296 +3374,8 @@ static int32_t x509ConfirmSignature(const unsigned char *sigHash,
 	return PS_SUCCESS;
 }
 #endif /* USE_RSA */
-
 /******************************************************************************/
-#ifdef USE_CRL
-static void x509FreeRevoked(x509revoked_t **revoked)
-{
-	x509revoked_t		*next, *curr = *revoked;
-
-	while (curr) {
-		next = curr->next;
-		psFree(curr->serial, curr->pool);
-		psFree(curr, curr->pool);
-		curr = next;
-	}
-	*revoked = NULL;
-}
-
-/*
-	Parse a CRL and confirm was issued by supplied CA.
-
-	Only interested in the revoked serial numbers which are stored in the
-	CA structure if all checks out.  Used during cert validation as part of
-	the default tests
-
-	poolUserPtr is for the TMP_PKI pool
-*/
-int32 psX509ParseCrl(psPool_t *pool, psX509Cert_t *CA, int append,
-						unsigned char *crlBin, int32 crlBinLen,
-						void *poolUserPtr)
-{
-	unsigned char		*end, *start, *revStart, *sigStart, *sigEnd,*p = crlBin;
-	int32				oi, plen, sigLen, version, rc;
-	unsigned char		sigHash[SHA512_HASH_SIZE], sigOut[SHA512_HASH_SIZE];
-	x509revoked_t		*curr, *next;
-	x509DNattributes_t	issuer;
-	x509v3extensions_t	ext;
-	psDigestContext_t	hashCtx;
-	psPool_t			*pkiPool = MATRIX_NO_POOL;
-	uint16_t			glen, ilen, timelen;
-
-	end = p + crlBinLen;
-	/*
-		CertificateList  ::=  SEQUENCE  {
-			tbsCertList          TBSCertList,
-			signatureAlgorithm   AlgorithmIdentifier,
-			signatureValue       BIT STRING  }
-
-		TBSCertList  ::=  SEQUENCE  {
-			version                 Version OPTIONAL,
-									 -- if present, shall be v2
-			signature               AlgorithmIdentifier,
-			issuer                  Name,
-			thisUpdate              Time,
-			nextUpdate              Time OPTIONAL,
-			revokedCertificates     SEQUENCE OF SEQUENCE  {
-			 userCertificate         CertificateSerialNumber,
-			 revocationDate          Time,
-			 crlEntryExtensions      Extensions OPTIONAL
-										   -- if present, shall be v2
-								  }  OPTIONAL,
-			crlExtensions           [0]  EXPLICIT Extensions OPTIONAL
-										   -- if present, shall be v2
-		}
-	*/
-	if (getAsnSequence(&p, (uint32)(end - p), &glen) < 0) {
-		psTraceCrypto("Initial parse error in psX509ParseCrl\n");
-		return PS_PARSE_FAIL;
-	}
-
-	sigStart = p;
-	if (getAsnSequence(&p, (uint32)(end - p), &glen) < 0) {
-		psTraceCrypto("Initial parse error in psX509ParseCrl\n");
-		return PS_PARSE_FAIL;
-	}
-	if (*p == ASN_INTEGER) {
-		version = 0;
-		if (getAsnInteger(&p, (uint32)(end - p), &version) < 0 || version != 1){
-			psTraceIntCrypto("Version parse error in psX509ParseCrl %d\n",
-				version);
-			return PS_PARSE_FAIL;
-		}
-	}
-	/* signature */
-	if (getAsnAlgorithmIdentifier(&p, (int32)(end - p), &oi, &plen) < 0) {
-		psTraceCrypto("Couldn't parse crl sig algorithm identifier\n");
-		return PS_PARSE_FAIL;
-	}
-
-	/*
-		Name            ::=   CHOICE { -- only one possibility for now --
-								 rdnSequence  RDNSequence }
-
-		RDNSequence     ::=   SEQUENCE OF RelativeDistinguishedName
-
-		DistinguishedName       ::=   RDNSequence
-
-		RelativeDistinguishedName  ::=
-					SET SIZE (1 .. MAX) OF AttributeTypeAndValue
-	*/
-	memset(&issuer, 0x0, sizeof(x509DNattributes_t));
-	if ((rc = psX509GetDNAttributes(pool, &p, (uint32)(end - p),
-			&issuer, 0)) < 0) {
-		psTraceCrypto("Couldn't parse crl issuer DN attributes\n");
-		return rc;
-	}
-	/* Ensure crlSign flag of KeyUsage for the given CA. */
-	if ( ! (CA->extensions.keyUsageFlags & KEY_USAGE_CRL_SIGN)) {
-		psTraceCrypto("Issuer does not allow crlSign in keyUsage\n");
-		CA->authFailFlags |= PS_CERT_AUTH_FAIL_KEY_USAGE_FLAG;
-		CA->authStatus = PS_CERT_AUTH_FAIL_EXTENSION;
-		psX509FreeDNStruct(&issuer, pool);
-		return PS_CERT_AUTH_FAIL_EXTENSION;
-	}
-	if (memcmp(issuer.hash, CA->subject.hash, SHA1_HASH_SIZE) != 0) {
-		psTraceCrypto("CRL NOT ISSUED BY THIS CA\n");
-		psX509FreeDNStruct(&issuer, pool);
-		return PS_CERT_AUTH_FAIL_DN;
-	}
-	psX509FreeDNStruct(&issuer, pool);
-
-	/* thisUpdate TIME */
-	if ((end - p) < 1 || ((*p != ASN_UTCTIME) && (*p != ASN_GENERALIZEDTIME))) {
-		psTraceCrypto("Malformed thisUpdate CRL\n");
-		return PS_PARSE_FAIL;
-	}
-	p++;
-	if (getAsnLength(&p, (uint32)(end - p), &timelen) < 0 ||
-			(uint32)(end - p) < timelen) {
-		psTraceCrypto("Malformed thisUpdate CRL\n");
-		return PS_PARSE_FAIL;
-	}
-	p += timelen;	/* Skip it */
-	/* nextUpdateTIME - Optional */
-	if ((end - p) < 1 || ((*p == ASN_UTCTIME) || (*p == ASN_GENERALIZEDTIME))) {
-		p++;
-		if (getAsnLength(&p, (uint32)(end - p), &timelen) < 0 ||
-				(uint32)(end - p) < timelen) {
-			psTraceCrypto("Malformed nextUpdateTIME CRL\n");
-			return PS_PARSE_FAIL;
-		}
-		p += timelen;	/* Skip it */
-	}
-	/*
-		revokedCertificates     SEQUENCE OF SEQUENCE  {
-			 userCertificate         CertificateSerialNumber,
-			 revocationDate          Time,
-			 crlEntryExtensions      Extensions OPTIONAL
-										   -- if present, shall be v2
-								  }  OPTIONAL,
-	*/
-	if (getAsnSequence(&p, (uint32)(end - p), &glen) < 0) {
-		psTraceCrypto("Initial revokedCertificates error in psX509ParseCrl\n");
-		return PS_PARSE_FAIL;
-	}
-
-	if (CA->revoked) {
-		/* Append or refresh */
-		if (append == 0) {
-			/* refresh */
-			x509FreeRevoked(&CA->revoked);
-			CA->revoked = curr = psMalloc(pool, sizeof(x509revoked_t));
-			if (curr == NULL) {
-				return PS_MEM_FAIL;
-			}
-		} else {
-			/* append.  not looking for duplicates */
-			curr = psMalloc(pool, sizeof(x509revoked_t));
-			if (curr == NULL) {
-				return PS_MEM_FAIL;
-			}
-			curr->pool = pool;
-			next = CA->revoked;
-			while (next->next != NULL) {
-				next = next->next;
-			}
-			next->next = curr;
-		}
-	} else {
-		CA->revoked = curr = psMalloc(pool, sizeof(x509revoked_t));
-		if (curr == NULL) {
-			return PS_MEM_FAIL;
-		}
-	}
-	memset(curr, 0x0, sizeof(x509revoked_t));
-	curr->pool = pool;
-
-
-	while (glen > 0) {
-		revStart = p;
-		if (getAsnSequence(&p, (uint32)(end - p), &ilen) < 0) {
-			psTraceCrypto("Deep revokedCertificates error in psX509ParseCrl\n");
-			return PS_PARSE_FAIL;
-		}
-		start = p;
-		if ((rc = getSerialNum(pool, &p, (uint32)(end - p), &curr->serial,
-				&curr->serialLen)) < 0) {
-			psTraceCrypto("ASN serial number parse error\n");
-			return rc;
-		}
-		/* skipping time and extensions */
-		p += ilen - (uint32)(p - start);
-		if (glen < (uint32)(p - revStart)) {
-			psTraceCrypto("Deeper revokedCertificates err in psX509ParseCrl\n");
-			return PS_PARSE_FAIL;
-		}
-		glen -= (uint32)(p - revStart);
-
-		// psTraceBytes("revoked", curr->serial, curr->serialLen);
-		if (glen > 0) {
-			if ((next = psMalloc(pool, sizeof(x509revoked_t))) == NULL) {
-				x509FreeRevoked(&CA->revoked);
-				return PS_MEM_FAIL;
-			}
-			memset(next, 0x0, sizeof(x509revoked_t));
-			next->pool = pool;
-			curr->next = next;
-			curr = next;
-		}
-	}
-	memset(&ext, 0x0, sizeof(x509v3extensions_t));
-	if (getExplicitExtensions(pool, &p, (uint32)(end - p), 0, &ext, 0) < 0) {
-		psTraceCrypto("Extension parse error in psX509ParseCrl\n");
-		x509FreeRevoked(&CA->revoked);
-		return PS_PARSE_FAIL;
-	}
-	x509FreeExtensions(&ext);
-	sigEnd = p;
-
-	if (getAsnAlgorithmIdentifier(&p, (int32)(end - p), &oi, &plen) < 0) {
-		x509FreeRevoked(&CA->revoked);
-		psTraceCrypto("Couldn't parse crl sig algorithm identifier\n");
-		return PS_PARSE_FAIL;
-	}
-
-	if ((rc = psX509GetSignature(pool, &p, (uint32)(end - p), &revStart, &ilen))
-			< 0) {
-		x509FreeRevoked(&CA->revoked);
-		psTraceCrypto("Couldn't parse signature\n");
-		return rc;
-	}
-
-	switch (oi) {
-#ifdef ENABLE_MD5_SIGNED_CERTS
-	case OID_MD5_RSA_SIG:
-		sigLen = MD5_HASH_SIZE;
-		psMd5Init(&hashCtx);
-		psMd5Update(&hashCtx, sigStart, (uint32)(sigEnd - sigStart));
-		psMd5Final(&hashCtx, sigHash);
-		break;
-#endif
-#ifdef ENABLE_SHA1_SIGNED_CERTS
-	case OID_SHA1_RSA_SIG:
-		sigLen = SHA1_HASH_SIZE;
-		psSha1Init(&hashCtx);
-		psSha1Update(&hashCtx, sigStart, (uint32)(sigEnd - sigStart));
-		psSha1Final(&hashCtx, sigHash);
-		break;
-#endif
-#ifdef USE_SHA256
-	case OID_SHA256_RSA_SIG:
-		sigLen = SHA256_HASH_SIZE;
-		psSha256Init(&hashCtx);
-		psSha256Update(&hashCtx, sigStart, (uint32)(sigEnd - sigStart));
-		psSha256Final(&hashCtx, sigHash);
-		break;
-#endif
-	default:
-		psTraceCrypto("Need more signatuare alg support for CRL\n");
-		x509FreeRevoked(&CA->revoked);
-		return PS_UNSUPPORTED_FAIL;
-	}
-
-
-	if ((rc = pubRsaDecryptSignedElement(pkiPool, &CA->publicKey.key.rsa,
-			revStart, ilen, sigOut, sigLen, NULL)) < 0) {
-		x509FreeRevoked(&CA->revoked);
-		psTraceCrypto("Unable to RSA decrypt CRL signature\n");
-		return rc;
-	}
-
-	if (memcmp(sigHash, sigOut, sigLen) != 0) {
-		x509FreeRevoked(&CA->revoked);
-		psTraceCrypto("Unable to verify CRL signature\n");
-		return PS_CERT_AUTH_FAIL_SIG;
-	}
-
-	return PS_SUCCESS;
-}
-#endif /* USE_CRL */
 #endif /* USE_CERT_PARSE */
-
 
 #ifdef USE_OCSP
 static int32_t parseSingleResponse(uint32_t len, const unsigned char **cp,
@@ -4315,6 +4069,12 @@ int32_t validateOCSPResponse(psPool_t *pool, psX509Cert_t *trustedOCSP,
 		return PS_FAILURE;
 	}
 	
+#if 0 /* The issuer here is pointing to the cert that signed the OCSPRespose
+			and that is not necessarily the parent of the subject cert we
+			are looking at.  If we want to include this test, we'd need to
+			find the issuer of the subject and look at the KeyHash as
+			an additional verification */
+
 	/* Issuer portion of the validation - the subject cert issuer key and name
 		hash should match what the subjectResponse reports
 	
@@ -4336,6 +4096,8 @@ int32_t validateOCSPResponse(psPool_t *pool, psX509Cert_t *trustedOCSP,
 			return PS_FAILURE;
 		}
 	}
+#endif	 /* 0 */
+
 	
 	/* Finally do the sig validation */
 	switch (response->sigAlg) {

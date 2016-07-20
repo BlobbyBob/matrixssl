@@ -46,7 +46,7 @@
 	milliseconds so most non-embedded platforms will report 0 msecs/conn for
 	most stats.
 
-	Standard handshakes and client-auth handshakes (commercial only) are timed
+	Standard handshakes and client-auth handshakes are timed
 	for each enabled cipher suite. The other handshake types will still run
 	but will not be timed
 */
@@ -104,7 +104,9 @@ static void statCback(void *ssl, void *stat_ptr, int32 type, int32 value);
 	Must define in matrixConfig.h:
 		USE_SERVER_SIDE_SSL
 		USE_CLIENT_SIDE_SSL
-		USE_CLIENT_AUTH (commercial only)
+	Optional:
+		USE_CLIENT_AUTH
+		USE_SECURE_REHANDSHAKES
 */
 #if !defined(USE_SERVER_SIDE_SSL) || !defined(USE_CLIENT_SIDE_SSL)
 #warning "Must enable both USE_SERVER_SIDE_SSL and USE_CLIENT_SIDE_SSL to run"
