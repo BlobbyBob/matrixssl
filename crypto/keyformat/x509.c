@@ -1334,7 +1334,7 @@ int32_t psX509GetConcatenatedDomainComponent(const x509DNattributes_t *DN,
 			   dc->len - DN_NUM_TERMINATING_NULLS);
 		pos += dc->len - DN_NUM_TERMINATING_NULLS;
 		if (i != 0) {
-			strncpy(*out_str + pos, ".", 1);
+			(*out_str)[pos] = '.';
 			pos++;
 		}
 	}

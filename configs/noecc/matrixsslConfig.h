@@ -309,8 +309,8 @@ extern "C" {
 	SSL_DEFAULT_x_BUF_SIZE	value in bytes, maximum SSL_MAX_BUF_SIZE
  */
 #ifndef USE_DTLS
-#can_define	SSL_DEFAULT_IN_BUF_SIZE		1500		/* Base recv buf size, bytes */
-#can_define	SSL_DEFAULT_OUT_BUF_SIZE	1500		/* Base send buf size, bytes */
+#define	SSL_DEFAULT_IN_BUF_SIZE		1500		/* Base recv buf size, bytes */
+#define	SSL_DEFAULT_OUT_BUF_SIZE	1500		/* Base send buf size, bytes */
 #else
 /******************************************************************************/
 /**
@@ -320,9 +320,9 @@ extern "C" {
 	limitation in MatrixDTLS so connections will not succeed if a peer has a
 	PTMU set larger than this value.
 */
-#define DTLS_PMTU 1500/* 1500 Default/Maximum datagram len */
-#define SSL_DEFAULT_IN_BUF_SIZE DTLS_PMTU/* See PMTU comments above */
-#define SSL_DEFAULT_OUT_BUF_SIZE DTLS_PMTU/* See PMTU comments above */
+#define DTLS_PMTU  1500  /* 1500 Default/Maximum datagram len */
+#define SSL_DEFAULT_IN_BUF_SIZE		DTLS_PMTU  /* See PMTU comments above */
+#define SSL_DEFAULT_OUT_BUF_SIZE	DTLS_PMTU  /* See PMTU comments above */
 
 //#define DTLS_SEND_RECORDS_INDIVIDUALLY /* Max one record per datagram */
 #endif

@@ -4360,7 +4360,8 @@ static int32 writeCertificateStatus(ssl_t *ssl, sslBuf_t *out)
           } response;
       } CertificateStatus; */
 	*c = 0x1; c++;
-	*c = (unsigned char)((ocspLen & 0xFF0000) >> 16); c++;
+	/* ocspLen is 16 bit value. */
+	*c = 0; c++;
 	*c = (ocspLen & 0xFF00) >> 8; c++;
 	*c = (ocspLen & 0xFF); c++;
 	memcpy(c, ssl->keys->OCSPResponseBuf, ocspLen);

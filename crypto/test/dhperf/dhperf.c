@@ -173,6 +173,11 @@ int main(int argc, char **argv)
 
 #ifdef DO_GEN_SECRET
 		psDhExportParameters(misc, &dhParams, &p, &pLen, &g, &gLen);
+                if (p == NULL || g == NULL) {
+                        _psTrace("	DH parameters could not be used\n");
+                        fprintf(stderr, "FAIL: DH parameters did not work.\n");
+                        exit(1);
+                }
 		if (psDhGenKeyInts(misc, dhParams.size, &dhParams.p, &dhParams.g,
 				&dhKeyPriv, NULL) < 0) {
 			_psTrace("	FAILED OPERATION\n");
@@ -198,8 +203,8 @@ int main(int argc, char **argv)
 		_psTraceInt(TIME_UNITS " genSecret\n", psDiffMsecs(start, end, NULL));
 #endif /* DO_GEN_SECRET */
 
-		psFree(p, misc);
-		psFree(g, misc);
+		psFreeAndClear(&p, misc);
+		psFreeAndClear(&g, misc);
 		pkcs3ClearDhParams(&dhParams);
 		i++;
 	}

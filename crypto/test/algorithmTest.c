@@ -816,7 +816,7 @@ int32 psAesTestGCM(void)
 		}
 		memcpy(iv, tests[i].iv, 12);
 		psAesInitGCM(&eCtx, tests[i].key, tests[i].keylen);
-		res = psAesReadyGCMRandomIV(&eCtx, iv, tests[i].aad, tests[i].aadlen,
+		res |= psAesReadyGCMRandomIV(&eCtx, iv, tests[i].aad, tests[i].aadlen,
 									NULL);
 		if (res != PS_SUCCESS) {
 			memset(ciphertext_rand, 0, sizeof ciphertext_rand);
@@ -3487,7 +3487,12 @@ static int test_hmac_vector(int32 size,
 						  din, din_len,
 						  md_res,
 						  key_out, &key_length);
+	} else {
+		_psTraceInt("FAILED: HMAC vector unsupported size: %d\n",
+			    (int) size);
+		return PS_FAILURE;
 	}
+
 
 	equals = (rv == PS_SUCCESS && memcmp(dout, md_res, size) == 0);
 	if (equals != should_succeed)

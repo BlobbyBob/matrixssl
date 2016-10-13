@@ -1898,8 +1898,6 @@ static int32 pkcs_1_mgf1(psPool_t *pool, const unsigned char *seed,
 			psSha512Update(&md.sha512, buf, 4);
 			psSha512Final(&md.sha512, buf);
 #endif
-		} else {
-			return PS_UNSUPPORTED_FAIL;
 		}
 
 		/* store it */
@@ -2268,10 +2266,6 @@ int32 pkcs1OaepDecode(psPool_t *pool, const unsigned char *msg, uint32 msglen,
 			psMd5Update(&md.md5, lparam, lparamlen);
 			psMd5Final(&md.md5, seed);
 		}
-		if (err < 0) {
-			psTraceCrypto("Hash error in OAEP decode\n");
-			goto LBL_ERR;
-		}
 	} else {
 		/* can't pass hash routine a NULL so use DB with zero length */
 		if (hash_idx == PKCS1_SHA1_ID) {
@@ -2282,10 +2276,6 @@ int32 pkcs1OaepDecode(psPool_t *pool, const unsigned char *msg, uint32 msglen,
 			psMd5Init(&md.md5);
 			psMd5Update(&md.md5, DB, 0);
 			psMd5Final(&md.md5, seed);
-		}
-		if (err < 0) {
-			psTraceCrypto("Zero hash error in OAEP decode\n");
-			goto LBL_ERR;
 		}
 	}
 

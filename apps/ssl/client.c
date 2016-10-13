@@ -62,6 +62,7 @@
 
 #define USE_HEADER_KEYS
 #define ALLOW_ANON_CONNECTIONS	1
+#define CRL_MAX_LENGTH 1048576 /* Maximum length for CRL: 1 megabyte. */
 
 /*	If the algorithm type is supported, load a CA for it */
 #ifdef USE_HEADER_KEYS
@@ -1825,6 +1826,15 @@ int32 fetchCRL(psPool_t *pool, char *url, uint32_t urlLen,
 				the chunk size if this is truly a chunk boundary */
 			psAssert((replyPtr+4) < (char*)&(crlChunk[HTTP_REPLY_CHUNK_SIZE]));
 			replyPtr += 4; /* Move past that "\r\n\r\n" to get to start */
+
+			/* Check buffer length appears acceptable */
+			if (crlBinLen < 1 || crlBinLen > CRL_MAX_LENGTH) {
+				_psTrace("fetchCRL: Unacceptable size for CRL\n");
+				/* Note: If this fails you may need to check CRL_MAX_LENGTH,
+				   as you possibly need to allow larger CRL. */
+				close(fd);
+				return -1;
+			}
 
 			/* Allocate the CRL buffer. Will be full size if sawContentLength */
 			if ((crlBin = psMalloc(pool, crlBinLen)) == NULL) {
