@@ -779,9 +779,8 @@ static int32 nowDoCkePka(ssl_t *ssl)
 					ssl->sec.premasterSize);
 				ssl->sec.premaster[0] = (ssl->sec.premasterSize & 0xFF00) >> 8;
 				ssl->sec.premaster[1] = (ssl->sec.premasterSize & 0xFF);
-				/*	Next, uint16 length of PSK and key itself */
-				ssl->sec.premaster[ssl->sec.premasterSize + 2] =
-					(pskIdLen & 0xFF00) >> 8;
+				/*	Next, uint8_t length of PSK and key itself */
+				ssl->sec.premaster[ssl->sec.premasterSize + 2] = 0;
 				ssl->sec.premaster[ssl->sec.premasterSize + 3] =
 					(pskIdLen & 0xFF);
 				memcpy(&ssl->sec.premaster[ssl->sec.premasterSize + 4], pskKey,
@@ -3532,7 +3531,7 @@ static int32 writePskServerKeyExchange(ssl_t *ssl, sslBuf_t *out)
 		return rc;
 	}
 
-	*c = (hintLen & 0xFF00) >> 8; c++;
+	*c = 0; c++;
 	*c = (hintLen & 0xFF); c++;
 	memcpy(c, hint, hintLen);
 	c += hintLen;
@@ -3735,7 +3734,7 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
 #if defined(USE_PSK_CIPHER_SUITE) && defined(USE_ANON_DH_CIPHER_SUITE)
 	/* PSK suites have a leading PSK identity hint (may be zero length) */
 	if (ssl->flags & SSL_FLAGS_PSK_CIPHER) {
-		*c = (hintLen & 0xFF00) >> 8; c++;
+		*c = 0; c++;
 		*c = (hintLen & 0xFF); c++;
  		if (hintLen != 0 && hint != NULL) {
 			memcpy(c, hint, hintLen);
@@ -3814,6 +3813,7 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
 			/* Using the algorithm from the certificate */
 			if (ssl->keys->cert->sigAlgorithm == OID_SHA256_RSA_SIG) {
 				hashSize = SHA256_HASH_SIZE;
+				psSha256PreInit(&digestCtx.sha256);
 				psSha256Init(&digestCtx.sha256);
 				psSha256Update(&digestCtx.sha256, ssl->sec.clientRandom,
 					SSL_HS_RANDOM_SIZE);
@@ -3827,6 +3827,7 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
 #ifdef USE_SHA384
 			} else if (ssl->keys->cert->sigAlgorithm == OID_SHA384_RSA_SIG) {
 				hashSize = SHA384_HASH_SIZE;
+				psSha384PreInit(&digestCtx.sha384);
 				psSha384Init(&digestCtx.sha384);
 				psSha384Update(&digestCtx.sha384, ssl->sec.clientRandom,
 					SSL_HS_RANDOM_SIZE);
@@ -3844,6 +3845,7 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
 			} else if (ssl->keys->cert->sigAlgorithm == OID_SHA1_RSA_SIG ||
 					ssl->keys->cert->sigAlgorithm == OID_MD5_RSA_SIG) {
 				hashSize = SHA1_HASH_SIZE;
+				psSha1PreInit(&digestCtx.sha1);
 				psSha1Init(&digestCtx.sha1);
 				psSha1Update(&digestCtx.sha1, ssl->sec.clientRandom,
 					SSL_HS_RANDOM_SIZE);
@@ -3861,43 +3863,40 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
 				return PS_UNSUPPORTED_FAIL;
 			}
 		} else {
-#if defined(USE_SHA1) && defined(USE_MD5)
-			hashSize = MD5_HASH_SIZE + SHA1_HASH_SIZE;
-			psMd5Init(&digestCtx.md5);
-			psMd5Update(&digestCtx.md5, ssl->sec.clientRandom,
+#ifdef USE_MD5SHA1
+			hashSize = MD5SHA1_HASHLEN;
+			psMd5Sha1PreInit(&digestCtx.md5sha1);
+			psMd5Sha1Init(&digestCtx.md5sha1);
+			psMd5Sha1Update(&digestCtx.md5sha1, ssl->sec.clientRandom,
 				SSL_HS_RANDOM_SIZE);
-			psMd5Update(&digestCtx.md5, ssl->sec.serverRandom,
+			psMd5Sha1Update(&digestCtx.md5sha1, ssl->sec.serverRandom,
 				SSL_HS_RANDOM_SIZE);
-			psMd5Update(&digestCtx.md5, sigStart, (uint32)(c - sigStart));
-			psMd5Final(&digestCtx.md5, hsMsgHash);
-
-			psSha1Init(&digestCtx.sha1);
-			psSha1Update(&digestCtx.sha1, ssl->sec.clientRandom,
-				SSL_HS_RANDOM_SIZE);
-			psSha1Update(&digestCtx.sha1, ssl->sec.serverRandom,
-				SSL_HS_RANDOM_SIZE);
-			psSha1Update(&digestCtx.sha1, sigStart, (uint32)(c - sigStart));
-			psSha1Final(&digestCtx.sha1, hsMsgHash + MD5_HASH_SIZE);
+			psMd5Sha1Update(&digestCtx.md5sha1, sigStart, (uint32)(c - sigStart));
+			psMd5Sha1Final(&digestCtx.md5sha1, hsMsgHash);
 #else
 			psTraceIntInfo("Unavailable sigAlgorithm for SKE write: %d\n",
 				ssl->keys->cert->sigAlgorithm);
 			psFree(hsMsgHash, ssl->hsPool);
 			return PS_UNSUPPORTED_FAIL;
-#endif
+#endif /* USE_MD5SHA1 */
 		}
 #else /* USE_TLS_1_2 */
-		hashSize = MD5_HASH_SIZE + SHA1_HASH_SIZE;
-		psMd5Init(&digestCtx.md5);
-		psMd5Update(&digestCtx.md5, ssl->sec.clientRandom, SSL_HS_RANDOM_SIZE);
-		psMd5Update(&digestCtx.md5, ssl->sec.serverRandom, SSL_HS_RANDOM_SIZE);
-		psMd5Update(&digestCtx.md5, sigStart, (uint32)(c - sigStart));
-		psMd5Final(&digestCtx.md5, hsMsgHash);
-
-		psSha1Init(&digestCtx.sha1);
-		psSha1Update(&digestCtx.sha1, ssl->sec.clientRandom, SSL_HS_RANDOM_SIZE);
-		psSha1Update(&digestCtx.sha1, ssl->sec.serverRandom, SSL_HS_RANDOM_SIZE);
-		psSha1Update(&digestCtx.sha1, sigStart, (uint32)(c - sigStart));
-		psSha1Final(&digestCtx.sha1, hsMsgHash + MD5_HASH_SIZE);
+#ifdef USE_MD5SHA1
+			hashSize = MD5SHA1_HASHLEN;
+			psMd5Sha1PreInit(&digestCtx.md5sha1);
+			psMd5Sha1Init(&digestCtx.md5sha1);
+			psMd5Sha1Update(&digestCtx.md5sha1, ssl->sec.clientRandom,
+				SSL_HS_RANDOM_SIZE);
+			psMd5Sha1Update(&digestCtx.md5sha1, ssl->sec.serverRandom,
+				SSL_HS_RANDOM_SIZE);
+			psMd5Sha1Update(&digestCtx.md5sha1, sigStart, (uint32)(c - sigStart));
+			psMd5Sha1Final(&digestCtx.md5sha1, hsMsgHash);
+#else
+			psTraceIntInfo("Unavailable sigAlgorithm for SKE write: %d\n",
+				ssl->keys->cert->sigAlgorithm);
+			psFree(hsMsgHash, ssl->hsPool);
+			return PS_UNSUPPORTED_FAIL;
+#endif /* USE_MD5SHA1 */
 #endif /* USE_TLS_1_2 */
 
 		*c = (ssl->keys->privKey.keysize & 0xFF00) >> 8; c++;
@@ -3949,6 +3948,7 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
 		if ((ssl->flags & SSL_FLAGS_TLS_1_2) &&
 				(ssl->keys->cert->sigAlgorithm == OID_SHA256_ECDSA_SIG)) {
 			hashSize = SHA256_HASH_SIZE;
+			psSha256PreInit(&digestCtx.sha256);
 			psSha256Init(&digestCtx.sha256);
 			psSha256Update(&digestCtx.sha256, ssl->sec.clientRandom,
 				SSL_HS_RANDOM_SIZE);
@@ -3962,6 +3962,7 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
 		} else if ((ssl->flags & SSL_FLAGS_TLS_1_2) &&
 				(ssl->keys->cert->sigAlgorithm == OID_SHA384_ECDSA_SIG)) {
 			hashSize = SHA384_HASH_SIZE;
+			psSha384PreInit(&digestCtx.sha384);
 			psSha384Init(&digestCtx.sha384);
 			psSha384Update(&digestCtx.sha384, ssl->sec.clientRandom,
 				SSL_HS_RANDOM_SIZE);
@@ -3981,6 +3982,7 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
 					((ssl->flags & SSL_FLAGS_TLS_1_2) &&
 					(ssl->keys->cert->sigAlgorithm == OID_SHA1_ECDSA_SIG))) {
 			hashSize = SHA1_HASH_SIZE;
+			psSha1PreInit(&digestCtx.sha1);
 			psSha1Init(&digestCtx.sha1);
 			psSha1Update(&digestCtx.sha1, ssl->sec.clientRandom,
 				SSL_HS_RANDOM_SIZE);
@@ -3999,6 +4001,7 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
 		}
 #else
 		hashSize = SHA1_HASH_SIZE;
+		psSha1PreInit(&digestCtx.sha1);
 		psSha1Init(&digestCtx.sha1);
 		psSha1Update(&digestCtx.sha1, ssl->sec.clientRandom,
 			SSL_HS_RANDOM_SIZE);
@@ -5630,7 +5633,8 @@ static int32 writeClientKeyExchange(ssl_t *ssl, sslBuf_t *out)
 	if (explicitLen == 1) {
 #ifdef USE_PSK_CIPHER_SUITE
 		if (ssl->flags & SSL_FLAGS_PSK_CIPHER) {
-			*c = (pskIdLen & 0xFF00) >> 8; c++;
+			/* pskIdLen is uint8_t. */
+			*c = 0; c++;
 			*c = (pskIdLen & 0xFF); c++;
 /*
 			The cke message begins with the ID of the desired key
@@ -5776,10 +5780,10 @@ static int32 writeClientKeyExchange(ssl_t *ssl, sslBuf_t *out)
 				return SSL_MEM_ERROR;
 			}
 			memset(ssl->sec.premaster, 0, ssl->sec.premasterSize);
-			ssl->sec.premaster[0] = (pskIdLen & 0xFF00) >> 8;
+			ssl->sec.premaster[0] = 0;
 			ssl->sec.premaster[1] = (pskIdLen & 0xFF);
 			/* memset to 0 handled middle portion */
-			ssl->sec.premaster[2 + pskIdLen] = (pskIdLen & 0xFF00) >> 8;
+			ssl->sec.premaster[2 + pskIdLen] = 0;
 			ssl->sec.premaster[3 + pskIdLen] = (pskIdLen & 0xFF);
 			memcpy(&ssl->sec.premaster[4 + pskIdLen], pskKey, pskIdLen);
 			/*	Now that we've got the premaster secret, derive the various

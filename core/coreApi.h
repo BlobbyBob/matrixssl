@@ -39,7 +39,11 @@
 extern "C" {
 #endif
 
+#ifdef MATRIX_CONFIGURATION_INCDIR_FIRST
+#include <coreConfig.h> /* Must be first included */
+#else
 #include "coreConfig.h" /* Must be first included */
+#endif
 #include "osdep.h"
 #include "list.h"
 #include "psmalloc.h"

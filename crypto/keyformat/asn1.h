@@ -33,9 +33,13 @@
 
 /******************************************************************************/
 
+/* Allow inclusion of asn1.h as standalone. */
+#ifndef _h_PS_CRYPTOAPI
+#include "../cryptoApi.h"
+#endif /* _h_PS_CRYPTOAPI */
+
 #ifndef _h_PS_ASN1
 #define _h_PS_ASN1
-#include "../cryptoConfig.h"
 
 /******************************************************************************/
 /*

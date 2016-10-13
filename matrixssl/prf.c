@@ -58,6 +58,7 @@ int32_t prf2(const unsigned char *sec, uint16_t secLen,
 
 #else
 
+#if defined(USE_NATIVE_TLS_ALGS) || defined(USE_NATIVE_TLS_HS_HASH)
 #ifdef USE_TLS
 #ifndef USE_ONLY_TLS_1_2
 /******************************************************************************/
@@ -351,7 +352,97 @@ int32_t prf2(const unsigned char *sec, uint16_t secLen,
 }
 #endif /* USE_TLS_1_2 */
 
+#ifdef USE_EAP_FAST
+/******************************************************************************/
+/**
+	EAP-FAST T-PRF function.
+	This proprietary EAP protocol uses TLS to establish a session, but 
+	defines a modified SessionTicket mechansism that alters the generation
+	of the TLS master secret.
+	@see https://tools.ietf.org/html/rfc4851#section-5.5
+
+	@param[in] key The PAC-Key, a shared secret provisioned out of band.
+	@param[in] keyLen The length in bytes of PAC-Key.
+	@param[in] seed The seed used for TLS master_secret generation.
+	@param[in] seedLen For TLS this is always 64 bytes (server_random[32]
+		+ client_random[32])
+	@param[out] out The derived master_secret.
+	@return < on error. SSL_HS_MASTER_SIZE on success.
+
+*/
+int32_t tprf(const unsigned char *key, uint16_t keyLen,
+				const unsigned char *seed, uint16_t seedLen,
+				unsigned char out[SSL_HS_MASTER_SIZE])
+{
+	/** @note The 32 byte label includes the null terminator byte */
+	static const unsigned char TPRF_LABEL[32] =
+		"PAC to master secret label hash";
+
+	psHmacSha1_t	ctx;
+	int32_t			rc = PS_FAIL;
+	unsigned char	sha1out[SHA1_HASH_SIZE];
+	unsigned char	olen_iter[3];	/* outputlength[2] + iteration[1] */
+
+	psAssert(seedLen == (SSL_HS_RANDOM_SIZE * 2));
+
+	/**
+		The first 20 bytes are generated as follows.
+		T1 = HMAC-SHA1 (key, S + outputlength + 0x01)
+			S = label + 0x00 + seed
+				'label' is 31 bytes of [PAC to master secret label hash] and a
+					null byte (32 bytes total)
+				'seed' as provided is server_random[32] + client_random[32]
+			outputlength is a 2 byte big endian length of the output,
+				always 48 bytes in TLS case.
+		For our use, we simplify the above as:
+		T1 = HMAC-SHA1 (key, label_with_0x0 + seed + 0x00 + 0x30 + 0x01
+	*/
+	olen_iter[0] = 0x0;					// = ((outputlength >> 8) & 0xFF);
+	olen_iter[1] = SSL_HS_MASTER_SIZE;	// = (outputlength & 0xFF);
+	olen_iter[2] = 0x01;
+	if ((rc = psHmacSha1Init(&ctx, key, keyLen)) < 0) {
+		goto L_RETURN;
+	}
+	psHmacSha1Update(&ctx, TPRF_LABEL, sizeof(TPRF_LABEL)); /* Includes 0x00 byte */
+	psHmacSha1Update(&ctx, seed, seedLen);
+	psHmacSha1Update(&ctx, olen_iter, sizeof(olen_iter));
+	psHmacSha1Final(&ctx, out);
+
+	/* T2 = HMAC-SHA1 (key, T1 + S + outputlength + 0x02) */
+	olen_iter[2] = 0x02;
+	if ((rc = psHmacSha1Init(&ctx, key, keyLen)) < 0) {
+		goto L_RETURN;
+	}
+	psHmacSha1Update(&ctx, out, SHA1_HASH_SIZE);
+	psHmacSha1Update(&ctx, TPRF_LABEL, sizeof(TPRF_LABEL));
+	psHmacSha1Update(&ctx, seed, seedLen);
+	psHmacSha1Update(&ctx, olen_iter, sizeof(olen_iter));
+	psHmacSha1Final(&ctx, out + SHA1_HASH_SIZE);
+
+	/* T3 = HMAC-SHA1 (key, T2 + S + outputlength + 0x03) */
+	olen_iter[2] = 0x03;
+	if ((rc = psHmacSha1Init(&ctx, key, keyLen)) < 0) {
+		goto L_RETURN;
+	}
+	psHmacSha1Update(&ctx, out + SHA1_HASH_SIZE, SHA1_HASH_SIZE);
+	psHmacSha1Update(&ctx, TPRF_LABEL, sizeof(TPRF_LABEL));
+	psHmacSha1Update(&ctx, seed, seedLen);
+	psHmacSha1Update(&ctx, olen_iter, sizeof(olen_iter));
+	psHmacSha1Final(&ctx, sha1out);
+
+	/* Copy the first 8 bytes from T3 to out, making 48 bytes total */
+	memcpy(out + (2 * SHA1_HASH_SIZE), sha1out, 8);
+	rc = SSL_HS_MASTER_SIZE;
+L_RETURN:
+	memzero_s(sha1out, sizeof(sha1out));
+	if (rc < 0) {
+		memzero_s(out, SSL_HS_MASTER_SIZE);	/* zero any partial result on error */
+	}
+	return rc;
+}
+#endif /* USE_EAP_FAST */
 #endif /* USE_TLS */
+#endif /* USE_NATIVE_TLS_ALGS || USE_NATIVE_TLS_HS_HASH */
 #endif /* USE_TLS_PRF || USE_TLS_PRF2 */
 /******************************************************************************/
 

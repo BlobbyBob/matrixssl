@@ -37,6 +37,7 @@
 
 #include "matrixsslApi.h"
 
+#ifdef USE_NATIVE_TLS_ALGS
 /******************************************************************************/
 #ifdef USE_TLS
 /******************************************************************************/
@@ -65,6 +66,28 @@ static int32_t genKeyBlock(ssl_t *ssl)
 	reqKeyLen = 2 * ssl->cipher->macSize +
 				2 * ssl->cipher->keySize +
 				2 * ssl->cipher->ivSize;
+#ifdef USE_EAP_FAST
+	/**
+		Generate master secret with tprf.
+		Make space for additional key material (session key seed).
+		@see https://tools.ietf.org/html/rfc4851#section-5.1
+	*/
+	if (ssl->flags & SSL_FLAGS_EAP_FAST) {
+		if (ssl->sid == NULL) {
+			goto L_RETURN;
+		}
+		/* sid->masterSecret actually holds pac-key. Use tprf() here
+		to derive session masterSecret, now that we're about to use it.
+		masterSecret is also used after this for the finished message hash */
+		rc = tprf(ssl->sid->masterSecret, EAP_FAST_PAC_KEY_LEN,
+			msSeed + LABEL_SIZE, 2 * SSL_HS_RANDOM_SIZE,
+			ssl->sec.masterSecret);
+		if (rc < 0) {
+			goto L_RETURN;
+		}
+		reqKeyLen += EAP_FAST_SESSION_KEY_SEED_LEN;
+	}
+#endif
 
 	/* Ensure there's enough room */
 	if (reqKeyLen > SSL_MAX_KEY_BLOCK_SIZE) {
@@ -103,6 +126,11 @@ static int32_t genKeyBlock(ssl_t *ssl)
 		ssl->sec.wKeyptr = ssl->sec.rKeyptr + ssl->cipher->keySize;
 		ssl->sec.rIVptr = ssl->sec.wKeyptr + ssl->cipher->keySize;
 		ssl->sec.wIVptr = ssl->sec.rIVptr + ssl->cipher->ivSize;
+#ifdef USE_EAP_FAST
+		if (ssl->flags & SSL_FLAGS_EAP_FAST) {
+			ssl->sec.eap_fast_session_key_seed = ssl->sec.wIVptr + ssl->cipher->ivSize;
+		}
+#endif
 	} else {
 		ssl->sec.wMACptr = ssl->sec.keyBlock;
 		ssl->sec.rMACptr = ssl->sec.wMACptr + ssl->cipher->macSize;
@@ -110,6 +138,11 @@ static int32_t genKeyBlock(ssl_t *ssl)
 		ssl->sec.rKeyptr = ssl->sec.wKeyptr + ssl->cipher->keySize;
 		ssl->sec.wIVptr = ssl->sec.rKeyptr + ssl->cipher->keySize;
 		ssl->sec.rIVptr = ssl->sec.wIVptr + ssl->cipher->ivSize;
+#ifdef USE_EAP_FAST
+		if (ssl->flags & SSL_FLAGS_EAP_FAST) {
+			ssl->sec.eap_fast_session_key_seed = ssl->sec.rIVptr + ssl->cipher->ivSize;
+		}
+#endif
 	}
 
 	rc = SSL_HS_MASTER_SIZE;
@@ -145,6 +178,12 @@ int32_t tlsDeriveKeys(ssl_t *ssl)
 	if (ssl->flags & SSL_FLAGS_RESUMED) {
 		return genKeyBlock(ssl);
 	}
+#ifdef USE_EAP_FAST
+	/* We should only do EAP_FAST key derivation on resumed connections */
+	if (ssl->flags & SSL_FLAGS_EAP_FAST) {
+		return PS_FAIL;
+	}
+#endif
 
 /*
 	master_secret = PRF(pre_master_secret, "master secret",
@@ -223,6 +262,12 @@ int32_t tlsExtendedDeriveKeys(ssl_t *ssl)
 		psTraceInfo("Invalid invokation of extended key derivation.\n");
 		return PS_FAIL;
 	}
+#ifdef USE_EAP_FAST
+	/* We should only do EAP_FAST key derivation on resumed connections */
+	if (ssl->flags & SSL_FLAGS_EAP_FAST) {
+		return PS_FAIL;
+	}
+#endif
 	
 	extMasterSecretSnapshotHSHash(ssl, hash, &outLen);
 /*
@@ -702,6 +747,7 @@ int32 sslActivateWriteCipher(ssl_t *ssl)
 }
 
 /******************************************************************************/
+#endif /* USE_NATIVE_TLS_ALGS */
 
 
 #ifdef USE_CLIENT_SIDE_SSL

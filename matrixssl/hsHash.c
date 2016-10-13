@@ -33,6 +33,8 @@
 
 #include "matrixsslApi.h"
 
+#ifdef USE_NATIVE_TLS_HS_HASH
+
 #define FINISHED_LABEL_SIZE	15
 #define LABEL_CLIENT		"client finished"
 #define LABEL_SERVER		"server finished"
@@ -464,6 +466,8 @@ int32_t sslSnapshotHSHash(ssl_t *ssl, unsigned char *out, int32 senderFlag)
 #endif /* USE_DTLS */
 	return len;
 }
+
+#endif /* USE_NATIVE_TLS_HS_HASH */
 
 /******************************************************************************/
 

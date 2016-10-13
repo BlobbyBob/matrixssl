@@ -874,11 +874,10 @@ int32 parseClientKeyExchange(ssl_t *ssl, int32 hsLen, unsigned char **cp,
 				ssl->sec.premaster[0] = (ssl->sec.premasterSize & 0xFF00) >> 8;
 				ssl->sec.premaster[1] = (ssl->sec.premasterSize & 0xFF);
 /*
-				Next, uint16 length of PSK and key itself
+				Next, uint8_t length of PSK and key itself
 */
-				ssl->sec.premaster[ssl->sec.premasterSize + 2] =
-					(pskLen & 0xFF00) >> 8;
-				ssl->sec.premaster[ssl->sec.premasterSize + 3] =(pskLen & 0xFF);
+				ssl->sec.premaster[ssl->sec.premasterSize + 2] = 0;
+				ssl->sec.premaster[ssl->sec.premasterSize + 3] = (pskLen & 0xFF);
 				memcpy(&ssl->sec.premaster[ssl->sec.premasterSize + 4], pskKey,
 					pskLen);
 /*
@@ -927,10 +926,10 @@ int32 parseClientKeyExchange(ssl_t *ssl, int32 hsLen, unsigned char **cp,
 					return SSL_MEM_ERROR;
 				}
 				memset(ssl->sec.premaster, 0, ssl->sec.premasterSize);
-				ssl->sec.premaster[0] = (pskLen & 0xFF00) >> 8;
+				ssl->sec.premaster[0] = 0;
 				ssl->sec.premaster[1] = (pskLen & 0xFF);
 				/* memset to 0 handled middle portion */
-				ssl->sec.premaster[2 + pskLen] = (pskLen & 0xFF00) >> 8;
+				ssl->sec.premaster[2 + pskLen] = 0;
 				ssl->sec.premaster[3 + pskLen] = (pskLen & 0xFF);
 				memcpy(&ssl->sec.premaster[4 + pskLen], pskKey, pskLen);
 			} else {
@@ -1498,6 +1497,20 @@ PROTOCOL_DETERMINED:
 				matrixsslUpdateStat(ssl, FAILED_RESUMPTIONS_STAT, 1);
 #endif
 			}
+#ifdef USE_EAP_FAST //TODO Could also do this for any TICKET
+			if (ssl->sid->sessionTicketState == SESS_TICKET_STATE_SENT_TICKET) {
+				if (ssl->flags & SSL_FLAGS_RESUMED) {
+					/* The server has accepted our session ticket, and indicated that
+						by echoing the random session id we sent. */
+					ssl->extFlags.eap_fast_master_secret = 1;
+					//TODO could derive eap keys here
+				} else {
+					/* The server isn't going to use our ticket. But may still
+						send a ticket extension and (possibly blank) ticket message */
+					ssl->extFlags.eap_fast_master_secret = 0;
+				}
+			}
+#endif
 		} else {
 			ssl->sessionIdLen = (unsigned char)sessionIdLen;
 			memcpy(ssl->sessionId, c, sessionIdLen);
@@ -1992,6 +2005,7 @@ int32 parseServerKeyExchange(ssl_t *ssl,
 				/* TLS 1.2 uses single hashes everywhere */
 				if (ssl->flags & SSL_FLAGS_TLS_1_2) {
 					if (hashSize == SHA256_HASH_SIZE) {
+						psSha256PreInit(&digestCtx.sha256);
 						psSha256Init(&digestCtx.sha256);
 						psSha256Update(&digestCtx.sha256, ssl->sec.clientRandom,
 							SSL_HS_RANDOM_SIZE);
@@ -2002,6 +2016,7 @@ int32 parseServerKeyExchange(ssl_t *ssl,
 						psSha256Final(&digestCtx.sha256, hsMsgHash);
 #ifdef USE_SHA384
 					} else if (hashSize == SHA384_HASH_SIZE) {
+						psSha384PreInit(&digestCtx.sha384);
 						psSha384Init(&digestCtx.sha384);
 						psSha384Update(&digestCtx.sha384, ssl->sec.clientRandom,
 							SSL_HS_RANDOM_SIZE);
@@ -2013,6 +2028,7 @@ int32 parseServerKeyExchange(ssl_t *ssl,
 #endif /* USE_SHA384 */
 #ifdef USE_SHA512
 					} else if (hashSize == SHA512_HASH_SIZE) {
+						psSha512PreInit(&digestCtx.sha512);
 						psSha512Init(&digestCtx.sha512);
 						psSha512Update(&digestCtx.sha512, ssl->sec.clientRandom,
 							SSL_HS_RANDOM_SIZE);
@@ -2024,6 +2040,7 @@ int32 parseServerKeyExchange(ssl_t *ssl,
 #endif /* USE_SHA512 */
 #ifdef USE_SHA1
 					} else if (hashSize == SHA1_HASH_SIZE) {
+						psSha1PreInit(&digestCtx.sha1);
 						psSha1Init(&digestCtx.sha1);
 						psSha1Update(&digestCtx.sha1, ssl->sec.clientRandom,
 							SSL_HS_RANDOM_SIZE);
@@ -2038,50 +2055,40 @@ int32 parseServerKeyExchange(ssl_t *ssl,
 					}
 
 				} else {
-#ifdef USE_MD5
-					psMd5Init(&digestCtx.md5);
-					psMd5Update(&digestCtx.md5, ssl->sec.clientRandom,
-						SSL_HS_RANDOM_SIZE);
-					psMd5Update(&digestCtx.md5, ssl->sec.serverRandom,
-						SSL_HS_RANDOM_SIZE);
-					psMd5Update(&digestCtx.md5, sigStart,
-						(uint32)(sigStop - sigStart));
-					psMd5Final(&digestCtx.md5, hsMsgHash);
-
-					psSha1Init(&digestCtx.sha1);
-					psSha1Update(&digestCtx.sha1, ssl->sec.clientRandom,
-						SSL_HS_RANDOM_SIZE);
-					psSha1Update(&digestCtx.sha1, ssl->sec.serverRandom,
-						SSL_HS_RANDOM_SIZE);
-					psSha1Update(&digestCtx.sha1, sigStart,
-						(uint32)(sigStop - sigStart));
-					psSha1Final(&digestCtx.sha1, hsMsgHash + MD5_HASH_SIZE);
-#else
+#ifdef USE_MD5SHA1
+					psMd5Sha1PreInit(&digestCtx.md5sha1);
+					psMd5Sha1Init(&digestCtx.md5sha1);
+					psMd5Sha1Update(&digestCtx.md5sha1, ssl->sec.clientRandom,
+									SSL_HS_RANDOM_SIZE);
+					psMd5Sha1Update(&digestCtx.md5sha1, ssl->sec.serverRandom,
+									SSL_HS_RANDOM_SIZE);
+					psMd5Sha1Update(&digestCtx.md5sha1, sigStart,
+									(uint32)(sigStop - sigStart));
+					psMd5Sha1Final(&digestCtx.md5sha1, hsMsgHash);
+#else /* USE_MD5SHA1 */
+					psTraceInfo("USE_MD5SHA1 required\n");
 					return MATRIXSSL_ERROR;
-#endif
+#endif /* USE_MD5SHA1 */
 				}
 #else /* USE_TLS_1_2 */
 /*
 				The signature portion is an MD5 and SHA1 concat of the randoms
 				and the contents of this server key exchange message.
 */
-				psMd5Init(&digestCtx.md5);
-				psMd5Update(&digestCtx.md5, ssl->sec.clientRandom,
-					SSL_HS_RANDOM_SIZE);
-				psMd5Update(&digestCtx.md5, ssl->sec.serverRandom,
-					SSL_HS_RANDOM_SIZE);
-				psMd5Update(&digestCtx.md5, sigStart,
-					(uint32)(sigStop - sigStart));
-				psMd5Final(&digestCtx.md5, hsMsgHash);
-
-				psSha1Init(&digestCtx.sha1);
-				psSha1Update(&digestCtx.sha1, ssl->sec.clientRandom,
-					SSL_HS_RANDOM_SIZE);
-				psSha1Update(&digestCtx.sha1, ssl->sec.serverRandom,
-					SSL_HS_RANDOM_SIZE);
-				psSha1Update(&digestCtx.sha1, sigStart,
-					(uint32)(sigStop - sigStart));
-				psSha1Final(&digestCtx.sha1, hsMsgHash + MD5_HASH_SIZE);
+#ifdef USE_MD5SHA1
+				psMd5Sha1PreInit(&digestCtx.md5sha1);
+				psMd5Sha1Init(&digestCtx.md5sha1);
+				psMd5Sha1Update(&digestCtx.md5sha1, ssl->sec.clientRandom,
+								SSL_HS_RANDOM_SIZE);
+				psMd5Sha1Update(&digestCtx.md5sha1, ssl->sec.serverRandom,
+								SSL_HS_RANDOM_SIZE);
+				psMd5Sha1Update(&digestCtx.md5sha1, sigStart,
+								(uint32)(c - sigStart));
+				psMd5Sha1Final(&digestCtx.md5sha1, hsMsgHash);
+#else
+				psTraceInfo("USE_MD5SHA1 required\n");
+				return MATRIXSSL_ERROR;
+#endif /* USE_MD5SHA1 */
 #endif /* USE_TLS_1_2 */
 
 
@@ -2140,6 +2147,7 @@ int32 parseServerKeyExchange(ssl_t *ssl,
 #ifdef USE_TLS_1_2
 				if (ssl->flags & SSL_FLAGS_TLS_1_2 &&
 						(hashSize == SHA256_HASH_SIZE)) {
+					psSha256PreInit(&digestCtx.sha256);
 					psSha256Init(&digestCtx.sha256);
 					psSha256Update(&digestCtx.sha256, ssl->sec.clientRandom,
 						SSL_HS_RANDOM_SIZE);
@@ -2151,6 +2159,7 @@ int32 parseServerKeyExchange(ssl_t *ssl,
 #ifdef USE_SHA384
 				} else if (ssl->flags & SSL_FLAGS_TLS_1_2 &&
 						(hashSize == SHA384_HASH_SIZE)) {
+					psSha384PreInit(&digestCtx.sha384);
 					psSha384Init(&digestCtx.sha384);
 					psSha384Update(&digestCtx.sha384, ssl->sec.clientRandom,
 						SSL_HS_RANDOM_SIZE);
@@ -2162,6 +2171,7 @@ int32 parseServerKeyExchange(ssl_t *ssl,
 #endif
 #ifdef USE_SHA512
 				} else if (hashSize == SHA512_HASH_SIZE) {
+					psSha512PreInit(&digestCtx.sha512);
 					psSha512Init(&digestCtx.sha512);
 					psSha512Update(&digestCtx.sha512, ssl->sec.clientRandom,
 						SSL_HS_RANDOM_SIZE);
@@ -2179,6 +2189,7 @@ int32 parseServerKeyExchange(ssl_t *ssl,
 						   ((ssl->flags & SSL_FLAGS_TLS_1_2) &&
 						   (hashSize == SHA1_HASH_SIZE))) {
 					hashSize = SHA1_HASH_SIZE;
+					psSha1PreInit(&digestCtx.sha1);
 					psSha1Init(&digestCtx.sha1);
 					psSha1Update(&digestCtx.sha1, ssl->sec.clientRandom,
 						SSL_HS_RANDOM_SIZE);

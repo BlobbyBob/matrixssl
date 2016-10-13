@@ -75,6 +75,24 @@ extern "C" {
 #endif
 #endif
 
+#ifdef USE_EAP_FAST
+/******************************************************************************/
+#ifndef USE_SHA1
+# error "Must enable USE_SHA1 in cryptoConfig.h for EAP_FAST"
+#endif
+#if !defined(USE_TLS_RSA_WITH_RC4_128_SHA) || \
+				!defined(USE_TLS_RSA_WITH_AES_128_CBC_SHA) || \
+				!defined(USE_TLS_DHE_RSA_WITH_AES_128_CBC_SHA)
+#pragma message("WARNING: Not all EAP_FAST required ciphersuites enabled")
+#endif
+#ifndef USE_CLIENT_SIDE_SSL
+# error "EAP_FAST requires CLIENT_SIDE_SSL"
+#endif
+#ifndef USE_STATELESS_SESSION_TICKETS
+# error "EAP_FAST requires STATELESS_SESSION_TICKETS"
+#endif
+#endif /* USE_EAP_FAST */
+
 /******************************************************************************/
 /*
 	SHA1 and MD5 are essential elements for SSL key derivation during protocol

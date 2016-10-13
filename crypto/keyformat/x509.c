@@ -4653,6 +4653,33 @@ static int32_t parse_nonce_ext(const unsigned char *p, size_t sz,
 	return PS_SUCCESS; /* No parsing errors detected. */
 }
 
+static void parseSingleResponseRevocationTimeAndReason(
+	const unsigned char	*p,
+	uint16_t glen,
+	mOCSPSingleResponse_t *res)
+{
+	/* Note: res has to have been cleared before this function.
+	   The function does not fill-in the relevant fields if they are
+	   not found. */
+
+	/* get revocation time ASN.1 (GeneralizedTime / 0x18) */
+	if (glen >= sizeof(res->revocationTime) + 2 &&
+	    p[0] == 0x18 && p[1] == sizeof(res->revocationTime)) {
+		memcpy(res->revocationTime, p + 2,
+		       sizeof(res->revocationTime));
+		/* revocationReason    [0]     EXPLICIT CRLReason OPTIONAL
+		   CRLReason ::= ENUMERATED [RFC 5280] */
+		if (glen >= sizeof(res->revocationTime) + 0x5 &&
+		    p[17] == 0xa0 && /* [0] */
+		    p[18] == 0x03 && /* length */
+		    p[19] == 0x0a && /* ENUMERATED */
+		    p[20] == 0x01 && /* length */
+		    p[21] <= 10 && /* CRL reason code 0-10, excluding 7. */
+		    p[21] != 7) {
+			res->revocationReason = p[21];
+		}
+	}
+}
 
 static int32_t parseSingleResponse(uint32_t len, const unsigned char **cp,
 						const unsigned char *end, mOCSPSingleResponse_t *res)
@@ -4749,19 +4776,8 @@ static int32_t parseSingleResponse(uint32_t len, const unsigned char **cp,
 			psTraceCrypto("Initial parseSingleResponse parse failure\n");
 			return PS_PARSE_FAIL;
 		}
-		/* get revocation time. */
-		if (p[0] == 0x18 && p[1] == sizeof(res->revocationTime) &&
-		    glen >= sizeof(res->revocationTime) + 2) {
-			memcpy(res->revocationTime, p + 2,
-			       sizeof(res->revocationTime));
-			if (glen >= sizeof(res->revocationTime) + 0x5 &&
-			    p[17] == 0xa0 && p[18] == 0x03 &&
-			    p[19] == 0x0a && p[20] == 0x01 && p[21] >= 0 &&
-				p[21] <= 10 && p[21] != 7) {
-				res->revocationReason = p[21];
-			}
-		}
-		/* skip the rest of revocation info */
+		/* subfunction for parsing RevokedInfo. */
+		parseSingleResponseRevocationTimeAndReason(p, glen, res);
 		p += glen;
 	} else if (*p == (ASN_CONTEXT_SPECIFIC | ASN_PRIMITIVE | 2)) {
 		res->certStatus = 2;
@@ -5255,11 +5271,12 @@ int32_t checkOCSPResponseDates(mOCSPResponse_t *response,
 		ok = 0;
 
 	if (subjectResponse->nextUpdate != NULL) {
+		/* Next update provided, OCSP is valid until that time. */
 		ok &= parsedate_ocsp(subjectResponse->nextUpdate,
 				     ASN_GENERALIZEDTIME,
 				     subjectResponse->nextUpdateLen,
 				     nextUpdate);
-	} else {
+	} else if (ok) {
 		/* If there is no next update, the server supports
 		   continous updates and nextUpdate time is considered
 		   identical to the this update time. */

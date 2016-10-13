@@ -197,7 +197,7 @@ int32_t psDhImportPubKey(psPool_t *pool,
 {
 	int32_t		rc;
 
-	memset(&key->priv, 0x0, sizeof(psDhKey_t));
+	memset(&key->priv, 0, sizeof(key->priv));
 	if ((rc = pstm_init_for_read_unsigned_bin(pool, &key->pub, inlen)) < 0) {
 		return rc;
 	}

@@ -1661,7 +1661,7 @@ int32 fetchCRL(psPool_t *pool, char *url, uint32_t urlLen,
 	int				hostAddrLen, getReqLen, pageLen;
 	int32			transferred, sawOK, sawContentLength, grown;
 	int32			err, httpUriLen, port, offset;
-	unsigned char	crlChunk[HTTP_REPLY_CHUNK_SIZE];
+	unsigned char	crlChunk[HTTP_REPLY_CHUNK_SIZE + 1];
 	unsigned char	*crlBin; /* allocated */
 	uint32_t		crlBinLen;
 
@@ -1761,12 +1761,12 @@ int32 fetchCRL(psPool_t *pool, char *url, uint32_t urlLen,
 		and \r\n\r\n for beginning of CRL data. If a recv happens to fall right
 		on the boundary of any of these patterns, the behavior is undefined.
 		There are some asserts sprinked around to notify if this happens.
-		It SHOULD be sufficient to keep a decent size HTTP_REPLLY_CHUNK_SIZE
+		It SHOULD be sufficient to keep a decent size HTTP_REPLY_CHUNK_SIZE
 		that you can be pretty sure will hold the entire HTTP header but
 		the "recv" call itself is also a factor in how many bytes will be
 		recevied in the first call */
 	while ((transferred = recv(fd, crlChunk, HTTP_REPLY_CHUNK_SIZE, 0)) > 0) {
-	
+		crlChunk[transferred] = 0; /* Ensure zero termination for strstr(). */
 		if (crlBin == NULL) {
 			/* Still getting the details of the HTTP response */
 			/* Did we get an OK response? */

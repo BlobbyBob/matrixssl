@@ -309,4 +309,21 @@ void psBurnStack(uint32 len)
 }
 
 /******************************************************************************/
+/*
+	Free pointed memory and clear the pointer to avoid accidental
+	double free.
+*/
+void psFreeAndClear(void *ptrptr, psPool_t *pool)
+{
+	void *ptr;
+
+	if (ptrptr != NULL) {
+		ptr = *(void **)ptrptr;
+		psFree(ptr, pool);
+		*(void **)ptrptr = NULL;
+		PS_PARAMETER_UNUSED(pool); /* Parameter can be unused. */
+	}
+}
+
+/******************************************************************************/
 

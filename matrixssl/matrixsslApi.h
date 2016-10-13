@@ -41,10 +41,14 @@
 extern "C" {
 #endif
 
-#include "../core/coreApi.h"
-#include "../crypto/cryptoApi.h"
+#include "../core/coreApi.h" /* cryptoApi.h and matrixsslApi.h depend on this */
+#include "../crypto/cryptoApi.h" /* matrixsslApi.h depend on cryptoApi.h. */
 
-#include "matrixsslConfig.h"
+#ifdef MATRIX_CONFIGURATION_INCDIR_FIRST
+#include <matrixsslConfig.h> /* Get matrixssl configuration from -I dir. */
+#else
+#include "matrixsslConfig.h" /* Get local matrixssl configuration file. */
+#endif
 #include "matrixssllib.h"
 #include "version.h"
 

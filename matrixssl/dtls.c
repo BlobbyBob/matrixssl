@@ -774,9 +774,11 @@ static int32 dtlsRevertWriteCipher(ssl_t *ssl)
 	ssl->enIvSize = ssl->oenIvSize;
 	ssl->enBlockSize = ssl->oenBlockSize;
 	memcpy(ssl->sec.writeIV, ssl->owriteIV, ssl->oenIvSize);
+#ifdef USE_NATIVE_TLS_ALGS
 	memcpy(ssl->sec.writeMAC, ssl->owriteMAC, ssl->oenMacSize);
 	memcpy(&ssl->sec.encryptCtx, &ssl->oencryptCtx,
 		   sizeof(psCipherContext_t));
+#endif
 #ifdef ENABLE_SECURE_REHANDSHAKES
 	memcpy(ssl->myVerifyData, ssl->omyVerifyData, ssl->omyVerifyDataLen);
 	ssl->myVerifyDataLen = ssl->omyVerifyDataLen;

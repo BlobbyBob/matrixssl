@@ -86,12 +86,13 @@ static int				g_disabledCiphers;
 static uint16_t			g_disabledCipher[SSL_MAX_DISABLED_CIPHERS];
 
 #define MAX_KEYFILE_PATH	256
+#define MAX_PASSWORD_LEN	MAX_KEYFILE_PATH
 static char				g_keyfilePath[MAX_KEYFILE_PATH];
 static char				g_privkeyFile[MAX_KEYFILE_PATH];
 static char				g_identityCert[MAX_KEYFILE_PATH];
 static char				g_dhParamFile[MAX_KEYFILE_PATH];
 static char				g_caFile[MAX_KEYFILE_PATH];
-static char				g_password[32];
+static char				g_password[MAX_PASSWORD_LEN];
 
 static unsigned char	g_httpResponseHdr[] = "HTTP/1.0 200 OK\r\n"
 	"Server: MatrixSSL/" MATRIXSSL_VERSION "\r\n"
@@ -705,13 +706,13 @@ static int32 process_cmd_options(int32 argc, char **argv)
 	int   optionChar, str_len, version, numCiphers;
 	char *cipherListString;
 
-	
+	/* Start with all options zeroized. */
 	memset(g_keyfilePath, 0, MAX_KEYFILE_PATH);
-	memset(g_privkeyFile, 0, sizeof(MAX_KEYFILE_PATH));
-	memset(g_identityCert, 0, sizeof(MAX_KEYFILE_PATH));
-	memset(g_dhParamFile, 0, sizeof(MAX_KEYFILE_PATH));
-	memset(g_caFile, 0, sizeof(MAX_KEYFILE_PATH));
-	memset(g_password, 0, 32);
+	memset(g_privkeyFile, 0, MAX_KEYFILE_PATH);
+	memset(g_identityCert, 0, MAX_KEYFILE_PATH);
+	memset(g_dhParamFile, 0, MAX_KEYFILE_PATH);
+	memset(g_caFile, 0, MAX_KEYFILE_PATH);
+	memset(g_password, 0, MAX_PASSWORD_LEN);
 	
 	g_port				= HTTPS_PORT;
 	g_version			= 3;

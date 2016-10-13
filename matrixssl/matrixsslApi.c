@@ -98,6 +98,16 @@ int32_t matrixSslNewClientSession(ssl_t **ssl, const sslKeys_t *keys,
 	*ssl = NULL;
 	lssl = NULL;
 
+#ifdef USE_EAP_FAST
+	if (sid && sid->sessionTicketState == SESS_TICKET_STATE_EAP_FAST) {
+		/* EAP-FAST mode places some restrictions on session resumption */
+		if (sid->cipherId != 0 || sid->sessionTicket == NULL ||
+				sid->sessionTicketLen == 0 ||
+				sid->sessionTicketLifetimeHint != 0) {
+			return PS_ARG_FAIL;
+		}
+	}
+#endif
 	/* Give priority to cipher suite if session id is provided and doesn't match */
 	if (cipherSpec != NULL && cipherSpec[0] != 0 && sid != NULL &&
 			sid->cipherId != 0) {
@@ -137,6 +147,15 @@ int32_t matrixSslNewClientSession(ssl_t **ssl, const sslKeys_t *keys,
 	if (extCb) {
 		lssl->extCb = extCb;
 	}
+#ifdef USE_EAP_FAST
+	if (sid && sid->sessionTicketState == SESS_TICKET_STATE_EAP_FAST) {
+		/* Flag for EncodeClientHello that we want to resume with a ticket */
+		sid->sessionTicketState = SESS_TICKET_STATE_INIT;
+		options->ticketResumption = 1;
+		/* Indicate we're tunnelled below EAP_FAST */
+		lssl->flags |= SSL_FLAGS_EAP_FAST;
+	}
+#endif
 RETRY_HELLO:
 	tmp.size = lssl->outsize;
 	tmp.buf = tmp.start = tmp.end = lssl->outbuf;
@@ -205,6 +224,54 @@ void matrixSslDeleteSessionId(sslSessionId_t *sess)
 	psFree(sess, NULL);
 }
 
+#ifdef USE_EAP_FAST
+/**
+	Set the TLS connection to connect using an externally provisioned EAP-FAST 
+	Protected Access Credential (PAC).
+	@see https://tools.ietf.org/html/rfc4851
+	@param[in,out] sess SessionID structure to fill in with PAC.
+	@param[in] pac_key 32 byte secret key shared between the EAP-FAST peers.
+		This is used by EAP-FAST peers to do session key derivation and is 
+		never sent over the wire (encrypted or unencrypted) by TLS.
+	@param[in] pac_opaque Opaque value to be sent as plaintext to the server
+		within the SessionTicket ClientHello Extension so the server can
+		choose the correct pac_key.
+	@param[in] pac_opaque_len Length in bytes of 'pac_opaque'
+*/
+void matrixSslSetSessionIdEapFast(sslSessionId_t *sess,
+				const unsigned char pac_key[EAP_FAST_PAC_KEY_LEN],
+				const unsigned char *pac_opaque, uint16_t pac_opaque_len)
+{
+	psAssert(sess && pac_key && pac_opaque && (pac_opaque_len > 0));
+
+	/* Indicate we're overriding the default Ticket fields and behavior */
+	sess->sessionTicketState = SESS_TICKET_STATE_EAP_FAST;
+#if EAP_TLS_PAC_KEY_LEN > SSL_HS_MASTER_SIZE
+#error EAP_TLS_PAC_KEY_LEN too large
+#endif
+	/** @note, sess->master_secret must go through tprf() before being used */
+	memcpy(sess->masterSecret, pac_key, EAP_FAST_PAC_KEY_LEN);
+	sess->sessionTicket = psMalloc(sess->pool, pac_opaque_len);
+	memcpy(sess->sessionTicket, pac_opaque, pac_opaque_len);
+	sess->sessionTicketLen = pac_opaque_len;
+}
+
+int32_t matrixSslGetEapFastSKS(const ssl_t *ssl,
+				unsigned char session_key_seed[EAP_FAST_SESSION_KEY_SEED_LEN])
+{
+	if (!ssl || !session_key_seed) {
+		psAssert(ssl && session_key_seed);
+		return PS_FAIL;
+	}
+	if (!ssl->sec.eap_fast_session_key_seed || 
+			matrixSslHandshakeIsComplete(ssl) != PS_TRUE) {
+		return PS_EAGAIN;
+	}
+	memcpy(session_key_seed, ssl->sec.eap_fast_session_key_seed,
+		EAP_FAST_SESSION_KEY_SEED_LEN);
+	return PS_SUCCESS;
+}
+#endif /* USE_EAP_FAST */
 #endif /* USE_CLIENT_SIDE_SSL */
 
 #ifdef USE_SERVER_SIDE_SSL

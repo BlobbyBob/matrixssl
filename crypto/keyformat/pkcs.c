@@ -187,6 +187,11 @@ int32 pkcs8ParsePrivBin(psPool_t *pool, unsigned char *buf, int32 size,
 	int32			icount;
 #endif /* USE_PKCS5 */
 
+	/* Check for too large (invalid) inputs, unparseable with uint16_t */
+	if (size > 65535) {
+		return PS_FAILURE;
+	}
+
 	p = buf;
 	end = p + size;
 
@@ -299,9 +304,11 @@ int32 pkcs8ParsePrivBin(psPool_t *pool, unsigned char *buf, int32 size,
 	/* PrivateKeyInfo per PKCS#8 Section 6. */
 	if (getAsnSequence(&p, (int32)(end - p), &seqlen) < 0) {
 		psTraceCrypto("Initial PrivateKeyInfo parse failure\n");
+#ifdef USE_PKCS5
 		if (pass) {
 			psTraceCrypto("Is it possible the password is incorrect?\n");
 		}
+#endif /* USE_PKCS5 */
 		return PS_FAILURE;
 	}
 	/* Version */
@@ -404,8 +411,6 @@ int32 pkcs8ParsePrivBin(psPool_t *pool, unsigned char *buf, int32 size,
 				goto PKCS8_FAIL;
 			}
 		}
-	} else if (plen < 0) {
-		goto PKCS8_FAIL;
 	}
 
 	return PS_SUCCESS;
@@ -641,7 +646,8 @@ static int32 pkcs12import(psPool_t *pool, const unsigned char **buf,
 	int32				rc, oi, asnint;
 	uint32_t			keyLen, ivLen;
 	uint16_t			tmplen, tmpint;
-	short				armor, cipher;
+	short				cipher;
+	const short			armor = PBE12;
 
 	*plaintext = NULL;
 	*ptLen = 0;
@@ -659,7 +665,6 @@ static int32 pkcs12import(psPool_t *pool, const unsigned char **buf,
 
 	if (oi == OID_PKCS_PBESHA40RC2) {
 #ifdef USE_RC2
-		armor = PBE12;
 		cipher = AUTH_SAFE_RC2;
 		keyLen = 8;
 #else
@@ -667,7 +672,6 @@ static int32 pkcs12import(psPool_t *pool, const unsigned char **buf,
 		return PS_UNSUPPORTED_FAIL;
 #endif
 	} else if (oi == OID_PKCS_PBESHA3DES3) {
-		armor = PBE12;
 		cipher = AUTH_SAFE_3DES;
 		keyLen = DES3_KEYLEN;
 	} else {
@@ -716,11 +720,6 @@ static int32 pkcs12import(psPool_t *pool, const unsigned char **buf,
 			}
 			return PS_UNSUPPORTED_FAIL;
 		}
-
-	} else {
-		/* PBES2 */
-		psTraceCrypto("Error PBES2 unsupported\n");
-		return PS_UNSUPPORTED_FAIL;
 	}
 
 	/* Got the keys but we still need to find the start of the encrypted data.
@@ -960,7 +959,7 @@ static int32 parseSafeContents(psPool_t *pool, unsigned char *password,
 				}
 				if ((rc = psX509ParseCert(pool, p, tmplen, &currCert,
 						CERT_STORE_UNPARSED_BUFFER)) < 0) {
-					psX509FreeCert(*cert);
+					psX509FreeCert(currCert);
 					*cert = NULL;
 					psTraceCrypto("Couldn't parse certificate from CertBag\n");
 					return rc;
@@ -1772,6 +1771,7 @@ int32_t pkcs3ParseDhParamFile(psPool_t *pool, const char *fileName, psDhParams_t
 	p = pemOut = psMalloc(pool, baseLen);
 	if (p == NULL) {
 		psError("Memory allocation error in pkcs3ParseDhParamFile\n");
+		psFree(dhFileBuf, pool);
 		return PS_MEM_FAIL;
 	}
 

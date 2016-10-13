@@ -126,6 +126,7 @@ int32 csDes3Decrypt(void *ssl, unsigned char *ct,
 /******************************************************************************/
 
 #ifdef USE_AES_CIPHER_SUITE
+#ifdef USE_NATIVE_AES
 #ifdef USE_TLS_1_2
 #ifdef USE_AES_GCM
 int32 csAesGcmInit(sslSec_t *sec, int32 type, uint32 keysize)
@@ -311,6 +312,7 @@ int32 csAesDecrypt(void *ssl, unsigned char *ct,
 	return len;
 }
 #endif /*USE_AES_CBC */
+#endif /* USE_NATIVE_AES */
 #endif /* USE_AES_CIPHER_SUITE */
 
 /******************************************************************************/

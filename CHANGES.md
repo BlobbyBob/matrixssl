@@ -1,11 +1,12 @@
 MatrixSSL Release Notes
-========
+=======================
 
-#Changes in 3.8.6
---------
+Changes in 3.8.6
+----------------
+
 > **Version 3.8.6**
 > October 2016
-> *&copy; INSIDE Secure - 2016 - All Rights Reserved*
+> (C) Copyright 2016 INSIDE Secure - All Rights Reserved
 
 1. BUG FIXES
  - Critical parsing bug for X.509 certificates
@@ -90,17 +91,19 @@ Added additional field parsing support for X.509, including multiple OU support.
 ##Removed OpenSSL API Emulation
  - `opensslApi.c` and `opensslSocket.c` files removed temporarily in anticipation of moving to a more fully supported OpenSSL layer.
 
-#Changes in 3.8.5
---------
+Changes in 3.8.5
+----------------
+
 > **Version 3.8.5**
 > September 2016
 > *Note: 3.8.5 was a limited customer release only.*
 
-#Changes in 3.8.4
---------
+Changes in 3.8.4
+----------------
+
 > **Version 3.8.4**
 > July 2016
-> *&copy; INSIDE Secure - 2016 - All Rights Reserved*
+> (C) Copyright 2016 INSIDE Secure - All Rights Reserved
 
 1. FEATURES AND IMPROVEMENTS
  - Coverity coverage
@@ -157,11 +160,12 @@ SSLv3 mode is not recommended for deployment, but had become broken in a recent 
 ## Assembly compatibility with more compilers
 Fixed "invalid register constraints" error on some versions of GCC and LLVM for ARM, MIPS and x86_64.
 
-#Changes in 3.8.3
---------
+Changes in 3.8.3
+----------------
+
 > **Version 3.8.3**
 > April 2016
-> *&copy; INSIDE Secure - 2016 - All Rights Reserved*
+> (C) Copyright 2016 INSIDE Secure - All Rights Reserved
 
 1. FEATURES AND IMPROVEMENTS
   - Simplified Configuration Options
@@ -301,11 +305,12 @@ TLS cipher suites with CBC mode in TLS 1.1 and 1.2 could have an access violatio
 - *Microsoft Windows* targets do not support certificate date validation currently. Users requiring this feature can use Windows APIs to get and parse the current date, using the POSIX implementation as a reference.
 - *Arm* platforms linking with some versions of *OpenSSL* `libcrypto` library may have errors in AES-CBC cipher suites due to the library's inability to handle in-situ encryption within the same block.
 
-#Changes in 3.8.2
---------
+Changes in 3.8.2
+----------------
+
 > **Version 3.8.2**
 > December 2015
-> *&copy; INSIDE Secure - 2015 - All Rights Reserved*
+> (C) Copyright 2015 INSIDE Secure - All Rights Reserved
 
 1. FILE/API REORGANIZATION
   - File Locations

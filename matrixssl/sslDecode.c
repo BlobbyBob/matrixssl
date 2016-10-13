@@ -820,6 +820,7 @@ ADVANCE_TO_APP_DATA:
 				switch (ssl->deMacSize) {
 #ifdef USE_SHA256
 				case SHA256_HASH_SIZE:
+					psSha256PreInit(&md.sha256);
 					psSha256Init(&md.sha256);
 					while (rc > 0) {
 						psSha256Update(&md.sha256, tmp, 64);
@@ -830,6 +831,7 @@ ADVANCE_TO_APP_DATA:
 #endif
 #ifdef USE_SHA384
 				case SHA384_HASH_SIZE:
+					psSha384PreInit(&md.sha384);
 					psSha384Init(&md.sha384);
 					while (rc > 0) {
 						psSha384Update(&md.sha384, tmp, 128);
@@ -840,6 +842,7 @@ ADVANCE_TO_APP_DATA:
 #endif
 #ifdef USE_SHA1
 				case SHA1_HASH_SIZE:
+					psSha1PreInit(&md.sha1);
 					psSha1Init(&md.sha1);
 					while (rc > 0) {
 						psSha1Update(&md.sha1, tmp, 64);
@@ -2255,6 +2258,13 @@ SKIP_HSHEADER_PARSE:
 	case SSL_HS_NEW_SESSION_TICKET:
 
 		psTraceHs(">>> Client parsing NEW_SESSION_TICKET message\n");
+#ifdef USE_EAP_FAST
+		if (ssl->flags & SSL_FLAGS_EAP_FAST) {
+			ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
+			psTraceInfo("NEW_SESSION_TICKET unsupported in EAP-FAST\n");
+			return MATRIXSSL_ERROR;
+		}
+#endif
 		if (hsLen < 6) {
 			ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
 			psTraceInfo("Invalid NewSessionTicket message\n");

@@ -2201,6 +2201,7 @@ int32 psSha256Test2(void)
 	psSha256Init(&md3);
 	psSha256Update(&md3, array, 32768);
 	psSha256Update(&md3, array, 32768);
+	psSha256PreInit(&md4);
 	psSha256Init(&md4);
 	psSha256Update(&md4, array, 32768);
 	psSha256Update(&md4, array, 32768);

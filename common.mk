@@ -1,6 +1,6 @@
 ##
 # Common Makefile definitions.
-#
+# @version $Format:%h%d$
 # Copyright (c) 2013-2016 INSIDE Secure Corporation. All Rights Reserved.
 #
 #-------------------------------------------------------------------------------

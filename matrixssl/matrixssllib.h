@@ -681,6 +681,14 @@ static __inline uint16_t HASH_SIG_MASK(uint8_t hash, uint8_t sig)
 #define SSL_MAX_KEY_BLOCK_SIZE		((2 * 48) + (2 * 32) + (2 * 16) + \
 										SHA1_HASH_SIZE)
 #endif
+#ifdef USE_EAP_FAST
+#define EAP_FAST_SESSION_KEY_SEED_LEN	40
+#define EAP_FAST_PAC_KEY_LEN			32
+#undef SSL_MAX_KEY_BLOCK_SIZE
+#define SSL_MAX_KEY_BLOCK_SIZE		((2 * 48) + (2 * 32) + (2 * 16) + \
+										SHA256_HASH_SIZE + \
+										EAP_FAST_SESSION_KEY_SEED_LEN)
+#endif
 
 /*
 	Master secret is 48 bytes, sessionId is 32 bytes max
@@ -904,6 +912,7 @@ typedef struct {
 	uint16_t		premasterSize;
 
 	unsigned char	keyBlock[SSL_MAX_KEY_BLOCK_SIZE];	/* Storage for 'ptr' */
+#ifdef USE_NATIVE_TLS_ALGS
 	unsigned char	*wMACptr;
 	unsigned char	*rMACptr;
 	unsigned char	*wKeyptr;
@@ -914,10 +923,14 @@ typedef struct {
 	unsigned char	readMAC[SSL_MAX_MAC_SIZE];
 	unsigned char	writeKey[SSL_MAX_SYM_KEY_SIZE];
 	unsigned char	readKey[SSL_MAX_SYM_KEY_SIZE];
+#endif
 	unsigned char	*wIVptr;
 	unsigned char	*rIVptr;
 	unsigned char	writeIV[SSL_MAX_IV_SIZE];
 	unsigned char	readIV[SSL_MAX_IV_SIZE];
+#ifdef USE_EAP_FAST
+	unsigned char	*eap_fast_session_key_seed;
+#endif
 
 	unsigned char	seq[8];
 	unsigned char	remSeq[8];
@@ -936,14 +949,19 @@ typedef struct {
 	int32				certMatch;
 #endif /* USE_CLIENT_SIDE_SSL */
 
+#ifdef USE_NATIVE_SYMMETRIC
 	psCipherContext_t	encryptCtx;
 	psCipherContext_t	decryptCtx;
+#endif
 
+#ifdef USE_NATIVE_TLS_HS_HASH
 #ifndef USE_ONLY_TLS_1_2
 	psMd5Sha1_t			msgHashMd5Sha1;
 #endif
+#endif
 
 #ifdef USE_TLS_1_2
+#ifdef USE_NATIVE_TLS_HS_HASH
 	psSha256_t			msgHashSha256;
 
 #ifdef USE_SHA1
@@ -954,6 +972,7 @@ typedef struct {
 #endif
 #ifdef USE_SHA512
 	psSha512_t			msgHashSha512;
+#endif
 #endif
 #endif /* USE_TLS_1_2 */
 
@@ -1013,6 +1032,9 @@ typedef struct {
 #ifdef USE_STATELESS_SESSION_TICKETS
 enum sessionTicketState_e {
 	SESS_TICKET_STATE_INIT = 0,
+#ifdef USE_EAP_FAST
+	SESS_TICKET_STATE_EAP_FAST,	/* Initialized with pre-provisioned key */
+#endif
 	SESS_TICKET_STATE_SENT_EMPTY,
 	SESS_TICKET_STATE_SENT_TICKET,
 	SESS_TICKET_STATE_RECVD_EXT,
@@ -1259,8 +1281,10 @@ struct ssl {
 	unsigned char	oenIvSize;
 	unsigned char	oenBlockSize;
 	unsigned char	owriteIV[16]; /* GCM uses this in the nonce */
+#ifdef USE_NATIVE_TLS_ALGS
 	unsigned char	owriteMAC[SSL_MAX_MAC_SIZE];
 	psCipherContext_t	oencryptCtx;
+#endif
 #ifdef ENABLE_SECURE_REHANDSHAKES
 	unsigned char	omyVerifyData[SHA384_HASH_SIZE];
 	uint32			omyVerifyDataLen;
@@ -1310,6 +1334,9 @@ struct ssl {
 		uint32		status_request: 1;	/* received EXT_STATUS_REQUEST */
 		uint32		status_request_v2: 1;	/* received EXT_STATUS_REQUEST_V2 */
 		uint32		require_extended_master_secret: 1; /* peer may require */
+#ifdef USE_EAP_FAST
+		uint32		eap_fast_master_secret: 1; /* Using eap_fast key derivation */
+#endif
 	} extFlags;	/**< Extension flags */
 
 #ifdef USE_MATRIX_OPENSSL_LAYER
@@ -1590,6 +1617,7 @@ extern int32_t extMasterSecretSnapshotHSHash(ssl_t *ssl, unsigned char *out,
 /*
 	prf.c
 */
+#if defined(USE_NATIVE_TLS_ALGS) || defined(USE_NATIVE_TLS_HS_HASH)
 extern int32_t prf(const unsigned char *sec, uint16_t secLen,
 				const unsigned char *seed, uint16_t seedLen,
 				unsigned char *out, uint16_t outLen);
@@ -1598,6 +1626,7 @@ extern int32_t prf2(const unsigned char *sec, uint16_t secLen,
 				const unsigned char *seed, uint16_t seedLen,
 				unsigned char *out, uint16_t outLen, uint32_t flags);
 #endif /* USE_TLS_1_2 */
+#endif /* USE_NATIVE_TLS_ALGS || USE_NATIVE_TLS_HS_HASH */
 #endif /* USE_TLS */
 
 #ifdef USE_AES_CIPHER_SUITE
@@ -1662,6 +1691,20 @@ extern int32 curveIdToFlag(int32 id);
 extern int32_t eccSuitesSupported(const ssl_t *ssl,
 		const uint16_t cipherSpecs[], uint8_t cipherSpecLen);
 #endif /* USE_ECC_CIPHER_SUITE */
+
+#ifdef USE_EAP_FAST
+/******************************************************************************/
+extern void matrixSslSetSessionIdEapFast(sslSessionId_t *sess,
+				const unsigned char *pac_key, uint16_t pac_key_len,
+				const unsigned char *pac_opaque, uint16_t pac_opaque_len);
+
+extern int32_t matrixSslGetEapFastSKS(const ssl_t *ssl,
+				unsigned char session_key_seed[EAP_FAST_SESSION_KEY_SEED_LEN]);
+
+extern int32_t tprf(const unsigned char *key, uint16_t keyLen,
+				const unsigned char seed, uint16_t seedLen,
+				unsigned char out[SSL_HS_MASTER_SIZE]);
+#endif
 
 /******************************************************************************/
 /* Deprected defines for compatibility */

@@ -40,7 +40,11 @@ extern "C" {
 #endif
 
 #include "../core/coreApi.h" /* Must be included first */
+#ifdef MATRIX_CONFIGURATION_INCDIR_FIRST
+#include <cryptoConfig.h> /* Must be included second */
+#else
 #include "cryptoConfig.h" /* Must be included second */
+#endif
 #include "cryptolib.h"
 
 /******************************************************************************/

@@ -3,7 +3,7 @@
 #
 # Copyright (c) 2016 INSIDE Secure Corporation. All Rights Reserved.
 #
-#
+# @version $Format:%h%d$
 
 # A list of the most important build targets provided by this Makefile:
 # Make command            Description
@@ -193,10 +193,20 @@ tests:
 	if make --directory=crypto parse-config | grep -q '#define USE_CMS'; then $(MAKE) --directory=crypto/cms/test;fi
 
 # Note apps is also a direct subdirectory
-apps:
+#ifdef MATRIXSSL_COMMERCIAL
+
+APPS_ADDITIONAL = apps_crypto
+
+.PHONY: apps_crypto
+
+apps_crypto:
+	if [ -e apps/crypto ];then $(MAKE) --directory=apps/crypto;fi
+
+#endif /* MATRIXSSL_COMMERCIAL */
+
+apps: $(APPS_ADDITIONAL)
 	$(MAKE) --directory=apps/ssl
 	$(MAKE) --directory=apps/dtls
-	if [ -e apps/crypto ];then $(MAKE) --directory=apps/crypto;fi
 
 clean:
 	$(MAKE) clean --directory=core

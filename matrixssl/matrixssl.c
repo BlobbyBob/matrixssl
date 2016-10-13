@@ -2442,6 +2442,10 @@ static int32 getTicketKeys(ssl_t *ssl, unsigned char *c,
 			}
 			return PS_SUCCESS;
 		}
+	} else {
+		/* Unlock, because if the function fails, the
+		   locking status need to be unlocked. */
+		psUnlockMutex(&g_sessTicketLock);
 	}
 	return PS_FAILURE; /* not in list and no callback registered */
 }

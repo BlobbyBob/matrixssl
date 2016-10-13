@@ -1,8 +1,8 @@
 /**
- *	@file    symmetric_libsodium.h
+ *	@file    coreConfig.h
  *	@version $Format:%h%d$
  *
- *	Header for libsodium crypto layer.
+ *	Configuration settings for Matrix core module.
  */
 /*
  *	Copyright (c) 2013-2016 INSIDE Secure Corporation
@@ -30,38 +30,54 @@
  *	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  *	http://www.gnu.org/copyleft/gpl.html
  */
-
 /******************************************************************************/
 
-#ifndef _h_LIBSODIUM_SYMMETRIC
-#define _h_LIBSODIUM_SYMMETRIC
+#ifndef _h_PS_CORECONFIG
+#define _h_PS_CORECONFIG
 
-#include "../cryptoApi.h"
-#include "sodium.h"
 
 /******************************************************************************/
-
-#ifdef USE_LIBSODIUM_AES_GCM
-typedef struct __attribute__((aligned(16))) {
-	crypto_aead_aes256gcm_state	libSodiumCtx;
-	unsigned char	IV[AES_BLOCKLEN];
-	unsigned char	Tag[AES_BLOCKLEN];
-	unsigned char	Aad[crypto_aead_aes256gcm_ABYTES]; //TODO change this length
-	uint32_t		AadLen;
-} psAesGcm_t;
+/* Configurable features */
+/******************************************************************************/
+/**
+	Enable various levels of trace.
+	When these option is turned off, messages are silently
+	discarded and their text does not take space in the binary image.
+*/
+//#define USE_CORE_TRACE
+#ifndef NO_CORE_ERROR
+ #define USE_CORE_ERROR
+#endif
+#ifndef NO_CORE_ASSERT
+ #define USE_CORE_ASSERT
 #endif
 
-#ifdef USE_LIBSODIUM_CHACHA20_POLY1305
-typedef struct {
-	unsigned char   key[crypto_aead_chacha20poly1305_KEYBYTES];
-	unsigned char	IV[crypto_aead_chacha20poly1305_IETF_NPUBBYTES];
-	unsigned char	Tag[crypto_aead_chacha20poly1305_ABYTES];
-	unsigned char	Aad[16];
-	uint32_t		AadLen;
-} psChacha20Poly1305_t;
+/**
+	If enabled, calls to the psError set of APIs will perform a platform
+	abort on the exeutable to aid in debugging.
+*/
+#ifdef DEBUG
+//#define HALT_ON_PS_ERROR /* NOT RECOMMENDED FOR PRODUCTION BUILDS */
 #endif
 
-/******************************************************************************/
+/**
+	Include the psCoreOsdepMutex family of APIs
 
-#endif /* _h_LIBSODIUM_SYMMETRIC */
+	@note If intending to compile crypto-cl, then this flag should
+	always be set.
+*/
+#ifndef NO_MULTITHREADING
+#define USE_MULTITHREADING
+#endif /* NO_MULTITHREADING */
+
+/**
+	Include the psNetwork family of APIs
+
+	These APIs allow simple high-level socket api.
+ */
+#define USE_PS_NETWORKING
+
+#endif /* _h_PS_CORECONFIG */
+
+/******************************************************************************/
 
