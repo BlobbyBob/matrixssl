@@ -32,6 +32,7 @@
  */
 /******************************************************************************/
 
+#include <stddef.h>
 #include <time.h>
 #include <string.h>
 #include <stdio.h>
@@ -59,6 +60,21 @@
 //#define ID_RSA /* RSA Certificate and Key */
 //#define ID_ECDH_ECDSA /* EC Certificate and Key */
 //#define ID_ECDH_RSA /* EC Key with RSA signed certificate */
+
+#if !defined(ID_RSA) && !defined(ID_ECDH_ECDSA) && !defined(ID_ECDH_RSA)
+/* Choose a default identity based on which algorithms are supported. */
+#ifdef USE_RSA_CIPHER_SUITE
+#define ID_RSA
+#else
+#ifdef USE_ECC_CIPHER_SUITE
+#define ID_ECDH_ECDSA
+#else
+#ifndef USE_PSK_CIPHER_SUITE
+#error "Please enable either RSA or ECC for client when not using PSK"
+#endif /* !USE_PSK_CIPHER_SUITE */
+#endif /* USE_ECC_CIPHER_SUITE */
+#endif /* USE_RSA_CIPHER_SUITE */
+#endif /* !ID_RSA && !ID_ECDH_ECDSA && !ID_ECDH_RSA */
 
 #define USE_HEADER_KEYS
 #define ALLOW_ANON_CONNECTIONS	1
@@ -880,7 +896,7 @@ static int32 process_cmd_options(int32 argc, char **argv)
  */
 int32 main(int32 argc, char **argv)
 {
-	int32				rc, CAstreamLen, i;
+	int32				rc, CAstreamLen, i, exit_code;
 	sslKeys_t			*keys;
 	sslSessionId_t		*sid = NULL;
 	struct g_sslstats	stats;
@@ -890,14 +906,16 @@ int32 main(int32 argc, char **argv)
 	WSAStartup(MAKEWORD(1, 1), &wsaData);
 #endif
 
+	exit_code = 0;
+
 	if ((rc = matrixSslOpen()) < 0) {
 		_psTrace("MatrixSSL library init failure.  Exiting\n");
-		return rc;
+		return EXIT_FAILURE;
 	}
 	
 	if (matrixSslNewKeys(&keys, NULL) < 0) {
 		_psTrace("MatrixSSL library key init failure.  Exiting\n");
-		return -1;
+		return EXIT_FAILURE;
 	}
 	
 	if (0 != process_cmd_options(argc, argv)) {
@@ -963,7 +981,7 @@ int32 main(int32 argc, char **argv)
 #ifdef ID_RSA
 	rc = loadRsaKeys(g_key_len, keys, CAstream, CAstreamLen);
 	if (rc < 0) {
-		return rc;
+		return EXIT_FAILURE;
 	}
 #endif
 
@@ -975,7 +993,7 @@ int32 main(int32 argc, char **argv)
 		if (CAstream) psFree(CAstream, NULL);
 		matrixSslDeleteKeys(keys);
 		matrixSslClose();
-		return rc;
+		return EXIT_FAILURE;
 	}
 #endif
 
@@ -987,7 +1005,7 @@ int32 main(int32 argc, char **argv)
 		if (CAstream) psFree(CAstream, NULL);
 		matrixSslDeleteKeys(keys);
 		matrixSslClose();
-		return rc;
+		return EXIT_FAILURE;
 	}
 #endif
 
@@ -1039,7 +1057,7 @@ int32 main(int32 argc, char **argv)
 		if (CAstream) psFree(CAstream, NULL);
 		matrixSslDeleteKeys(keys);
 		matrixSslClose();
-		return rc;
+		return EXIT_FAILURE;
 	}
 #endif
 
@@ -1050,7 +1068,7 @@ int32 main(int32 argc, char **argv)
 		if (CAstream) psFree(CAstream, NULL);
 		matrixSslDeleteKeys(keys);
 		matrixSslClose();
-		return rc;
+		return EXIT_FAILURE;
 	}
 #endif
 
@@ -1061,7 +1079,7 @@ int32 main(int32 argc, char **argv)
 		if (CAstream) psFree(CAstream, NULL);
 		matrixSslDeleteKeys(keys);
 		matrixSslClose();
-		return rc;
+		return EXIT_FAILURE;
 	}
 #endif
 
@@ -1113,7 +1131,8 @@ int32 main(int32 argc, char **argv)
 		rc = httpsClientConnection(keys, sid, &stats);
 		if (rc < 0) {
 			printf("F %d/%d\n", i, g_new);
-			return 0;
+			exit_code = EXIT_FAILURE;
+			goto out;
 		} else {
 			printf("N"); fflush(stdout);
 		}
@@ -1143,6 +1162,8 @@ int32 main(int32 argc, char **argv)
 		rc = httpsClientConnection(keys, sid, &stats);
 		if (rc < 0) {
 			printf("f %d/%d\n", i, g_resumed);
+			exit_code = EXIT_FAILURE;
+			goto out;
 		} else {
 			printf("R"); fflush(stdout);
 		}
@@ -1170,16 +1191,20 @@ int32 main(int32 argc, char **argv)
 #endif
 	}
 
+out:
 	matrixSslDeleteSessionId(sid);
 
 	matrixSslDeleteKeys(keys);
 	matrixSslClose();
 
+	if (rc == MATRIXSSL_SUCCESS)
+		printf("TLS handshake complete.\n");
+
 #ifdef WIN32
 	_psTrace("Press any key to close");
 	getchar();
 #endif
-	return 0;
+	return exit_code;
 }
 
 /******************************************************************************/
@@ -1631,37 +1656,59 @@ static int32_t fetchParseAndAuthCRLfromCert(psPool_t *pool, psX509Cert_t *cert,
 	return PS_SUCCESS;
 }
 
-/* Example function to retrieve a CRL using HTTP GET over POSIX sockets.
-	crlBuf is allocated by this routine and must be freed via psFree 
-	
-	< 0 - Error loading CRL
-	0 - Success
+/**
+	Return the number of bytes difference between 'end' and 'start'.
+	@param[in] end A pointer to valid memory, greater or equal to 'start'
+	@param[in] start A pointer to valid memory, less than or equal to 'start'
+	@param sanity The maximum expected difference in bytes
+	@return Number of bytes that 'end' is greater than 'start'. Range is 0 <= return <= sanity.
+		If end < start, 0 is returned. If 'end' - 'start' > 'sanity', 'sanity' is returned.
 */
-static unsigned char crl_getHdr[] = "GET ";
-#define GET_OH_LEN		4
-static unsigned char crl_httpHdr[] = " HTTP/1.0\r\n";
-#define HTTP_OH_LEN		11
-static unsigned char crl_hostHdr[] = "Host: ";
-#define HOST_OH_LEN		6
-static unsigned char crl_acceptHdr[] = "\r\nAccept: */*\r\n\r\n";
-#define ACCEPT_OH_LEN	17
+__inline static size_t ptrdiff_safe(const void *end, const void *start, size_t sanity)
+{
+	ptrdiff_t   d;
+	if (end < start) {
+		return 0;
+	}
+	d = end - start;
+	if (d > sanity) {
+		return sanity;
+	}
+	return (size_t)d;
+}
 
-#define HOST_ADDR_LEN	64	/* max to hold 'www.something.com' */
-#define GET_REQ_LEN		128	/* max to hold http GET request */
-
-#define HTTP_REPLY_CHUNK_SIZE	2048
-
+/**
+	Example function to retrieve a CRL using HTTP GET over POSIX sockets.
+	@security This API does not fully validate all input. It should only be used to fetch
+	a CRL froa trusted source with validly generated CRL data. The HTTP response of the
+	trusted server should also be tested, as the HTTP parsing in this API is not flexible.
+	@param [out] crlBuf is allocated by this routine and must be freed via psFree 
+	@return < 0 Error loading CRL. 0 on Success
+*/
 int32 fetchCRL(psPool_t *pool, char *url, uint32_t urlLen,
 			unsigned char **crlBuf, uint32_t *crlBufLen)
 {
+	static unsigned char crl_getHdr[] = "GET ";
+	#define GET_OH_LEN		4
+	static unsigned char crl_httpHdr[] = " HTTP/1.0\r\n";
+	#define HTTP_OH_LEN		11
+	static unsigned char crl_hostHdr[] = "Host: ";
+	#define HOST_OH_LEN		6
+	static unsigned char crl_acceptHdr[] = "\r\nAccept: */*\r\n\r\n";
+	#define ACCEPT_OH_LEN	17
+	#define HOST_ADDR_LEN	64	/* max to hold 'www.something.com' */
+	#define GET_REQ_LEN		128	/* max to hold http GET request */
+	#define HTTP_REPLY_CHUNK_SIZE	2048
+
 	SOCKET			fd;
 	struct hostent	*ip;
 	struct in_addr	intaddr;
 	char			*pageStart, *replyPtr, *ipAddr;
 	char			hostAddr[HOST_ADDR_LEN], getReq[GET_REQ_LEN];
 	int				hostAddrLen, getReqLen, pageLen;
-	int32			transferred, sawOK, sawContentLength, grown;
-	int32			err, httpUriLen, port, offset;
+	ssize_t			transferred;
+	int32_t			grown = 0;
+	int32_t			sawOK, sawContentLength, err, httpUriLen, port, offset;
 	unsigned char	crlChunk[HTTP_REPLY_CHUNK_SIZE + 1];
 	unsigned char	*crlBin; /* allocated */
 	uint32_t		crlBinLen;
@@ -1844,7 +1891,7 @@ int32 fetchCRL(psPool_t *pool, char *url, uint32_t urlLen,
 			}
 
 			/* So how much do we actually have to copy our of first chunk? */
-			transferred = transferred - (replyPtr - (char*)crlChunk);
+			transferred -= ptrdiff_safe(replyPtr, crlChunk, HTTP_REPLY_CHUNK_SIZE);
 			
 			if (sawContentLength) {
 				/* Will march crlBin forward so just assign output crlBuf now */
@@ -1968,7 +2015,7 @@ int32 main(int32 argc, char **argv)
 {
 	printf("USE_CLIENT_SIDE_SSL must be enabled in matrixsslConfig.h at build" \
 			" time to run this application\n");
-	return -1;
+	return EXIT_FAILURE;
 }
 #endif /* USE_CLIENT_SIDE_SSL */
 

@@ -331,84 +331,36 @@ static int32 internalMatchSubject(psX509Cert_t *cert, psX509Crl_t *CRL)
 	return 1;
 }
 
-/* -1 is exired */
-static int32_t nextUpdateTest(char *c, int32 timeType)
+/* Check if nextUpdate time appears correct. Returns -1 when
+   timestamp was unparseable or the CRL was expired. 0 for success. */
+static int32_t nextUpdateTest(const char *c, int32 timeType)
 {
-	unsigned int y;
-	unsigned short m,d,h;
-#ifdef POSIX
-	struct tm		t;
-	time_t			rawtime;
-#endif	
-#ifdef WIN32
-	SYSTEMTIME	sysTime;
-#endif
-	
-	/* UTCTIME, defined in 1982, has just a 2 digit year */
-	/* year as unsigned int handles over/underflows */
-	if (timeType == ASN_UTCTIME) {
-		y = 2000 + 10 * (c[0] - '0') + (c[1] - '0'); c += 2;
-		/* Years from '96 through '99 are in the 1900's */
-		if (y >= 2096) {
-			y -= 100;
-		}
-	}
-	else {
-		y = 1000 * (c[0] - '0') + 100 * (c[1] - '0') +
-			10 * (c[2] - '0') + (c[3] - '0'); c += 4;
-	}
-	/* month,day as unsigned short handles over/underflows */
-	m = 10 * (c[0] - '0') + (c[1] - '0'); c += 2;
-	d = 10 * (c[0] - '0') + (c[1] - '0'); c += 2;
-	h = 10 * (c[0] - '0') + (c[1] - '0'); c += 2;
+	int32 err;
+	psBrokenDownTime_t timeNow;
+	psBrokenDownTime_t nextTime;
+	psBrokenDownTime_t nextTimeLinger;
 
-#ifdef POSIX
-	time(&rawtime);
-	localtime_r(&rawtime, &t);
-	/* Localtime does months from 0-11 and (year-1900)! Normalize it. */
-	t.tm_mon++;
-	t.tm_year += 1900;
-
-	if (t.tm_year > (int)y) {
+	err = psGetBrokenDownGMTime(&timeNow, 0);
+	if (err != PS_SUCCESS)
 		return -1;
-	} else if (t.tm_year == (int)y) {
-		if (t.tm_mon > m) {
-			return -1;
-		} else if (t.tm_mon == m) {
-			if (t.tm_mday > d) {
-				return -1;
-			} else if (t.tm_mday == d) {
-				if (t.tm_hour > h) {
-					return -1;
-				}
-			}
-		}
-	}
-#endif
 
-#ifdef WIN32
-	GetSystemTime(&sysTime);
+	err = psBrokenDownTimeImport(
+		&nextTime, c, strlen(c),
+		timeType == ASN_UTCTIME ?
+		PS_BROKENDOWN_TIME_IMPORT_2DIGIT_YEAR : 0);
+	if (err != PS_SUCCESS)
+		return -1;
 
-	if (sysTime.wYear > (int)y) {
+	memcpy(&nextTimeLinger, &nextTime, sizeof nextTimeLinger);
+	err = psBrokenDownTimeAdd(&nextTimeLinger, PS_CRL_TIME_LINGER);
+	if (err != PS_SUCCESS)
+		return -1;
+
+	if (psBrokenDownTimeCmp(&timeNow, &nextTimeLinger) > 0) {
+		/* nextTime is in past. */
 		return -1;
 	}
-	else if (sysTime.wYear == (int)y) {
-		if (sysTime.wMonth > m) {
-			return -1;
-		} else if (sysTime.wMonth == m) {
-			if (sysTime.wDay > d) {
-				return -1;
-			} else if (sysTime.wDay == d) {
-				if (sysTime.wHour > h) {
-					return -1;
-				}
-			}
-		}
-	}
-#endif
-	
 	return 0;
-
 }
 
 static psX509Crl_t* internalGetCrlForCert(psX509Cert_t *cert)

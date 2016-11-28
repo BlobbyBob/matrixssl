@@ -307,6 +307,48 @@ void *psDynBufAppendSize(psDynBuf_t *db, size_t sz)
 	return loc;
 }
 
+void *psDynBufAppendUtf8(psDynBuf_t *db, int chr)
+{
+	unsigned char *enc;
+	unsigned int ch = (unsigned int) chr;
+	/* Do not encode characters outside valid UTF-8 range. */
+	if (ch > 0x1FFFF) {
+		db->err++;
+		return NULL;
+	}
+	if (ch < 128) {
+		enc = psDynBufAppendSize(db, 1);
+		if (enc)
+			*enc = (unsigned char) ch;
+	} else if (ch <= 0x7FF) {
+		/* Two byte encoding. */
+		enc = psDynBufAppendSize(db, 2);
+		if (enc) {
+			enc[0] = (unsigned char) (0xC0 | (ch >> 6));
+			enc[1] = (unsigned char) (0x80 | (ch & 63));
+		}
+	} else if (ch <= 0xffff) {
+		/* Three byte encoding. */
+		enc = psDynBufAppendSize(db, 3);
+		if (enc) {
+			enc[0] = (unsigned char) (0xE0 | (ch >> 12));
+			enc[1] = (unsigned char) (0x80 | ((ch >> 6) & 63));
+			enc[2] = (unsigned char) (0x80 | (ch & 63));
+		}
+	} else {
+		/* Four byte encoding. */
+		enc = psDynBufAppendSize(db, 4);
+		if (enc) {
+			enc[0] = (unsigned char) (0xF0 | (ch >> 18));
+			enc[1] = (unsigned char) (0x80 | ((ch >> 12) & 63));
+			enc[2] = (unsigned char) (0x80 | ((ch >> 6) & 63));
+			enc[3] = (unsigned char) (0x80 | (ch & 63));
+		}
+	}
+	return enc;
+}
+
+
 void psDynBufReservePrepend(psDynBuf_t *db, size_t sz)
 {
 	/* This function only performs action if nothing has been pushed.

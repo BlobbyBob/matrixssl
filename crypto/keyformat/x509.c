@@ -46,6 +46,10 @@
 
 #define MAX_CERTS_PER_FILE		16
 
+/* Maximum time length accepted.
+   Allows RFC 5280 format time + nanosecond fractional time + non-Zulu time. */
+#define MAX_TIME_LEN            32
+
 #ifdef USE_CERT_PARSE
 /*
 	Certificate extensions
@@ -500,7 +504,7 @@ static int32 getRsaPssParams(const unsigned char **pp, int32 size,
 	*pp = (unsigned char*)p;
 	return PS_SUCCESS;
 }
-#endif
+#endif /* USE_PKCS1_PSS */
 
 /******************************************************************************/
 /*
@@ -554,15 +558,17 @@ int32 psX509ParseCert(psPool_t *pool, const unsigned char *pp, uint32 size,
 						psX509Cert_t **outcert, int32 flags)
 {
 	psX509Cert_t		*cert;
-	const unsigned char	*p, *end, *far_end, *certStart, *tbsCertStart;
+	const unsigned char	*p, *end, *far_end, *certStart;
 	uint16_t			len;
 	uint32_t			oneCertLen;
-	int32				parsing, rc;
-	unsigned char		sha1KeyHash[SHA1_HASH_SIZE];
-#ifdef USE_CERT_PARSE
-	psDigestContext_t	hashCtx;
+	int32_t				parsing, rc;
 	const unsigned char	*certEnd;
-	uint16_t			certLen, plen;
+	uint16_t			plen;
+#ifdef USE_CERT_PARSE
+	const unsigned char *tbsCertStart;
+	unsigned char		sha1KeyHash[SHA1_HASH_SIZE];
+	psDigestContext_t	hashCtx;
+	uint16_t			certLen;
 	const unsigned char *p_subject_pubkey_info;
 	size_t              subject_pubkey_info_header_len;
 #endif /* USE_CERT_PARSE */
@@ -579,6 +585,9 @@ int32 psX509ParseCert(psPool_t *pool, const unsigned char *pp, uint32 size,
 	}
 	memset(cert, 0x0, sizeof(psX509Cert_t));
 	cert->pool = pool;
+#ifdef USE_CERT_PARSE
+	cert->extensions.bc.cA = CA_UNDEFINED;
+#endif /* USE_CERT_PARSE */
 
 	p = pp;
 	far_end = p + size;
@@ -629,6 +638,7 @@ int32 psX509ParseCert(psPool_t *pool, const unsigned char *pp, uint32 size,
 
 #ifdef USE_CERT_PARSE
 		tbsCertStart = p;
+#endif /* USE_CERT_PARSE */
 /*
 		TBSCertificate  ::=  SEQUENCE  {
 		version			[0]		EXPLICIT Version DEFAULT v1,
@@ -650,8 +660,11 @@ int32 psX509ParseCert(psPool_t *pool, const unsigned char *pp, uint32 size,
 			return rc;
 		}
 		certEnd = p + len;
+#ifdef USE_CERT_PARSE
+/*
+  Start parsing TBSCertificate contents.
+*/
 		certLen = certEnd - tbsCertStart;
-
 /*
 		Version  ::=  INTEGER  {  v1(0), v2(1), v3(2)  }
 */
@@ -883,12 +896,17 @@ int32 psX509ParseCert(psPool_t *pool, const unsigned char *pp, uint32 size,
 			psTraceCrypto("Error. Cert has no name information\n");
 			return PS_PARSE_FAIL;
 		}
+#else /* No TBSCertificate parsing. */
+		p = certEnd;
+#endif /* USE_CERT_PARSE (end of TBSCertificate parsing) */
+
 		/* Certificate signature info */
 		if ((rc = getAsnAlgorithmIdentifier(&p, (uint32)(end - p),
 				&cert->sigAlgorithm, &plen)) < 0) {
 			psTraceCrypto("Couldn't get algorithm identifier for sigAlgorithm\n");
 			return rc;
 		}
+
 		if (plen != 0) {
 #ifdef USE_PKCS1_PSS
 			if (cert->sigAlgorithm == OID_RSASSA_PSS) {
@@ -916,8 +934,9 @@ int32 psX509ParseCert(psPool_t *pool, const unsigned char *pp, uint32 size,
 #else
 			psTraceCrypto("Unsupported X.509 sigAlgorithm\n");
 			return PS_UNSUPPORTED_FAIL;
-#endif
+#endif /* USE_PKCS1_PSS */
 		}
+#ifdef USE_CERT_PARSE
 /*
 		Signature algorithm must match that specified in TBS cert
 */
@@ -937,7 +956,7 @@ int32 psX509ParseCert(psPool_t *pool, const unsigned char *pp, uint32 size,
 			psMd2Update(&hashCtx.md2, tbsCertStart, certLen);
 			psMd2Final(&hashCtx.md2, cert->sigHash);
 			break;
-#endif
+#endif /* USE_MD2 */
 		case OID_MD5_RSA_SIG:
 			psMd5Init(&hashCtx.md5);
 			psMd5Update(&hashCtx.md5, tbsCertStart, certLen);
@@ -1049,6 +1068,7 @@ int32 psX509ParseCert(psPool_t *pool, const unsigned char *pp, uint32 size,
 				cert->certAlgorithm);
 			return PS_UNSUPPORTED_FAIL;
 		}
+#endif /* USE_CERT_PARSE */
 
 		if ((rc = psX509GetSignature(pool, &p, (uint32)(end - p),
 				&cert->signature, &cert->signatureLen)) < 0) {
@@ -1056,9 +1076,11 @@ int32 psX509ParseCert(psPool_t *pool, const unsigned char *pp, uint32 size,
 			return rc;
 		}
 
-#else /* !USE_CERT_PARSE */
-		p = certStart + len + (int32)(p - certStart);
-#endif /* USE_CERT_PARSE */
+#ifndef USE_CERT_PARSE
+		/* Some APIs need certAlgorithm.*/
+		cert->certAlgorithm = cert->sigAlgorithm;
+#endif /* !USE_CERT_PARSE */
+
 /*
 		The ability to parse additional chained certs is a PKI product
 		feature addition.  Chaining in MatrixSSL is handled internally.
@@ -1066,7 +1088,7 @@ int32 psX509ParseCert(psPool_t *pool, const unsigned char *pp, uint32 size,
 		if ((p != far_end) && (p < (far_end + 1))) {
 			if (*p == 0x0 && *(p + 1) == 0x0) {
 				parsing = 0; /* An indefinite length stream was passed in */
-				/* caller will have to deal with skipping these becuase they
+				/* caller will have to deal with skipping these because they
 					would have read off the TL of this ASN.1 stream */
 			} else {
 				cert->next = psMalloc(pool, sizeof(psX509Cert_t));
@@ -1086,6 +1108,7 @@ int32 psX509ParseCert(psPool_t *pool, const unsigned char *pp, uint32 size,
 	return (int32)(p - pp);
 }
 
+#ifdef USE_CERT_PARSE
 static void freeOrgUnitList(x509OrgUnit_t *orgUnit, psPool_t *allocPool)
 {
 	x509OrgUnit_t *ou;
@@ -1109,7 +1132,6 @@ static void freeDomainComponentList(x509DomainComponent_t *domainComponent,
 	}
 }
 
-#ifdef USE_CERT_PARSE
 void x509FreeExtensions(x509v3extensions_t *extensions)
 {
 
@@ -1404,7 +1426,6 @@ void psX509FreeCert(psX509Cert_t *cert)
 	}
 }
 
-#ifdef USE_CERT_PARSE
 /******************************************************************************/
 /*
 	Currently just returning the raw BIT STRING and size in bytes
@@ -1440,6 +1461,7 @@ int32_t psX509GetSignature(psPool_t *pool, const unsigned char **pp, uint16_t le
 	return PS_SUCCESS;
 }
 
+#ifdef USE_CERT_PARSE
 /******************************************************************************/
 /*
 	Validate the expected name against a subset of the GeneralName rules
@@ -1527,7 +1549,7 @@ static int32_t parseGeneralNames(psPool_t *pool, const unsigned char **buf,
 	}
 	p = *buf;
 	end = p + len;
-	
+
 	while (len > 0) {
 		if (firstName == NULL) {
 			activeName = firstName = psMalloc(pool,	sizeof(x509GeneralName_t));
@@ -1652,6 +1674,10 @@ static int32_t parseGeneralNames(psPool_t *pool, const unsigned char **buf,
 			return PS_PARSE_FAIL;
 		}
 		len -= (p - save);
+		if (len < activeName->dataLen) {
+			psTraceCrypto("ASN len error in parseGeneralNames\n");
+			return PS_PARSE_FAIL;
+		}
 
 		/*	Currently we validate that the IA5String fields are printable
 			At a minimum, this prevents attacks with null terminators or
@@ -2588,7 +2614,7 @@ KNOWN_EXT:
 						extensions->bc.cA = CA_FALSE;
 					p++;
 				} else {
-					extensions->bc.cA = CA_UNDEFINED;
+					extensions->bc.cA = CA_FALSE;
 				}
 /*
 				Now need to check if there is a path constraint. Only makes
@@ -3184,25 +3210,6 @@ static int32_t getExplicitVersion(const unsigned char **pp, uint16_t len,
 
 /******************************************************************************/
 /**
-	Verify a string has nearly valid date range format and length.
- */
-static unsigned char asciidate(const unsigned char *c, unsigned int utctime)
-{
-	if (utctime != ASN_UTCTIME) {	/* 4 character year */
-		if (*c < '1' && *c > '2') return 0; c++; /* Year 1900 - 2999 */
-		if (*c < '0' && *c > '9') return 0; c++;
-	}
-	if (*c < '0' && *c > '9') return 0; c++;
-	if (*c < '0' && *c > '9') return 0; c++;
-	if (*c < '0' && *c > '1') return 0; c++; /* Month 00 - 19 */
-	if (*c < '0' && *c > '9') return 0; c++;
-	if (*c < '0' && *c > '3') return 0; c++; /* Day 00 - 39 */
-	if (*c < '0' && *c > '9') return 0;
-	return 1;
-}
-
-/******************************************************************************/
-/**
 	Tests if the certificate was issued before the given date.
 	Because there is no actual issuance date in the certificate, we use the
 	'notBefore' date (the initial date the certificate is valid) as the
@@ -3220,31 +3227,25 @@ static int32 issuedBefore(rfc_e rfc, const psX509Cert_t *cert)
 	unsigned char	*c;
 	unsigned int	y;
 	unsigned short	m;
+	psBrokenDownTime_t t;
+	int32 err;
 
 	/* Validate the 'not before' date */
 	if ((c = (unsigned char *)cert->notBefore) == NULL) {
 		return PS_FAILURE;
 	}
-	/* UTCTIME, defined in 1982, has just a 2 digit year */
-	/* year as unsigned int handles over/underflows */
-	if (cert->notBeforeTimeType == ASN_UTCTIME) {
-		if (!asciidate(c, ASN_UTCTIME))  {
-			return PS_FAILURE;
-		}
-		y =  2000 + 10 * (c[0] - '0') + (c[1] - '0'); c += 2;
-		/* Years from '96 through '99 are in the 1900's */
-		if (y >= 2096) {
-			y -= 100;
-		}
-	} else {
-		if (!asciidate(c, 0))  {
-			return PS_FAILURE;
-		}
-		y = 1000 * (c[0] - '0') + 100 * (c[1] - '0') +
-			10 * (c[2] - '0') + (c[3] - '0'); c += 4;
-	}
-	/* month as unsigned short handles over/underflows */
-	m = 10 * (c[0] - '0') + (c[1] - '0');
+	err = psBrokenDownTimeImport(
+		&t, (const char *) c, strlen((const char *)c),
+		cert->notBeforeTimeType == ASN_UTCTIME ?
+		PS_BROKENDOWN_TIME_IMPORT_2DIGIT_YEAR : 0);
+
+	if (err)
+		return err;
+
+	/* Get y and m from broken-down time. */
+	y = 1900 + (unsigned int) t.tm_year;
+	m = 1 + (unsigned short) t.tm_mon;
+
 	/* Must have been issued at least when X509v3 was added */
 	if (y < 1996 || m < 1 || m > 12) {
 		return -1;
@@ -3276,59 +3277,6 @@ static int32 issuedBefore(rfc_e rfc, const psX509Cert_t *cert)
 	return -1;
 }
 
-/******************************************************************************/
-/**
-	Pulls the year, month and day out of the certificate notBefore and
-	notAfter dates.
-*/
-static int32 getDateComponents(psX509Cert_t *cert, int beforeOrAfter,
-				unsigned int *y, unsigned short *m, unsigned short *d)
-{
-	unsigned char	*c;
-	int32			timeType;
-
-	if (beforeOrAfter == 0) {
-		/* Parse the 'not before' date */
-		if ((c = (unsigned char *)cert->notBefore) == NULL) {
-			return PS_FAILURE;
-		}
-		timeType = cert->notBeforeTimeType;
-	} else {
-		/* Parse the 'not after' date */
-		if ((c = (unsigned char *)cert->notAfter) == NULL) {
-			return PS_FAILURE;
-		}
-		timeType = cert->notAfterTimeType;
-	}
-	/* UTCTIME, defined in 1982, has just a 2 digit year */
-	/* year as unsigned int handles over/underflows */
-	if (timeType == ASN_UTCTIME) {
-		if (!asciidate(c, ASN_UTCTIME))  {
-			return PS_FAILURE;
-		}
-		*y = 2000 + 10 * (c[0] - '0') + (c[1] - '0'); c += 2;
-		/* Years from '96 through '99 are in the 1900's */
-		if (*y >= 2096) {
-			*y -= 100;
-		}
-	}
-	else {
-		if (!asciidate(c, 0))  {
-			return PS_FAILURE;
-		}
-		*y = 1000 * (c[0] - '0') + 100 * (c[1] - '0') +
-			10 * (c[2] - '0') + (c[3] - '0'); c += 4;
-	}
-	/* month,day as unsigned short handles over/underflows */
-	*m = 10 * (c[0] - '0') + (c[1] - '0'); c += 2;
-	*d = 10 * (c[0] - '0') + (c[1] - '0');
-	/* Must have been issued at least when X509v3 was added */
-	if (*y < 1996 || *m < 1 || *m > 12 || *d < 1 || *d > 31) {
-		return PS_FAILURE;
-	}
-	return PS_SUCCESS;
-}
-
 /**
 	Validate the dates in the cert to machine date.
 	SECURITY - always succeeds on systems without date support
@@ -3338,96 +3286,58 @@ static int32 getDateComponents(psX509Cert_t *cert, int beforeOrAfter,
 */
 static int32 validateDateRange(psX509Cert_t *cert)
 {
-	unsigned int	y;
-	unsigned short	m, d;
+	int32 err;
+	psBrokenDownTime_t timeNow;
+	psBrokenDownTime_t timeNowLinger;
+	psBrokenDownTime_t beforeTime;
+	psBrokenDownTime_t afterTime;
+	psBrokenDownTime_t afterTimeLinger;
 
-#ifdef POSIX
-	struct tm		t;
-	time_t			rawtime;
+	if (cert->notBefore == NULL || cert->notAfter == NULL)
+		return PS_FAIL;
 
+	err = psGetBrokenDownGMTime(&timeNow, 0);
+	if (err != PS_SUCCESS)
+		return PS_FAIL;
 
-	time(&rawtime);
-	localtime_r(&rawtime, &t);
-	/* Localtime does months from 0-11 and (year-1900)! Normalize it. */
-	t.tm_mon++;
-	t.tm_year += 1900;
+	memcpy(&timeNowLinger, &timeNow, sizeof timeNowLinger);
+	err = psBrokenDownTimeAdd(&timeNowLinger, PS_X509_TIME_LINGER);
+	if (err != PS_SUCCESS)
+		return PS_FAIL;
 
-	if (getDateComponents(cert, 0, &y, &m, &d) < 0) {
-		return PS_FAILURE;
-	}
-	
-	if (t.tm_year < (int)y) {
+	err = psBrokenDownTimeImport(
+		&beforeTime, cert->notBefore, strlen(cert->notBefore),
+		cert->notBeforeTimeType == ASN_UTCTIME ?
+		PS_BROKENDOWN_TIME_IMPORT_2DIGIT_YEAR : 0);
+	if (err != PS_SUCCESS)
+		return PS_FAIL;
+
+	err = psBrokenDownTimeImport(
+		&afterTime, cert->notAfter, strlen(cert->notAfter),
+		cert->notAfterTimeType == ASN_UTCTIME ?
+		PS_BROKENDOWN_TIME_IMPORT_2DIGIT_YEAR : 0);
+	if (err != PS_SUCCESS)
+		return PS_FAIL;
+
+	memcpy(&afterTimeLinger, &afterTime, sizeof afterTimeLinger);
+	err = psBrokenDownTimeAdd(&afterTimeLinger, PS_X509_TIME_LINGER);
+	if (err != PS_SUCCESS)
+		return PS_FAIL;
+
+	if (psBrokenDownTimeCmp(&beforeTime, &timeNowLinger) > 0) {
+		/* beforeTime is in future. */
 		cert->authFailFlags |= PS_CERT_AUTH_FAIL_DATE_FLAG;
-	} else if (t.tm_year == (int)y) {
-		if (t.tm_mon < m) {
-			cert->authFailFlags |= PS_CERT_AUTH_FAIL_DATE_FLAG;
-		} else if (t.tm_mon == m && t.tm_mday < d) {
-			cert->authFailFlags |= PS_CERT_AUTH_FAIL_DATE_FLAG;
-		}
-	}
-
-	if (getDateComponents(cert, 1, &y, &m, &d) < 0) {
-		return PS_FAILURE;
-	}
-	if (t.tm_year > (int)y) {
+	} else if (psBrokenDownTimeCmp(&timeNow, &afterTimeLinger) > 0) {
+		/* afterTime is in past. */
 		cert->authFailFlags |= PS_CERT_AUTH_FAIL_DATE_FLAG;
-	} else if (t.tm_year == (int)y) {
-		if (t.tm_mon > m) {
-			cert->authFailFlags |= PS_CERT_AUTH_FAIL_DATE_FLAG;
-		} else if (t.tm_mon == m && t.tm_mday > d) {
-			cert->authFailFlags |= PS_CERT_AUTH_FAIL_DATE_FLAG;
-		}
 	}
 	return 0;
-#else
-
-#ifdef WIN32
-
-	SYSTEMTIME	sysTime;
-
-	GetSystemTime(&sysTime);
-	if (getDateComponents(cert, 0, &y, &m, &d) < 0) {
-		return PS_FAILURE;
-	}
-	if (sysTime.wYear < (int)y) {
-		cert->authFailFlags |= PS_CERT_AUTH_FAIL_DATE_FLAG;
-	}
-	else if (sysTime.wYear == (int)y) {
-		if (sysTime.wMonth < m) {
-			cert->authFailFlags |= PS_CERT_AUTH_FAIL_DATE_FLAG;
-		}
-		else if (sysTime.wMonth == m && sysTime.wDay < d) {
-			cert->authFailFlags |= PS_CERT_AUTH_FAIL_DATE_FLAG;
-		}
-	}
-	if (getDateComponents(cert, 1, &y, &m, &d) < 0) {
-		return PS_FAILURE;
-	}
-	if (sysTime.wYear >(int)y) {
-		cert->authFailFlags |= PS_CERT_AUTH_FAIL_DATE_FLAG;
-	}
-	else if (sysTime.wYear == (int)y) {
-		if (sysTime.wMonth > m) {
-			cert->authFailFlags |= PS_CERT_AUTH_FAIL_DATE_FLAG;
-		}
-		else if (sysTime.wMonth == m && sysTime.wDay > d) {
-			cert->authFailFlags |= PS_CERT_AUTH_FAIL_DATE_FLAG;
-		}
-	}
-	return 0;
-#else
-	/* Warn if we are skipping the date validation checks. */
-#warning "CERTIFICATE DATE VALIDITY NOT SUPPORTED ON THIS PLATFORM."
-	cert->authFailFlags |= PS_CERT_AUTH_FAIL_DATE_FLAG;
-	return 0;
-#endif /* WIN32 */
-#endif /* POSIX */
 }
 
 
 /******************************************************************************/
 /*
-	Implementation specific date parser.  Does not actually verify the date
+	Implementation specific date parser.
 */
 static int32_t getTimeValidity(psPool_t *pool, const unsigned char **pp,
 				uint16_t len, int32_t *notBeforeTimeType,
@@ -3460,6 +3370,8 @@ static int32_t getTimeValidity(psPool_t *pool, const unsigned char **pp,
 		psTraceCrypto("Malformed validity 2\n");
 		return PS_PARSE_FAIL;
 	}
+	if (timeLen > MAX_TIME_LEN)
+		return PS_PARSE_FAIL;
 	*notBefore = psMalloc(pool, timeLen + 1);
 	if (*notBefore == NULL) {
 		psError("Memory allocation error in getTimeValidity for notBefore\n");
@@ -3479,6 +3391,8 @@ static int32_t getTimeValidity(psPool_t *pool, const unsigned char **pp,
 		psTraceCrypto("Malformed validity 4\n");
 		return PS_PARSE_FAIL;
 	}
+	if (timeLen > MAX_TIME_LEN)
+		return PS_PARSE_FAIL;
 	*notAfter = psMalloc(pool, timeLen + 1);
 	if (*notAfter == NULL) {
 		psError("Memory allocation error in getTimeValidity for notAfter\n");
@@ -3718,19 +3632,53 @@ MORE_IN_SET:
 /*
 		For the known 8-bit character string types, we flag that we want
 		to test for a hidden null in the middle of the string to address the
-		issue of www.goodguy.com\0badguy.com.  For BMPSTRING, the user will
-		have to validate against the xLen member for such abuses.
+		issue of www.goodguy.com\0badguy.com.
+        For validation purposes, BMPSTRINGs are converted to UTF-8 format.
 */
 		checkHiddenNull = PS_FALSE;
 		switch (stringType) {
+			case ASN_BMPSTRING:
+			{
+				/* MatrixSSL generally uses single byte character string
+				   formats. This function converts ASN_BMPSTRING to
+				   UTF-8 for further handling. */
+				unsigned char *uc_stringOut = NULL;
+				size_t length;
+				int32 str_err;
+				str_err = psToUtf8String(pool,
+										 (const unsigned char *)p,
+										 (size_t)llen,
+										 (psStringType_t)ASN_BMPSTRING,
+										 &uc_stringOut,
+										 &length,
+#if DN_NUM_TERMINATING_NULLS == 2
+										 PS_STRING_DUAL_NIL
+#elif DN_NUM_TERMINATING_NULLS == 1
+										 0
+#else
+#error "Unsupported value for DN_NUM_TERMINATING_NULLS."
+#endif
+					);
+				if (str_err != PS_SUCCESS)
+					return str_err;
+				/* Length checking. */
+				if (length >= 0x7FFE) {
+					/* Notice if length is too long to fit in 15 bits. */
+					psFree(uc_stringOut, pool);
+					return PS_LIMIT_FAIL;
+				}
+				stringOut = (char *) uc_stringOut;
+				p = p + llen;
+				llen = (uint16_t) length + DN_NUM_TERMINATING_NULLS;
+				break;
+			}
 			case ASN_PRINTABLESTRING:
 			case ASN_UTF8STRING:
 			case ASN_IA5STRING:
+			case ASN_T61STRING:
 				/* coverity[unterminated_case] */
 				checkHiddenNull = PS_TRUE;
 				/* fall through */
-			case ASN_T61STRING:
-			case ASN_BMPSTRING:
 			case ASN_BIT_STRING:
 				stringOut = psMalloc(pool, llen + DN_NUM_TERMINATING_NULLS);
 				if (stringOut == NULL) {
@@ -4535,92 +4483,6 @@ static int32_t x509ConfirmSignature(const unsigned char *sigHash,
 
 /******************************************************************************/
 
-static unsigned parse_digits(const unsigned char **c_p,
-			     unsigned digits,
-			     unsigned minimum,
-			     unsigned maximum)
-{
-	const unsigned char *c = *c_p;
-	unsigned result = 0;
-
-	while(digits) {
-		if (*c < '0' || *c > '9')
-			return (unsigned) -1;
-		result *= 10;
-		result += *c - '0';
-		c++;
-		digits--;
-	}
-
-	*c_p = c;
-
-	if (result < minimum || result > maximum)
-		return (unsigned) -1;
-
-	return result;
-}
-
-/**
-	Verify a string has (nearly) valid date range format and length.
-	Optionally output it in struct tm format.
- */
-static unsigned char parsedate_ocsp(const unsigned char *p,
-				    unsigned int time_type,
-				    unsigned int time_len,
-				    struct tm *target)
-{
-	unsigned year, month, mday, hour, min, sec;
-	const unsigned char *c = p;
-	if (time_type != ASN_GENERALIZEDTIME)
-		return 0;
-	/* Format shall be YYYYMMDDHHMMSSZ (according to RFC 5280). */
-	if (time_len != 15)
-		return 0;
-
-	year = parse_digits(&c, 4, 1900, 2999);
-	if (year == (unsigned) -1)
-		return 0;
-
-	month = parse_digits(&c, 2, 1, 12);
-	if (month == (unsigned) -1)
-		return 0;
-
-	mday = parse_digits(&c, 2, 1, 31);
-	if (mday == (unsigned) -1)
-		return 0;
-
-	hour = parse_digits(&c, 2, 0, 23);
-	if (hour == (unsigned) -1)
-		return 0;
-
-	min = parse_digits(&c, 2, 0, 59);
-	if (min == (unsigned) -1)
-		return 0;
-
-	/* Allow up-to 2 leap seconds. */
-	sec = parse_digits(&c, 2, 0, 61);
-	if (sec == (unsigned) -1)
-		return 0;
-
-	/* Time zone must be UTC (Zulu). */
-	if (*c != 'Z')
-		return 0;
-
-	if (target) {
-		/* Zeroize all fields as some systems have extra fields
-		   in struct tm. */
-		memset(target, 0, sizeof(*target));
-		target->tm_year = (int) year - 1900;
-		target->tm_mon = (int) month - 1;
-		target->tm_mday = (int) mday;
-		target->tm_hour = (int) hour;
-		target->tm_min = (int) min;
-		target->tm_sec = (int) sec;
-		/* Note: target->tm_wday and target->tm_yday are not set. */
-	}
-	return 1;
-}
-
 static int32_t parse_nonce_ext(const unsigned char *p, size_t sz,
 			       psBuf_t *nonceExtension)
 {
@@ -4934,7 +4796,7 @@ static int32_t parseBasicOCSPResponse(psPool_t *pool, uint32_t len,
 		return PS_PARSE_FAIL;
 	}
 	/* Perform quick parsing on data. */
-	if (parsedate_ocsp(p, ASN_GENERALIZEDTIME, glen, NULL) == 0)
+	if (psBrokenDownTimeImport(NULL, (const char *) p, glen, 0) < 0)
 		return PS_PARSE_FAIL;
 	res->timeProducedLen = glen;
 	res->timeProduced = p;
@@ -5157,7 +5019,7 @@ int32_t parseOCSPResponse(psPool_t *pool, int32_t len, unsigned char **cp,
 			psTraceCrypto("Couldn't parse response in parseOCSPResponse\n");
 			return PS_PARSE_FAIL;
 		}
-		if (oi == 117) {
+		if (oi == OID_BASIC_OCSP_RESPONSE) {
 			/* id-pkix-ocsp-basic
 			
 				BasicOCSPResponse       ::= SEQUENCE {
@@ -5171,7 +5033,7 @@ int32_t parseOCSPResponse(psPool_t *pool, int32_t len, unsigned char **cp,
 				psTraceCrypto("parseBasicOCSPResponse failure\n");
 				return PS_PARSE_FAIL;
 			}
-		} else if (oi == 116) {
+		} else if (oi == OID_OCSP) {
 			/* id-pkix-ocsp */
 			psTraceCrypto("unsupported id-pkix-ocsp in parseOCSPResponse\n");
 			return PS_PARSE_FAIL;
@@ -5198,8 +5060,8 @@ int32_t parseOCSPResponse(psPool_t *pool, int32_t len, unsigned char **cp,
 
    @param response Pointer to OCSP response structure (from parseOCSPResponse)
    @param index The index of OCSP single response to handle (0 for the first).
-   @param timeNow A pointer to structure filled in with gmtime(), structure
-   initialized to all zero or NULL.
+   @param timeNow A pointer to structure filled in with psGetBrokenDownGMTime(),
+                  or gmtime(), structure initialized to all zero or NULL.
    @param producedAt If non-NULL Will be filled in with time the structure
    was produced.
    @param thisUpdate If non-NULL Will be filled in with time the OCSP
@@ -5217,16 +5079,17 @@ int32_t parseOCSPResponse(psPool_t *pool, int32_t len, unsigned char **cp,
  */
 int32_t checkOCSPResponseDates(mOCSPResponse_t *response,
 			       int index,
-			       struct tm *timeNow,
-			       struct tm *producedAt,
-			       struct tm *thisUpdate,
-			       struct tm *nextUpdate,
+			       psBrokenDownTime_t *timeNow,
+			       psBrokenDownTime_t *producedAt,
+			       psBrokenDownTime_t *thisUpdate,
+			       psBrokenDownTime_t *nextUpdate,
 			       int time_linger)
 {
-	struct tm tmp, tmp2, tmp3, tmp4;
+	psBrokenDownTime_t tmp, tmp2, tmp3, tmp4;
 	unsigned char ok = 1;
 	int32 err;
 	mOCSPSingleResponse_t	*subjectResponse;
+	psBrokenDownTime_t timeNowLinger;
 
 	if (index >= MAX_OCSP_RESPONSES)
 		return PS_ARG_FAIL;
@@ -5237,14 +5100,16 @@ int32_t checkOCSPResponseDates(mOCSPResponse_t *response,
 	}
 
 	if (timeNow->tm_year == 0) {
-		/* The structure appears not filled in, use gmtime() to
+		/* The structure appears not filled in, use psGetBrokenDownGMTime() to
 		   get the current time. */
-		time_t time_seconds = time(NULL);
-		struct tm *new_tm = gmtime(&time_seconds);
-		if (new_tm == NULL)
+		err = psGetBrokenDownGMTime(timeNow, 0);
+		if (err != PS_SUCCESS)
 			return PS_FAIL;
-		memcpy(timeNow, new_tm, sizeof(struct tm));
 	}
+	memcpy(&timeNowLinger, timeNow, sizeof timeNowLinger);
+	err = psBrokenDownTimeAdd(&timeNowLinger, time_linger);
+	if (err != PS_SUCCESS)
+		return PS_FAIL;
 
 	if (thisUpdate == NULL)
 		thisUpdate = &tmp2;
@@ -5255,65 +5120,57 @@ int32_t checkOCSPResponseDates(mOCSPResponse_t *response,
 	if (producedAt == NULL)
 		producedAt = &tmp4;
 
-	ok &= parsedate_ocsp(response->timeProduced,
-			     ASN_GENERALIZEDTIME,
-			     response->timeProducedLen,
-			     producedAt);
+	ok &= psBrokenDownTimeImport(producedAt,
+								 (const char *) response->timeProduced,
+								 response->timeProducedLen,
+								 0) == PS_SUCCESS;
 
 	subjectResponse = &response->singleResponse[index];
 
 	if (subjectResponse->thisUpdate)
-		ok &= parsedate_ocsp(subjectResponse->thisUpdate,
-				     ASN_GENERALIZEDTIME,
-				     subjectResponse->thisUpdateLen,
-				     thisUpdate);
+		ok &= psBrokenDownTimeImport(thisUpdate,
+									 (const char *) subjectResponse->thisUpdate,
+									 subjectResponse->thisUpdateLen,
+									 0) == PS_SUCCESS;
 	else
 		ok = 0;
 
 	if (subjectResponse->nextUpdate != NULL) {
 		/* Next update provided, OCSP is valid until that time. */
-		ok &= parsedate_ocsp(subjectResponse->nextUpdate,
-				     ASN_GENERALIZEDTIME,
-				     subjectResponse->nextUpdateLen,
-				     nextUpdate);
+		ok &= psBrokenDownTimeImport(nextUpdate,
+									 (const char *) subjectResponse->nextUpdate,
+									 subjectResponse->nextUpdateLen,
+									 0) == PS_SUCCESS;
 	} else if (ok) {
 		/* If there is no next update, the server supports
 		   continous updates and nextUpdate time is considered
 		   identical to the this update time. */
-		ok &= parsedate_ocsp(subjectResponse->thisUpdate,
-				     ASN_GENERALIZEDTIME,
-				     subjectResponse->thisUpdateLen,
-				     nextUpdate);
+		ok &= psBrokenDownTimeImport(nextUpdate,
+									 (const char *) subjectResponse->thisUpdate,
+									 subjectResponse->thisUpdateLen,
+									 0) == PS_SUCCESS;
 	}
 
 	if (ok == 1) {
-		/* Convert times to seconds for comparison.
-		   These also fill in additional fields in tm, like
-		   current day. */
-		time_t thisUpdateTime = timegm(thisUpdate);
-		time_t nextUpdateTime = timegm(nextUpdate);
-		time_t nextUpdateTimeNew;
-		time_t nowTime = timegm(timeNow);
-		(void)timegm(producedAt);
+		/* Consider linger when comparing nextUpdateTime. */
+		psBrokenDownTime_t nextUpdateTimeLinger;
+		memcpy(&nextUpdateTimeLinger, nextUpdate, sizeof nextUpdateTimeLinger);
+		err = psBrokenDownTimeAdd(&nextUpdateTimeLinger, time_linger);
+		if (err != PS_SUCCESS)
+			return err;
 
-		/* Move thisUpdate_time linger seconds back. */
-		if (thisUpdateTime > time_linger)
-			thisUpdateTime -= time_linger;
-		else
-			thisUpdateTime = 0;
+		/* Now check that current time considering linger is between
+		   thisUpdate and nextUpdate. */
 
-		/* Move nextUpdate_time linger seconds to future.
-		   This is not done for times very close to end of
-		   representable time range, such as Y2K38 (on 32-bit
-		   devices). */
-		nextUpdateTimeNew = nextUpdateTime + time_linger;
-		if (nextUpdateTimeNew > nextUpdateTime)
-			nextUpdateTime = nextUpdateTimeNew;
-
-		if (thisUpdateTime <= nowTime && nowTime <= nextUpdateTime)
-			err = PS_SUCCESS;
-		else
+		if (psBrokenDownTimeCmp(thisUpdate, &timeNowLinger) > 0) {
+			/* thisUpdate is in future even considering linger => reject. */
 			err = PS_TIMEOUT_FAIL;
+		} else if (psBrokenDownTimeCmp(&nextUpdateTimeLinger, timeNow) < 0) {
+			/* nextUpdate is in past even considering linger => reject. */
+			err = PS_TIMEOUT_FAIL;
+		} else {
+			/* err has already been set to PS_SUCCESS */
+		}
 	} else {
 		err = PS_PARSE_FAIL;
 	}
@@ -5322,11 +5179,11 @@ int32_t checkOCSPResponseDates(mOCSPResponse_t *response,
 
 
 /* Diff the current time against the OCSP timestamp and confirm it's not
-	longer than the user is willing to trust */
+   longer than the user is willing to trust. */
 static int32_t checkOCSPtimestamp(mOCSPResponse_t *response, int index)
 {
 	return checkOCSPResponseDates(response, index, NULL, NULL, NULL, NULL,
-				      PS_OCSP_TIME_LINGER);
+								  PS_OCSP_TIME_LINGER);
 }
 
 /* Partial OCSP request parser: just locate nonceExtension if present. */
@@ -5434,7 +5291,7 @@ int32_t validateOCSPResponse_ex(psPool_t *pool, psX509Cert_t *trustedOCSP,
 				while (ocspResIssuer) {
 					if (memcmp(ocspResIssuer->subject.hash,
 							subject->issuer.hash, 20) == 0) {
-						
+
 						if (psX509AuthenticateCert(pool, subject, ocspResIssuer,
 								&ocspResIssuer, NULL, NULL) == 0) {
 							/* OK, we held the CA that issued the OCSPResponse
@@ -5461,7 +5318,7 @@ int32_t validateOCSPResponse_ex(psPool_t *pool, psX509Cert_t *trustedOCSP,
 			return PS_FAILURE; /* no preloaded CA to auth cert in response */
 		}
 	}
-	
+
 	/* Issuer will be NULL if there was no certificate attached to the
 		OCSP response.  Now look to the user loaded CA files */
 	if (issuer == NULL) {
@@ -5477,7 +5334,7 @@ int32_t validateOCSPResponse_ex(psPool_t *pool, psX509Cert_t *trustedOCSP,
 			}
 		}
 	}
-	
+
 	/* It is possible a certificate embedded in the server certificate
 			chain was itself the OCSP responder */
 	if (issuer == NULL) {
@@ -5495,22 +5352,22 @@ int32_t validateOCSPResponse_ex(psPool_t *pool, psX509Cert_t *trustedOCSP,
 			}
 		}
 	}
-	
+
 	if (issuer == NULL) {
 		psTraceCrypto("Unable to locate OCSP responder CA for validation\n");
 		return PS_FAILURE;
 	}
-	
+
 	/* Now check to see that the response is vouching for the subject cert
 		that we are interested in.  The subject will always be the first
 		cert in the server CERTIFICATE chain */
 	subject = srvCerts;
-	
+
 	/* Now look to match this cert within the singleResponse members.
-	
+
 		There are three components to a CertID that should be used to validate
 		we are looking at the correct OCSP response for the subjecct cert.
-		
+
 		It appears the only "unique" portion of our subject cert that
 		went into the signature of this response is the serial number.
 		The "issuer" information of the subject cert also went into the
@@ -5532,17 +5389,18 @@ int32_t validateOCSPResponse_ex(psPool_t *pool, psX509Cert_t *trustedOCSP,
 		psTraceCrypto("Unable to locate our subject cert in OCSP response\n");
 		return PS_FAILURE;
 	}
-	
-	/* If the response is reporting that this cert is bad right in the status,
-		just return that immediately and stop the connection */
+	if (vOpts->index_p != NULL) {
+		*(vOpts->index_p) = index; /* Write index of response. */
+	}
+
+	/* Obtain general revocation status. */
 	if (subjectResponse->certStatus == 0) {
 		knownFlag = true;
 		revocationFlag = false;
 	} else if (subjectResponse->certStatus == 1) {
 		knownFlag = true;
 		revocationFlag = true;
-		/* Server is revoked, but still check rest of
-		   the response. */
+		/* certificate is revoked, but still check rest of the response. */
 	}
 
 	/* Is the response within the acceptable time window */
@@ -5554,12 +5412,11 @@ int32_t validateOCSPResponse_ex(psPool_t *pool, psX509Cert_t *trustedOCSP,
 	/* Check if nonces match. */
 	if (nonceExtReq.buf && vOpts->nonceMatch) {
 		if (response->nonce.buf == NULL)
-			*(vOpts->nonceMatch) = false; /* No nonce in response. */
+			/* No nonce in response. */
+			*(vOpts->nonceMatch) = false;
 		else
 			/* Compare nonces. */
-			*(vOpts->nonceMatch) =
-				psBufEq(&nonceExtReq,
-					&response->nonce);
+			*(vOpts->nonceMatch) = psBufEq(&nonceExtReq, &response->nonce);
 	}
 
 #if 0 /* The issuer here is pointing to the cert that signed the OCSPRespose
@@ -5570,7 +5427,7 @@ int32_t validateOCSPResponse_ex(psPool_t *pool, psX509Cert_t *trustedOCSP,
 
 	/* Issuer portion of the validation - the subject cert issuer key and name
 		hash should match what the subjectResponse reports
-	
+
 		POSSIBLE PROBLEMS:  Only supporting a SHA1 hash here.  The MatrixSSL
 		parser will only use SHA1 for the DN and key hash. Just warning on
 		this for now.  The signature validation will catch any key mismatch */
@@ -5591,7 +5448,6 @@ int32_t validateOCSPResponse_ex(psPool_t *pool, psX509Cert_t *trustedOCSP,
 	}
 #endif	 /* 0 */
 
-	
 	/* Finally do the sig validation */
 	switch (response->sigAlg) {
 #ifdef USE_SHA256
@@ -5626,7 +5482,7 @@ int32_t validateOCSPResponse_ex(psPool_t *pool, psX509Cert_t *trustedOCSP,
 		/* Should have been caught in parse phase */
 		return PS_UNSUPPORTED_FAIL;
 	}
-	
+
 	/* Finally test the signature */
 	if (sigType == PS_RSA) {
 		if (issuer->publicKey.type != PS_RSA) {
@@ -5662,7 +5518,7 @@ int32_t validateOCSPResponse_ex(psPool_t *pool, psX509Cert_t *trustedOCSP,
 		}
 	}
 #endif
-	
+
 	if (vOpts->knownFlag)
 		*(vOpts->knownFlag) = knownFlag;
 
@@ -5674,12 +5530,10 @@ int32_t validateOCSPResponse_ex(psPool_t *pool, psX509Cert_t *trustedOCSP,
 			*(vOpts->revocationFlag) = revocationFlag;
 
 		if (vOpts->revocationTime) {
-			if (parsedate_ocsp(
-				    subjectResponse->revocationTime,
-				    ASN_GENERALIZEDTIME,
-				    sizeof(subjectResponse->revocationTime),
-				    vOpts->revocationTime))
-				(void)timegm(vOpts->revocationTime);
+			(void)psBrokenDownTimeImport(
+				vOpts->revocationTime,
+				(const char *) subjectResponse->revocationTime,
+				sizeof(subjectResponse->revocationTime), 0);
 		}
 
 		if (vOpts->revocationReason)
@@ -5688,7 +5542,7 @@ int32_t validateOCSPResponse_ex(psPool_t *pool, psX509Cert_t *trustedOCSP,
 
 		/* Function fails if certificate was revoked. */
 		if (revocationFlag)
-			return PS_FAILURE;
+			return PS_CERT_AUTH_FAIL_REVOKED;
 	}
 
 	/* Was able to successfully confirm OCSP signature for our subject */
@@ -5696,11 +5550,16 @@ int32_t validateOCSPResponse_ex(psPool_t *pool, psX509Cert_t *trustedOCSP,
 }
 
 int32_t validateOCSPResponse(psPool_t *pool, psX509Cert_t *trustedOCSP,
-			     psX509Cert_t *srvCerts,
-			     mOCSPResponse_t *response) {
-	return validateOCSPResponse_ex(pool, trustedOCSP, srvCerts, response,
-				       NULL);
+							 psX509Cert_t *srvCerts,
+							 mOCSPResponse_t *response) {
+	return validateOCSPResponse_ex(pool, trustedOCSP, srvCerts, response, NULL);
 }
+
+void uninitOCSPResponse(mOCSPResponse_t *res) {
+	psX509FreeCert(res->OCSPResponseCert);
+	memset(res, 0, sizeof(*res));
+}
+
 
 #endif /* USE_OCSP */
 

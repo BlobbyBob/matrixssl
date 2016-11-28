@@ -27,6 +27,11 @@
 #                         using the MatrixSSL stock crypto.
 # make all-rsaonly        Build MatrixSSL using options that disable ECC and DH,
 #                         using the MatrixSSL stock crypto.
+# make all-psk            Build MatrixSSL with support for only a single PSK
+#                         ciphersuite using MatrixSSL stock crypto.
+#                         This is the smallest possible configuration,
+#                         except that both server- and client-side TLS are enabled
+#                         for easier testing.
 #
 # Additional targets for MatrixSSL FIPS Edition
 #
@@ -109,6 +114,11 @@ all-noecc:
 # Only support RSA (MatrixSSL stock crypto)
 all-rsaonly:
 	make $(CONFIG_NONFIPS_PREFIX)rsaonly-config
+	make all
+
+# Only support RSA (MatrixSSL stock crypto)
+all-psk:
+	make $(CONFIG_NONFIPS_PREFIX)psk-config
 	make all
 
 # A commonly recommended set of options for MatrixSSL using stock crypto,
@@ -205,7 +215,7 @@ apps_crypto:
 #endif /* MATRIXSSL_COMMERCIAL */
 
 apps: $(APPS_ADDITIONAL)
-	$(MAKE) --directory=apps/ssl
+	if make --directory=matrixssl parse-config | grep -q '#define USE_ZLIB_COMPRESSION'; then EXTRA_LDFLAGS=-lz $(MAKE) --directory=apps/ssl; else $(MAKE) --directory=apps/ssl; fi;
 	$(MAKE) --directory=apps/dtls
 
 clean:

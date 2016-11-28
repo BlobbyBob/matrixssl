@@ -446,7 +446,7 @@ static int32 psParseIntegrityMode(const unsigned char **buf, int32 totLen)
 		return rc;
 	}
 
-	if (oi == PKCS7_DATA) {
+	if (oi == OID_PKCS7_DATA) {
 		/* Data ::= OCTET STRING */
 		if (*p++ != (ASN_CONTEXT_SPECIFIC | ASN_CONSTRUCTED)) {
 			return PS_PARSE_FAIL;
@@ -460,7 +460,7 @@ static int32 psParseIntegrityMode(const unsigned char **buf, int32 totLen)
 			return PS_FAILURE;
 		}
 		rc = PASSWORD_INTEGRITY;
-	} else if (oi == PKCS7_SIGNED_DATA) {
+	} else if (oi == OID_PKCS7_SIGNED_DATA) {
 		psTraceCrypto("SignedData integrity mode not supported\n");
 		return PS_UNSUPPORTED_FAIL;
 		/* rc = PUBKEY_INTEGRITY; */
@@ -913,7 +913,7 @@ static int32 parseSafeContents(psPool_t *pool, unsigned char *password,
 		}
 
 		switch (bagoi) {
-			case PKCS12_BAG_TYPE_CERT:
+			case OID_PKCS12_BAG_TYPE_CERT:
 				/*
 				CertBag ::= SEQUENCE {
 				  certId    BAG-TYPE.&id   ({CertTypes}),
@@ -937,7 +937,7 @@ static int32 parseSafeContents(psPool_t *pool, unsigned char *password,
 					psTraceCrypto("Initial CertBag parse failure\n");
 					return rc;
 				}
-				if (certoi != PKCS9_CERT_TYPE_X509) {
+				if (certoi != OID_PKCS9_CERT_TYPE_X509) {
 					psTraceIntCrypto("Unsupported CertBag type %d\n", certoi);
 					return PS_UNSUPPORTED_FAIL;
 				}
@@ -975,7 +975,7 @@ static int32 parseSafeContents(psPool_t *pool, unsigned char *password,
 				p += rc;
 				break;
 
-			case PKCS12_BAG_TYPE_SHROUD:
+			case OID_PKCS12_BAG_TYPE_SHROUD:
 				/* A PKCS8ShroudedKeyBag holds a private key, which has been
 					shrouded in accordance with PKCS #8.  Note that a
 					PKCS8ShroudedKeyBag holds only one shrouded private key. */
@@ -999,7 +999,7 @@ static int32 parseSafeContents(psPool_t *pool, unsigned char *password,
 				psFree(pt, pool);
 				p += cryptlen;
 				break;
-			case PKCS12_BAG_TYPE_KEY:
+			case OID_PKCS12_BAG_TYPE_KEY:
 				if ((rc = pkcs8ParsePrivBin(pool, (unsigned char*)p, tmplen,
 						NULL, privKey))	< 0) {
 					psTraceIntCrypto("Failed PKCS8 key parse %d\n", rc);
@@ -1072,7 +1072,7 @@ static int32 psParseAuthenticatedSafe(psPool_t *pool, psX509Cert_t **cert,
 			psTraceCrypto("Initial content info parse failure\n");
 			return rc;
 		}
-		if (oi == PKCS7_ENCRYPTED_DATA) {
+		if (oi == OID_PKCS7_ENCRYPTED_DATA) {
 			/* password protected mode */
 			if (*p++ != (ASN_CONTEXT_SPECIFIC | ASN_CONSTRUCTED)) {
 				psTraceCrypto("Initial pkcs7 encrypted data parse failure\n");
@@ -1110,7 +1110,7 @@ static int32 psParseAuthenticatedSafe(psPool_t *pool, psX509Cert_t **cert,
 				psTraceCrypto("Initial EncryptedContentInfo parse failure\n");
 				return rc;
 			}
-			psAssert(oi == PKCS7_DATA);
+			psAssert(oi == OID_PKCS7_DATA);
 
 			if ((rc = pkcs12import(pool, &p, (int32)(end - p), importPass,
 					ipassLen, &pt, &tmplen)) < 0) {
@@ -1129,7 +1129,7 @@ static int32 psParseAuthenticatedSafe(psPool_t *pool, psX509Cert_t **cert,
 			}
 			psFree(pt, pool);
 			p += rc;
-		} else if (oi == PKCS7_DATA) {
+		} else if (oi == OID_PKCS7_DATA) {
 			/* Data ::= OCTET STRING */
 			if (*p++ != (ASN_CONTEXT_SPECIFIC | ASN_CONSTRUCTED)) {
 				psTraceCrypto("Initial pkcs7 data parse failure\n");
@@ -1337,7 +1337,7 @@ ERR_FBUF:
 
 #ifdef MATRIX_USE_FILE_SYSTEM
 
-#ifdef USE_PKCS5
+#if defined(USE_PKCS5) && defined(USE_PBKDF1)
 /******************************************************************************/
 /*
 	Convert an ASCII hex representation to a binary buffer.
@@ -1372,7 +1372,7 @@ static int32 hexToBinary(unsigned char *hex, unsigned char *bin, int32 binlen)
 	}
 	return binlen * 2;
 }
-#endif /* USE_PKCS5 */
+#endif /* USE_PKCS5 && USE_PBKDF1 */
 
 #ifdef USE_RSA
 int32_t pkcs1ParsePubFile(psPool_t *pool, const char *fileName, psRsaKey_t *key)
@@ -1475,7 +1475,7 @@ int32_t pkcs1DecodePrivFile(psPool_t *pool, const char *fileName,
 	char			*start, *end, *endTmp;
 	int32			keyBufLen, rc;
 	uint32			PEMlen = 0;
-#ifdef USE_PKCS5
+#if defined(USE_PKCS5) && defined(USE_PBKDF1)
 	psDes3_t		dctx;
 	psAesCbc_t		actx;
 	unsigned char	passKey[32]; /* AES-256 max */
@@ -1484,7 +1484,7 @@ int32_t pkcs1DecodePrivFile(psPool_t *pool, const char *fileName,
 
 	static const char des3encryptHeader[]	= "DEK-Info: DES-EDE3-CBC,";
 	static const char aes128encryptHeader[]	= "DEK-Info: AES-128-CBC,";
-#endif /* USE_PKCS5 */
+#endif /* USE_PKCS5 && USE_PBKDF1 */
 
 	if (fileName == NULL) {
 		psTraceCrypto("No fileName passed to pkcs1DecodePrivFile\n");
@@ -1522,7 +1522,7 @@ int32_t pkcs1DecodePrivFile(psPool_t *pool, const char *fileName,
 
 	if (strstr((char*)keyBuf, "Proc-Type:") &&
 			strstr((char*)keyBuf, "4,ENCRYPTED")) {
-#ifdef USE_PKCS5
+#if defined(USE_PKCS5) && defined(USE_PBKDF1)
 		if (password == NULL) {
 			psTraceCrypto("No password given for encrypted private key file\n");
 			psFree(keyBuf, pool);
@@ -1551,15 +1551,24 @@ int32_t pkcs1DecodePrivFile(psPool_t *pool, const char *fileName,
 			return PS_FAILURE;
 		}
 		start += tmp;
-		pkcs5pbkdf1((unsigned char*)password, strlen(password),
-			cipherIV, 1, (unsigned char*)passKey);
+		if (pkcs5pbkdf1((unsigned char*)password, strlen(password),
+						cipherIV, 1, (unsigned char*)passKey) < 0) {
+			psTraceCrypto("pkcs5pbkdf1 failed\n");
+			psFree(keyBuf, pool);
+			return PS_FAILURE;
+		}
 		PEMlen = (int32)(end - start);
-#else  /* !USE_PKCS5 */
+#else  /* !USE_PKCS5 || !USE_PBKDF1 */
 		/* The private key is encrypted, but PKCS5 support has been turned off */
+#ifndef USE_PKCS5
 		psTraceCrypto("USE_PKCS5 must be enabled for key file password\n");
+#endif /* USE_PKCS5 */
+#ifndef USE_PBKDF1
+		psTraceCrypto("USE_PBKDF1 must be enabled for key file password\n");
+#endif /* USE_PBKDF1 */
 		psFree(keyBuf, pool);
 		return PS_UNSUPPORTED_FAIL;
-#endif /* USE_PKCS5 */
+#endif /* USE_PKCS5 && USE_PBKDF1 */
 	}
 
 	/* Take the raw input and do a base64 decode */
@@ -1582,7 +1591,7 @@ int32_t pkcs1DecodePrivFile(psPool_t *pool, const char *fileName,
 	}
 	psFree(keyBuf, pool);
 
-#ifdef USE_PKCS5
+#if defined(USE_PKCS5) && defined(USE_PBKDF1)
 	if (encrypted == 1 && password) {
 		psDes3Init(&dctx, cipherIV, passKey);
 		psDes3Decrypt(&dctx, dout, dout, *DERlen);
@@ -1596,7 +1605,7 @@ int32_t pkcs1DecodePrivFile(psPool_t *pool, const char *fileName,
 	}
 	/* SECURITY - zero out keys when finished */
 	memset_s(passKey, sizeof(passKey), 0x0, sizeof(passKey));
-#endif /* USE_PKCS5 */
+#endif /* USE_PKCS5 && USE_PBKDF1 */
 	*DERout = dout;
 
 	return PS_SUCCESS;
@@ -1608,6 +1617,7 @@ int32_t pkcs1DecodePrivFile(psPool_t *pool, const char *fileName,
 
 /******************************************************************************/
 #ifdef USE_PKCS5
+#ifdef USE_PBKDF1
 /******************************************************************************/
 /*
  Generate a key given a password and salt value.
@@ -1629,21 +1639,30 @@ int32_t pkcs1DecodePrivFile(psPool_t *pool, const char *fileName,
  salt is assumed to point to 8 bytes of data
  key is assumed to point to 24 bytes of data
  */
-void pkcs5pbkdf1(unsigned char *pass, uint32 passlen, unsigned char *salt,
-				 int32 iter, unsigned char *key)
+int32_t pkcs5pbkdf1(unsigned char *pass, uint32 passlen, unsigned char *salt,
+					int32 iter, unsigned char *key)
 {
+	int32_t rc;
 	psDigestContext_t	md;
 	unsigned char		md5[MD5_HASH_SIZE];
-
 	psAssert(iter == 1);
 
-	psMd5Init(&md.md5);
+	rc = psMd5Init(&md.md5);
+	if (rc != PS_SUCCESS) {
+		psTraceCrypto("psMd5Init failed. Please ensure non-FIPS mode.\n");
+		return rc;
+	}
 	psMd5Update(&md.md5, pass, passlen);
 	psMd5Update(&md.md5, salt, 8);
 	psMd5Final(&md.md5, md5);
 	memcpy(key, md5, MD5_HASH_SIZE);
 
-	psMd5Init(&md.md5);
+	rc = psMd5Init(&md.md5);
+	if (rc != PS_SUCCESS) {
+		psTraceCrypto("psMd5Init failed. Please ensure non-FIPS mode.\n");
+		return rc;
+	}
+
 	psMd5Update(&md.md5, md5, MD5_HASH_SIZE);
 	psMd5Update(&md.md5, pass, passlen);
 	psMd5Update(&md.md5, salt, 8);
@@ -1652,7 +1671,9 @@ void pkcs5pbkdf1(unsigned char *pass, uint32 passlen, unsigned char *salt,
 
 	memset_s(md5, MD5_HASH_SIZE, 0x0, MD5_HASH_SIZE);
 	memset_s(&md, sizeof(psDigestContext_t), 0x0, sizeof(psDigestContext_t));
+	return PS_SUCCESS;
 }
+#endif /* USE_PBKDF1 */
 
 #if defined(USE_HMAC_SHA1)
 /******************************************************************************/
@@ -1872,11 +1893,13 @@ static int32 pkcs_1_mgf1(psPool_t *pool, const unsigned char *seed,
 			psSha1Update(&md.sha1, seed, seedlen);
 			psSha1Update(&md.sha1, buf, 4);
 			psSha1Final(&md.sha1, buf);
+#ifdef USE_MD5
 		} else if (hash_idx == PKCS1_MD5_ID) {
 			psMd5Init(&md.md5);
 			psMd5Update(&md.md5, seed, seedlen);
 			psMd5Update(&md.md5, buf, 4);
 			psMd5Final(&md.md5, buf);
+#endif /* USE_MD5 */
 #ifdef USE_SHA256
 		} else if (hash_idx == PKCS1_SHA256_ID) {
 			psSha256Init(&md.sha256);
@@ -1951,7 +1974,13 @@ int32 pkcs1OaepEncode(psPool_t *pool, const unsigned char *msg, uint32 msglen,
 	if (hash_idx == PKCS1_SHA1_ID) {
 		hLen = SHA1_HASH_SIZE;
 	} else if (hash_idx == PKCS1_MD5_ID) {
+#ifdef USE_MD5
 		hLen = MD5_HASH_SIZE;
+#else
+		psTraceCrypto("MD5 not supported in this build.");
+		psTraceCrypto(" Please enable USE_MD5\n");
+		return PS_UNSUPPORTED_FAIL;
+#endif /* USE_MD5 */
 	} else {
 		psTraceStrCrypto("Bad hash index to OAEP encode\n", NULL);
 		return PS_ARG_FAIL;
@@ -2003,22 +2032,28 @@ int32 pkcs1OaepEncode(psPool_t *pool, const unsigned char *msg, uint32 msglen,
 			psSha1Init(&md.sha1);
 			psSha1Update(&md.sha1, lparam, lparamlen);
 			psSha1Final(&md.sha1, DB);
-		} else {
+		}
+#ifdef USE_MD5
+		else {
 			psMd5Init(&md.md5);
 			psMd5Update(&md.md5, lparam, lparamlen);
 			psMd5Final(&md.md5, DB);
 		}
+#endif /* USE_MD5 */
 	} else {
 		/* can't pass hash a NULL so use DB with zero length */
 		if (hash_idx == PKCS1_SHA1_ID) {
 			psSha1Init(&md.sha1);
 			psSha1Update(&md.sha1, DB, 0);
 			psSha1Final(&md.sha1, DB);
-		} else {
+		}
+#ifdef USE_MD5
+		else {
 			psMd5Init(&md.md5);
 			psMd5Update(&md.md5, DB, 0);
 			psMd5Final(&md.md5, DB);
 		}
+#endif /* USE_MD5 */
 	}
 
 /*
@@ -2155,7 +2190,13 @@ int32 pkcs1OaepDecode(psPool_t *pool, const unsigned char *msg, uint32 msglen,
 	if (hash_idx == PKCS1_SHA1_ID) {
 		hLen = SHA1_HASH_SIZE;
 	} else if (hash_idx == PKCS1_MD5_ID) {
+#ifdef USE_MD5
 		hLen = MD5_HASH_SIZE;
+#else
+		psTraceCrypto("MD5 not supported in this build.");
+		psTraceCrypto(" Please enable USE_MD5\n");
+		return PS_UNSUPPORTED_FAIL;
+#endif /* USE_MD5 */
 	} else {
 		psTraceStrCrypto("Bad hash index to OAEP decode\n", NULL);
 		return PS_ARG_FAIL;
@@ -2261,22 +2302,28 @@ int32 pkcs1OaepDecode(psPool_t *pool, const unsigned char *msg, uint32 msglen,
 			psSha1Init(&md.sha1);
 			psSha1Update(&md.sha1, lparam, lparamlen);
 			psSha1Final(&md.sha1, seed);
-		} else {
+		}
+#ifdef USE_MD5
+		else {
 			psMd5Init(&md.md5);
 			psMd5Update(&md.md5, lparam, lparamlen);
 			psMd5Final(&md.md5, seed);
 		}
+#endif /* USE_MD5 */
 	} else {
 		/* can't pass hash routine a NULL so use DB with zero length */
 		if (hash_idx == PKCS1_SHA1_ID) {
 			psSha1Init(&md.sha1);
 			psSha1Update(&md.sha1, DB, 0);
 			psSha1Final(&md.sha1, seed);
-		} else {
+		}
+#ifdef USE_MD5
+		else {
 			psMd5Init(&md.md5);
 			psMd5Update(&md.md5, DB, 0);
 			psMd5Final(&md.md5, seed);
 		}
+#endif /* USE_MD5 */
 	}
 
 /*
@@ -2363,7 +2410,13 @@ int32 pkcs1PssEncode(psPool_t *pool, const unsigned char *msghash,
 	if (hash_idx == PKCS1_SHA1_ID) {
 		hLen = SHA1_HASH_SIZE;
 	} else if (hash_idx == PKCS1_MD5_ID) {
+#ifdef USE_MD5
 		hLen = MD5_HASH_SIZE;
+#else
+		psTraceCrypto("MD5 not supported in this build.");
+		psTraceCrypto(" Please enable USE_MD5\n");
+		return PS_UNSUPPORTED_FAIL;
+#endif /* USE_MD5 */
 #ifdef USE_SHA256
 	} else if (hash_idx == PKCS1_SHA256_ID) {
 		hLen = SHA256_HASH_SIZE;
@@ -2419,13 +2472,16 @@ int32 pkcs1PssEncode(psPool_t *pool, const unsigned char *msghash,
 		psSha1Update(&md.sha1, msghash, msghashlen);
 		psSha1Update(&md.sha1, salt, saltlen);
 		psSha1Final(&md.sha1, hash);
-	} else if (hash_idx == PKCS1_MD5_ID) {
+	}
+#ifdef USE_MD5
+	if (hash_idx == PKCS1_MD5_ID) {
 		psMd5Init(&md.md5);
 		psMd5Update(&md.md5, DB, 8); /* 8 0's */
 		psMd5Update(&md.md5, msghash, msghashlen);
 		psMd5Update(&md.md5, salt, saltlen);
 		psMd5Final(&md.md5, hash);
 	}
+#endif /* USE_MD5 */
 #ifdef USE_SHA256
 	if (hash_idx == PKCS1_SHA256_ID) {
 		psSha256Init(&md.sha256);
@@ -2523,7 +2579,13 @@ int32 pkcs1PssDecode(psPool_t *pool, const unsigned char *msghash,
 	if (hash_idx == PKCS1_SHA1_ID) {
 		hLen = SHA1_HASH_SIZE;
 	} else if (hash_idx == PKCS1_MD5_ID) {
+#ifdef USE_MD5
 		hLen = MD5_HASH_SIZE;
+#else
+		psTraceCrypto("MD5 not supported in this build.");
+		psTraceCrypto(" Please enable USE_MD5\n");
+		return PS_UNSUPPORTED_FAIL;
+#endif /* USE_MD5 */
 #ifdef USE_SHA256
 	} else if (hash_idx == PKCS1_SHA256_ID) {
 		hLen = SHA256_HASH_SIZE;
@@ -2629,7 +2691,9 @@ int32 pkcs1PssDecode(psPool_t *pool, const unsigned char *msghash,
 		psSha1Update(&md.sha1, msghash, msghashlen);
 		psSha1Update(&md.sha1, DB+x, saltlen);
 		psSha1Final(&md.sha1, mask);
-	} else if (hash_idx == PKCS1_MD5_ID) {
+	}
+#ifdef USE_MD5
+	if (hash_idx == PKCS1_MD5_ID) {
 		psMd5Init(&md.md5);
 		memset(mask, 0x0, 8);
 		psMd5Update(&md.md5, mask, 8);
@@ -2637,6 +2701,8 @@ int32 pkcs1PssDecode(psPool_t *pool, const unsigned char *msghash,
 		psMd5Update(&md.md5, DB+x, saltlen);
 		psMd5Final(&md.md5, mask);
 	}
+#endif /* USE_MD5 */
+
 #ifdef USE_SHA256
 	if (hash_idx == PKCS1_SHA256_ID) {
 		psSha256Init(&md.sha256);

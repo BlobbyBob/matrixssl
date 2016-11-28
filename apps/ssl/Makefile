@@ -34,10 +34,11 @@ STATIC:=\
 	$(MATRIXSSL_ROOT)/crypto/libcrypt_s.a \
 	$(MATRIXSSL_ROOT)/core/libcore_s.a
 
-CIPHER_OPTION=ID_RSA # The default cipher option
-CFLAGS+=-D$(CIPHER_OPTION)
-
-all: compile
+# Allow selecting the client auth identity (ID_RSA, ID_ECDH_ECDSA,
+# etc.) via an environment variable.
+ifneq '$(CIPHER_OPTION)' ''
+  CFLAGS+=-D$(CIPHER_OPTION)
+endif
 
 compile: $(OBJS) $(EXE)
 

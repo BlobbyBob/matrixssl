@@ -36,7 +36,7 @@
 
 /****************************** Local Functions *******************************/
 
-#if ((!defined USE_ONLY_PSK_CIPHER_SUITE) && (defined MATRIX_USE_FILE_SYSTEM))
+#if defined(USE_CERT_VALIDATE) && defined(MATRIX_USE_FILE_SYSTEM)
 
 static void usage(void)
 {
@@ -237,11 +237,23 @@ L_EXIT:
 
 int32 main(int32 argc, char **argv)
 {
+#ifndef USE_CERT_PARSE
+	printf("Please enable USE_CERT_PARSE for this test\n");
+#endif
+#ifndef USE_MATRIX_FILE_SYSTEM
+	printf("Please enable USE_MATRIX_FILE_SYSTEM for this test\n");
+#endif
+#ifdef USE_ONLY_PSK_CIPHER_SUITE
 	printf("Not applicable when USE_ONLY_PSK_CIPHER_SUITE defined\n");
+#endif
+#if !defined(USE_CLIENT_SIDE_SSL) && !defined(USE_CLIENT_AUTH)
+	printf("Certificate validation requires either USE_CLIENT_SIDE_SSL " \
+		   "or USE_CLIENT_AUTH. Please enable one of those\n");
+#endif
 	return 0;
 }
 
-#endif /* USE_ONLY_PSK_CIPHER_SUITE */
+#endif /* USE_CERT_VALIDATE && MATRIX_USE_FILE_SYSTEM */
 
 /******************************************************************************/
 

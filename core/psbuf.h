@@ -91,6 +91,8 @@ static __inline void *psDynBufAppendChar(psDynBuf_t *db, char ch)
     return loc;
 }
 
+void *psDynBufAppendUtf8(psDynBuf_t *db, int chr);
+
 static __inline void *psDynBufPrependChar(psDynBuf_t *db, char ch)
 {
     void *loc = psDynBufPrependSize(db, 1);

@@ -97,12 +97,12 @@ extern "C" {
 /*
 	SHA1 and MD5 are essential elements for SSL key derivation during protocol
 */
-#if !defined USE_MD5 || !defined USE_SHA1
+#ifndef USE_MD5SHA1
  #if defined(USE_TLS_1_2) && defined(DISABLE_TLS_1_0) && defined(DISABLE_TLS_1_1) \
 	&& defined(DISABLE_SSLV3)
   #define USE_ONLY_TLS_1_2
  #else
-  #error "Must enable both USE_MD5 and USE_SHA1 in cryptoConfig.h for < TLS 1.2"
+  #error "Must enable USE_MD5SHA1 in cryptoConfig.h for < TLS 1.2"
  #endif
 #endif
 
@@ -1115,6 +1115,12 @@ typedef int32 psX509Cert_t;
 #error "Must enable USE_CERT_PARSE if client auth (USE_CLIENT_AUTH) is needed"
 #endif
 #endif
+
+#if defined(USE_CLIENT_AUTH) || defined(USE_CLIENT_SIDE_SSL)
+#if defined(USE_CERT_PARSE) && !defined(USE_ONLY_PSK_CIPHER_SUITE)
+#define USE_CERT_VALIDATE /* Shorthand. */
+#endif /* USE_CERT_PARSE && USE_ONLY_PSK_CIPHER_SUITE */
+#endif /* USE_CLIENT_AUTH || USE_CLIENT_SIDE_SSL */
 
 #ifdef USE_TRUSTED_CA_INDICATION
  #ifndef ENABLE_CA_CERT_HASH

@@ -32,6 +32,9 @@
  */
 /******************************************************************************/
 
+/* This pstm mathematics library is
+   based on libraries by Tom St Denis. */
+
 #include "../cryptoApi.h"
 
 #include <ctype.h> /* toupper() */
@@ -1394,6 +1397,106 @@ static uint64 psDiv128(uint128 *numerator, uint64 denominator)
 }
 #endif /* USE_MATRIX_DIV128 */
 
+#ifndef PSTM_LARGE_DIV
+
+/* This version of division uses short & small function, but offers
+   bit worse performance than some others. */
+int pstm_div(psPool_t *pool, const pstm_int *a, const pstm_int *b,
+			 pstm_int *c, pstm_int *d)
+{
+	pstm_int ta, tb, tq, q;
+	int res, n, n2;
+
+	/* is divisor zero ? */
+	if (pstm_iszero(b) == PSTM_YES) {
+		return PS_LIMIT_FAIL;
+	}
+
+	/* if a < b then q=0, r = a */
+	if (pstm_cmp_mag(a, b) == PSTM_LT) {
+		if (d != NULL) {
+			res = pstm_copy(a, d);
+		} else {
+			res = PSTM_OKAY;
+		}
+		if (c != NULL) {
+			pstm_zero(c);
+		}
+		return res;
+	}
+
+	/* init our temps */
+	res = pstm_init(pool, &ta);
+	if (res != PSTM_OKAY) {
+		return res;
+	}
+	res = pstm_init(pool, &tb);
+	if (res != PSTM_OKAY) {
+		pstm_clear(&ta);
+		return res;
+	}
+	res = pstm_init(pool, &tq);
+	if (res != PSTM_OKAY) {
+		pstm_clear(&ta);
+		pstm_clear(&tb);
+		return res;
+	}
+	res = pstm_init(pool, &q);
+	if (res != PSTM_OKAY) {
+		pstm_clear(&ta);
+		pstm_clear(&tb);
+		pstm_clear(&tq);
+		return res;
+	}
+
+	pstm_set(&tq, 1);
+	n = pstm_count_bits(a) - pstm_count_bits(b);
+	if (((res = pstm_abs(a, &ta)) != PSTM_OKAY) ||
+		((res = pstm_abs(b, &tb)) != PSTM_OKAY) ||
+		((res = pstm_mul_2d(&tb, n, &tb)) != PSTM_OKAY) ||
+		((res = pstm_mul_2d(&tq, n, &tq)) != PSTM_OKAY)) {
+		goto LBL_ERR;
+	}
+
+	while (n-- >= 0) {
+		if (pstm_cmp(&tb, &ta) != PSTM_GT) {
+			if (((res = pstm_sub(&ta, &tb, &ta)) != PSTM_OKAY) ||
+				((res = pstm_add(&q, &tq, &q)) != PSTM_OKAY)) {
+				goto LBL_ERR;
+			}
+		}
+		if (((res = pstm_div_2d(pool, &tb, 1, &tb, NULL)) !=
+			 PSTM_OKAY) ||
+			((res = pstm_div_2d(pool, &tq, 1, &tq, NULL)) !=
+			 PSTM_OKAY)) {
+			goto LBL_ERR;
+		}
+	}
+
+	/* now q == quotient and ta == remainder */
+	n  = a->sign;
+	n2 = (a->sign == b->sign) ? PSTM_ZPOS : PSTM_NEG;
+	if (c != NULL) {
+		pstm_exch(c, &q);
+		c->sign = (pstm_iszero(c) == PSTM_YES) ? PSTM_ZPOS : n2;
+	}
+	if (d != NULL) {
+		pstm_exch(d, &ta);
+		d->sign = (pstm_iszero(d) == PSTM_YES) ? PSTM_ZPOS : n;
+	}
+LBL_ERR:
+	pstm_clear (&ta);
+	pstm_clear (&tb);
+	pstm_clear (&tq);
+	pstm_clear (&q);
+	return res;
+}
+
+#else /* defined PSTM_LARGE_DIV */
+
+/* This noticed is accompanied with this function to discourage its use. */
+#warning "This function has been noticed to give wrong results for some inputs."
+
 /******************************************************************************/
 /**
 	c = a / b, d = remainder.
@@ -1404,11 +1507,11 @@ static uint64 psDiv128(uint128 *numerator, uint64 denominator)
 	@param[out] c The result
 	@param[out] d If non-NULL, the remainder of the division is stored here
 	@return < 0 on failure
-	
+
 	a/b => cb + d == a
 */
-int32_t pstm_div(psPool_t *pool, const pstm_int *a, const pstm_int *b, pstm_int *c,
-				pstm_int *d)
+int32_t pstm_div(psPool_t *pool, const pstm_int *a, const pstm_int *b,
+				 pstm_int *c, pstm_int *d)
 {
 	pstm_int	q, x, y, t1, t2;
 	int32_t		res;
@@ -1441,7 +1544,8 @@ int32_t pstm_div(psPool_t *pool, const pstm_int *a, const pstm_int *b, pstm_int 
 	if ((res = pstm_init_copy(pool, &x, a, 0)) != PSTM_OKAY) {
 		goto LBL_T2;
 	}
-	/* Used to be an init_copy on b but pstm_grow was always hit with triple size */
+	/* Used to be an init_copy on b but pstm_grow was always hit with triple
+	   size */
 	if ((res = pstm_init_size(pool, &y, b->used * 3)) != PSTM_OKAY) {
 		goto LBL_X;
 	}
@@ -1610,6 +1714,7 @@ LBL_T1:pstm_clear (&t1);
 
 	return res;
 }
+#endif /* PSTM_LARGE_DIV */
 
 /******************************************************************************/
 /*
@@ -1651,7 +1756,7 @@ int32_t pstm_mod(psPool_t *pool, const pstm_int *a, const pstm_int *b, pstm_int 
 	return err;
 }
 
-#ifdef USE_MATRIX_RSA
+#if defined USE_MATRIX_RSA || defined USE_MATRIX_ECC || defined USE_MATRIX_DH
 /******************************************************************************/
 /*
 	d = a * b (mod c)
@@ -1937,7 +2042,7 @@ LBL_M: pstm_clear(&M[1]);
 LBL_RES:pstm_clear(&res);
 	return err;
 }
-#endif /* USE_MATRIX_RSA */
+#endif /* USE_MATRIX_RSA || USE_MATRIX_ECC || USE_MATRIX_DH */
 
 /******************************************************************************/
 /**

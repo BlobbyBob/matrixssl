@@ -76,7 +76,7 @@
 #define USE_ECC
 //#define USE_DH
 /**< @note Enable verification of DSA signatures in certificate validation.
-   Works only when using the CL/SL library. */
+   Works only when using the CL/SL library. @pre USE_CERT_PARSE. */
 //#define USE_DSA_VERIFY
 
 /******************************************************************************/
@@ -136,7 +136,8 @@
 
 	@security MD5 is deprecated, but still required in combination with SHA-1
 	for TLS handshakes before TLS 1.2, meaning that the strength is at least
-	that of SHA-1 in this usage. The only other usage of MD5 by TLS is for
+	that of SHA-1 in this usage. The define USE_MD5SHA1 can be used to enable
+	MD5 only for this purpose. The only other usage of MD5 by TLS is for
 	certificate signatures and MD5 based cipher suites. Both of which are
 	disabled at compile time by default.
 
@@ -167,7 +168,7 @@
 */
 #define USE_MD5
 #define USE_MD5SHA1/* Required for < TLS 1.2 Handshake */
-#define USE_HMAC_MD5/* TODO currently needed for prf */
+#define USE_HMAC_MD5
 
 /**
     @security MD2 is considered insecure, but is sometimes used for
@@ -185,8 +186,8 @@
 	X.509 Certificates/PKI
 */
 #define USE_BASE64_DECODE
-#define USE_X509
-#define USE_CERT_PARSE/**< Usually required. @pre USE_X509 */
+#define USE_X509/**< Enable minimal X.509 support. */
+#define USE_CERT_PARSE/**< Enable TBSCertificate parsing. Usually required. @pre USE_X509 */
 #define USE_FULL_CERT_PARSE/**< @pre USE_CERT_PARSE */
  /**< Support extra distinguished name attributes that SHOULD be supported according to RFC 5280. */
 //#define USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD
@@ -205,7 +206,9 @@
 	Various PKCS standards support
 */
 #define USE_PRIVATE_KEY_PARSING
-//#define USE_PKCS5		/**< v2.0 PBKDF encrypted priv keys. @pre USE_3DES */
+#define USE_PKCS5/**< v2.0 PBKDF encrypted priv keys. @pre USE_3DES */
+/**< Enable PBKDF1 in priv key PEM encryption. @pre USE_PKCS5 and @pre USE_MD5. @security Not recommended. */
+#define USE_PBKDF1
 #define USE_PKCS8/* Alternative private key storage format */
 #define USE_PKCS12/**< @pre USE_PKCS8 */
 #define USE_PKCS1_OAEP/* OAEP padding algorithm */

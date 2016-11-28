@@ -329,6 +329,7 @@ int32_t psRsaParseAsnPubKey(psPool_t *pool,
 	psDigestContext_t	dc;
 #endif
 	const unsigned char	*p = *pp;
+	const unsigned char	*end;
 	uint16_t			keylen, seqlen;
 
 	if (len < 1 || (*(p++) != ASN_BIT_STRING) ||
@@ -339,7 +340,9 @@ int32_t psRsaParseAsnPubKey(psPool_t *pool,
 	if (*p++ != 0) {
 		goto L_FAIL;
 	}
-
+	if (keylen < 1) {
+		goto L_FAIL;
+	}
 #ifdef USE_SHA1
 	/* A public key hash is used in PKI tools (OCSP, Trusted CA indication).
 		Standard RSA form - SHA-1 hash of the value of the BIT STRING
@@ -351,9 +354,13 @@ int32_t psRsaParseAsnPubKey(psPool_t *pool,
 	psSha1Final(&dc.sha1, sha1KeyHash);
 #endif
 
-	if (getAsnSequence(&p, keylen, &seqlen) < 0 ||
-		pstm_read_asn(pool, &p, seqlen, &key->N) < 0 ||
-		pstm_read_asn(pool, &p, seqlen, &key->e) < 0) {
+	if (getAsnSequence(&p, keylen, &seqlen) < 0) {
+		goto L_FAIL;
+	}
+
+	end = p + seqlen;
+	if (pstm_read_asn(pool, &p, (uint16_t) (end - p), &key->N) < 0 ||
+		pstm_read_asn(pool, &p, (uint16_t) (end - p), &key->e) < 0) {
 
 		goto L_FAIL;
 	}

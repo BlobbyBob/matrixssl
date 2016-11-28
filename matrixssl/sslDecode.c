@@ -1809,8 +1809,7 @@ parseHandshake:
 			psTraceInfo("Expecting CERTIFICATE_STATUS message\n");
 			ssl->err = SSL_ALERT_UNEXPECTED_MESSAGE;
 			return MATRIXSSL_ERROR;
-#endif
-
+#else
 #ifdef USE_DHE_CIPHER_SUITE
 			if (ssl->flags & SSL_FLAGS_DHE_KEY_EXCH &&
 					hsType == SSL_HS_SERVER_KEY_EXCHANGE) {
@@ -1822,6 +1821,7 @@ parseHandshake:
 				ssl->hsState = hsType;
 				goto hsStateDetermined;
 			}
+#endif /* USE_OCSP_MUST_STAPLE */
 		}
 #endif /* USE_OCSP */
 

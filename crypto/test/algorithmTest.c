@@ -2599,8 +2599,12 @@ int32 psMd5Test(void)
 	psMd5_t	md;
 
 	for (i = 0; tests[i].msg != NULL; i++) {
-	_psTraceInt("	MD5 known vector test %d... ", i + 1);
-		psMd5Init(&md);
+		_psTraceInt("	MD5 known vector test %d... ", i + 1);
+		psMd5PreInit(&md);
+		if (psMd5Init(&md) < 0) {
+			_psTrace("FAILED: psMd5Init\n");
+			return -1;
+		}
 		psMd5Update(&md, (unsigned char *)tests[i].msg,
 			(uint32)strlen(tests[i].msg));
 		psMd5Final(&md, tmp);
@@ -2706,10 +2710,17 @@ int32 psMd2Test(void)
 
 	for (i = 0; i < (int32)(sizeof(tests) / sizeof(tests[0])); i++) {
 		_psTraceInt("	MD2 known vector test %d... ", i + 1);
+		psMd2PreInit(&md);
 		psMd2Init(&md);
-		psMd2Update(&md, (unsigned char*)tests[i].msg,
-			(uint32)strlen(tests[i].msg));
-		psMd2Final(&md, buf);
+		if (psMd2Update(&md, (unsigned char*)tests[i].msg,
+						(uint32)strlen(tests[i].msg)) < 0) {
+			_psTrace("FAILED: psMd2Update\n");
+			return -1;
+		}
+		if (psMd2Final(&md, buf) < 0) {
+			_psTrace("FAILED: psMd2Final\n");
+			return -1;
+		}
 		if (memcmp(buf, tests[i].md, 16) != 0) {
 			_psTrace("FAILED: memcmp\n");
 			return -1;
@@ -2724,6 +2735,7 @@ int32 psMd2Test(void)
 
 /******************************************************************************/
 #ifdef USE_RSA
+#ifdef USE_PRIVATE_KEY_PARSING
 
 typedef void pkaCmdInfo_t;
 
@@ -2864,7 +2876,7 @@ static int32 psRsaSignTest(void)
 
 	return PS_SUCCESS;
 }
-
+#endif /* USE_PRIVATE_KEY_PARSING */
 
 /******************************************************************************/
 #ifdef USE_PKCS1_OAEP
@@ -3370,6 +3382,7 @@ LBL_ERR:
 static int nohmactls = 0;
 #endif
 
+#ifdef USE_HMAC_SHA1
 static int32 psHmacVectorTestSimple(void)
 {
 	unsigned char res[20];
@@ -3439,6 +3452,7 @@ static int32 psHmacVectorTestSimple(void)
 	_psTrace("PASSED\n");
 	return PS_SUCCESS;
 }
+#endif /* USE_HMAC_SHA1 */
 
 static int test_hmac_vector_num_calls;
 
@@ -3456,9 +3470,15 @@ static int test_hmac_vector(int32 size,
 	uint16_t key_length = 0;
 	int equals;
 	int32 rv = PS_SUCCESS;
+#ifdef USE_HMAC_SHA1
 	psHmacSha1_t hmac_sha1_ctx;
+#endif /* USE_HMAC_SHA1 */
+#ifdef USE_HMAC_SHA256
 	psHmacSha256_t hmac_sha256_ctx;
+#endif /* USE_HMAC_SHA256 */
+#ifdef USE_HMAC_SHA384
 	psHmacSha384_t hmac_sha384_ctx;
+#endif /* USE_HMAC_SHA384 */
 
 	++test_hmac_vector_num_calls;
 
@@ -3472,22 +3492,31 @@ static int test_hmac_vector(int32 size,
 	psAssert(size == 20 || size == 28 || size == 32 ||
 			 size == 48);
 
+#ifdef USE_HMAC_SHA1
 	if (size == 20) {
 		rv = psHmacSha1((unsigned char *) key, key_length,
 						din, din_len,
 						md_res,
 						key_out, &key_length);
-	} else if (size == 32) {
+	} else
+#endif /* USE_HMAC_SHA1 */
+#ifdef USE_HMAC_SHA256
+		if (size == 32) {
 		rv = psHmacSha256((unsigned char *) key, key_length,
 						  din, din_len,
 						  md_res,
 						  key_out, &key_length);
-	} else if (size == 48) {
+	} else
+#endif /* USE_HMAC_SHA256 */
+#ifdef USE_HMAC_SHA384
+		if (size == 48) {
 		rv = psHmacSha384((unsigned char *) key, key_length,
 						  din, din_len,
 						  md_res,
 						  key_out, &key_length);
-	} else {
+	} else
+#endif /* USE_HMAC_SHA384 */
+		{
 		_psTraceInt("FAILED: HMAC vector unsupported size: %d\n",
 			    (int) size);
 		return PS_FAILURE;
@@ -3504,19 +3533,27 @@ static int test_hmac_vector(int32 size,
 
 	memset(md_res, 0, sizeof(md_res));
 
+#ifdef USE_HMAC_SHA1
 	if (size == 20) {
 		rv = psHmacSha1Init(&hmac_sha1_ctx, key_out, key_length);
 		psHmacSha1Update(&hmac_sha1_ctx, din, din_len);
 		psHmacSha1Final(&hmac_sha1_ctx, md_res);
-	} else if (size == 32) {
+	} else
+#endif /* USE_HMAC_SHA1 */
+#ifdef USE_HMAC_SHA256
+		if (size == 32) {
 		rv = psHmacSha256Init(&hmac_sha256_ctx, key_out, key_length);
 		psHmacSha256Update(&hmac_sha256_ctx, din, din_len);
 		psHmacSha256Final(&hmac_sha256_ctx, md_res);
-	} else if (size == 48) {
+	} else
+#endif /* USE_HMAC_SHA256 */
+#ifdef USE_HMAC_SHA384
+		if (size == 48) {
 		rv = psHmacSha384Init(&hmac_sha384_ctx, key_out, key_length);
 		psHmacSha384Update(&hmac_sha384_ctx, din, din_len);
 		psHmacSha384Final(&hmac_sha384_ctx, md_res);
 	}
+#endif /* USE_HMAC_SHA384 */
 
 	equals = (rv == PS_SUCCESS && memcmp(dout, md_res, size) == 0);
 	if (equals != should_succeed)
@@ -4290,22 +4327,29 @@ sha_finish:
 	return res;
 }
 
+#ifdef USE_HMAC_SHA1
 static int32 psHmacVectorTestsSHA1(void)
 {
 	return psHmacVectorTestsShared(20);
 }
+#endif /* USE_HMAC_SHA1 */
 
+#ifdef USE_HMAC_SHA256
 static int32 psHmacVectorTestsSHA256(void)
 {
 	return psHmacVectorTestsShared(32);
 }
+#endif /* USE_HMAC_SHA256 */
 
+#ifdef USE_HMAC_SHA384
 static int32 psHmacVectorTestsSHA384(void)
 {
 	return psHmacVectorTestsShared(48);
 }
+#endif /* USE_HMAC_SHA384 */
 
 
+#ifdef USE_HMAC_SHA1
 static int32 psHmacVectorTestsSimultaneous(void)
 {
 	psHmacSha1_t ctx1;
@@ -4365,25 +4409,43 @@ static int32 psHmacVectorTestsSimultaneous(void)
 	_psTrace("PASSED\n");
 	return PS_SUCCESS;
 }
-
+#endif /* USE_HMAC_SHA1 */
 
 static int32 psHmacVectorTests(void)
 {
 	int32 res;
 
+#ifdef USE_HMAC_SHA1
 	res = psHmacVectorTestSimple();
+#endif /* USE_HMAC_SHA1 */
 
 	_psTraceInt("	SHA-1 known vector test %d... ", 2);
+#ifdef USE_HMAC_SHA1
 	res |= psHmacVectorTestsSHA1();
+#else
+	_psTrace("SKIPPED.\n");
+#endif /* USE_HMAC_SHA1 */
 
 	_psTraceInt("	SHA-256 known vector test %d... ", 1);
+#ifdef USE_HMAC_SHA256
 	res |= psHmacVectorTestsSHA256();
+#else
+	_psTrace("SKIPPED.\n");
+#endif /* USE_HMAC_SHA256 */
 
 	_psTraceInt("	SHA-384 known vector test %d... ", 1);
+#ifdef USE_HMAC_SHA384
 	res |= psHmacVectorTestsSHA384();
+#else
+	_psTrace("SKIPPED.\n");
+#endif /* USE_HMAC_SHA384 */
 
 	_psTrace("	Simultaneous hmac contexts... ");
+#ifdef USE_HMAC_SHA1
 	res |= psHmacVectorTestsSimultaneous();
+#else
+	_psTrace("SKIPPED.\n");
+#endif /* USE_HMAC_SHA1 */
 
 	return res;
 }
@@ -4954,14 +5016,14 @@ static test_t tests[] = {
 {psPrngTests
 , "***** PRNG TESTS *****"},
 
-#ifdef USE_RSA
+#if defined(USE_RSA) && defined(USE_PRIVATE_KEY_PARSING)
 {psRsaEncryptTest
 #else
 {NULL
 #endif
 , "***** RSA ENCRYPT TESTS *****"},
 
-#ifdef USE_RSA
+#if defined(USE_RSA) && defined(USE_PRIVATE_KEY_PARSING)
 {psRsaSignTest
 #else
 {NULL

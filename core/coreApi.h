@@ -197,10 +197,49 @@ extern psPool_t * const psStaticAllocationsPool;
   #include <time.h>
 /******************************************************************************/
 
+/* struct tm is standard for representing broken-down time in C89, C99 and
+   POSIX.1 standards. The psBrokenDownTime_t is defined as an alias for
+   struct tm for compatibility with possible non-standard compliant targets. */
+typedef struct tm psBrokenDownTime_t;
+/* time_t is a standard type for representing calendar time as a counter in
+   C89, C99.
+ */
+typedef time_t psTimeSeconds_t;
+
 PSPUBLIC int32		psCoreOpen(const char *config);
 PSPUBLIC void		psCoreClose(void);
 PSPUBLIC void		psBurnStack(uint32 len);
 PSPUBLIC int32		memcmpct(const void *s1, const void *s2, size_t len);
+
+PSPUBLIC void		psFreeAndClear(void *ptrptr, psPool_t *pool);
+
+/******************************************************************************/
+/*
+	Public interface to functionality defined by functions in C89/C99 standards.
+    These function may be substituted with OS/psdep.c in nonstandard
+    systems.
+
+    Return broken-down time similar to gmtime(&time(NULL)). The function allows
+    offset in seconds.
+*/
+PSPUBLIC int32      psGetBrokenDownGMTime(psBrokenDownTime_t *t,
+										  int offset);
+/* Add specified value to broken down time. */
+PSPUBLIC int32 psBrokenDownTimeAdd(psBrokenDownTime_t *res, int32 offset);
+#define PS_BROKENDOWN_TIME_STR_LEN 16 /* Good until year 9999. */
+PSPUBLIC int32 psBrokenDownTimeStr(const psBrokenDownTime_t *t1,
+								   char (*string)[PS_BROKENDOWN_TIME_STR_LEN]);
+#define PS_BROKENDOWN_TIME_IMPORT_STRICT_ZULU 1 /* Require Z as timezone. */
+#define PS_BROKENDOWN_TIME_IMPORT_2DIGIT_YEAR 2 /* Use two digit year for
+												   range 1950-2049. */
+PSPUBLIC int32 psBrokenDownTimeImportSeconds(psBrokenDownTime_t *t,
+											 psTimeSeconds_t s);
+PSPUBLIC int32 psBrokenDownTimeImport(
+	psBrokenDownTime_t *t,
+	const char *string, size_t time_string_len,
+	unsigned int opts);
+PSPUBLIC int psBrokenDownTimeCmp(const psBrokenDownTime_t *t1,
+								 const psBrokenDownTime_t *t2);
 
 /******************************************************************************/
 /*
@@ -244,6 +283,51 @@ the caller to not allocate a mutex that will never be used. */
 extern int32 psParseList(psPool_t *pool, char *list, const char separator,
 				psList_t **items);
 extern void psFreeList(psList_t *list, psPool_t *pool);
+
+/* Identifiers to describe type of string contained in char or
+   unsigned char array. */
+typedef enum {
+	/* Note: The values intentionally match ASN.1 BER/DER string type tags. */
+	PS_STRING_UTF8_STRING = 12,
+	PS_STRING_NUMERIC_STRING = 18,
+	PS_STRING_PRINTABLE_STRING = 19,
+	PS_STRING_TELETEX_STRING = 20,
+	PS_STRING_VIDEOTEX_STRING = 21,
+	PS_STRING_IA5_STRING = 22,
+	PS_STRING_GRAPHIC_STRING = 25,
+	PS_STRING_VISIBLE_STRING = 26,
+	PS_STRING_GENERAL_STRING = 27,
+	PS_STRING_UNIVERSAL_STRING = 28,
+	PS_STRING_CHARACTER_STRING = 29,
+	PS_STRING_BMP_STRING = 30,
+	PS_STRING_CHAR_STRING = 256, /* Input is represented as C string. */
+	PS_STRING_WCHAR_STRING = 257, /* Input is represented as wchar_t string. */
+} psStringType_t;
+
+/* Option for strictly checking input to UTF8 String.
+   The option is not currently implemented, and the function
+   psGetUtf8String() will always fail if you attempt to use the option. */
+#define PS_STRING_STRICT 1
+/* Uses sequence \0\0 as terminator for string. */
+#define PS_STRING_DUAL_NIL 2
+
+/******************************************************************************/
+/*
+	Helper function for usual string conversions.
+	The current version allows conversion of
+    PS_STRING_NUMERIC_STRING, PS_STRING_PRINTABLE_STRING, PS_STRING_BMP_STRING
+	to UTF-8. In case conversion succeeds with PS_SUCCESS, *output will
+	point to a newly allocated string. The allocated string needs to be freed
+	with psFree(). The string will have terminating \0.
+	*output_len will be written string length not counting terminating \0.
+	output_len can be provided as NULL if user wants to use functions like
+	strlen() to obtain length of the string instead.
+*/
+PSPUBLIC int32 psToUtf8String(psPool_t *pool,
+							  const unsigned char *input, size_t input_len,
+							  psStringType_t input_type,
+							  unsigned char **output, size_t *output_len,
+							  int opts);
 
 /******************************************************************************/
 /*

@@ -54,9 +54,15 @@
 #pragma GCC diagnostic ignored "-Wpragmas"
 #pragma GCC push_options
 #pragma GCC optimize("O0")
-#define NO_OPTIM __attribute__((noinline)) __attribute__((optimize("O0")))
+#ifdef __clang__
+#define NO_OPTIM \
+	__attribute__((__noinline__)) __attribute__((__optnone__))
 #else
-#define NO_OPTIM
+#define NO_OPTIM \
+	__attribute__((__noinline__)) __attribute__((__optimize__("O0")))
+#endif
+#else
+#define NO_OPTIM /* Unrecognized compiler or not optimizing. */
 #endif
 
 #include <string.h>

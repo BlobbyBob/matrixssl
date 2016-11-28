@@ -46,7 +46,6 @@
 
 /* #define USE_CERT_VALIDATOR */
 
-#define DTLS_PORT 4433
 static int packet_loss_prob = 0; /* Reciprocal of packet loss probability
 									(i.e. P(packet loss) = 1/x).
 									Default value is 0 (no packet loss). */
@@ -324,6 +323,7 @@ static int			exitFlag;
 static uint32_t g_rsaKeySize;
 static uint32_t g_eccKeySize;
 static uint32_t g_ecdhKeySize;
+static int g_port;
 
 #ifdef USE_CERT_VALIDATOR
 /******************************************************************************/
@@ -370,6 +370,7 @@ static void usage(void)
 		   "-l <value>              - Reciprocal of packet loss probability\n"
 		   "                          (for packet loss simulation tests)\n"
 #endif /* DTLS_PACKET_LOSS_TEST */
+		   "-p <value>              - Port number to use\n"
 		);
 }
 
@@ -384,7 +385,7 @@ static int32 process_cmd_options(int32 argc, char **argv)
 	g_eccKeySize = g_ecdhKeySize = 256;
 
 	opterr = 0;
-	while ((optionChar = getopt(argc, argv, "hr:e:d:l:")) != -1)
+	while ((optionChar = getopt(argc, argv, "hr:e:d:l:p:")) != -1)
 	{
 		switch (optionChar) {
 		case '?':
@@ -433,6 +434,12 @@ static int32 process_cmd_options(int32 argc, char **argv)
 			}
 			break;
 #endif /* DTLS_PACKET_LOSS_TEST */
+		case 'p':
+			g_port = atoi(optarg);
+			if (g_port < 0) {
+				printf("invalid -p option\n");
+				return -1;
+			}
 		}
 	}
 
@@ -753,11 +760,11 @@ int main(int argc, char ** argv)
 		goto CLIENT_EXIT;
 	}
 
-	if ((sock = newUdpSocket(NULL, DTLS_PORT, &err)) == INVALID_SOCKET) {
+	if ((sock = newUdpSocket(NULL, g_port, &err)) == INVALID_SOCKET) {
 		_psTrace("Error creating UDP socket\n");
 		goto DTLS_EXIT;
 	}
-	_psTraceInt("DTLS server running on port %d\n", DTLS_PORT);
+	_psTraceInt("DTLS server running on port %d\n", g_port);
 
 	/* Server loop */
 	for (exitFlag = 0; exitFlag == 0;) {

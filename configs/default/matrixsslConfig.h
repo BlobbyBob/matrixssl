@@ -124,16 +124,16 @@ extern "C" {
 //#define USE_TLS_DHE_PSK_WITH_AES_256_CBC_SHA /**< @security NIST_SHOULD_NOT */
 
 /** Ephemeral ECC DH keys, RSA certificates */
-//#define USE_TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA /**< @security NIST_SHOULD */
+#define USE_TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA/**< @security NIST_SHOULD */
 
 /** Pre-Shared Key Ciphers.
 	NIST SP 800-52 Rev 1 recommends against using PSK unless neccessary
     See NIST SP 800-52 Rev 1 Appendix C */
-#define USE_TLS_PSK_WITH_AES_128_CBC_SHA/**< @security NIST_SHOULD_NOT */
-#define USE_TLS_PSK_WITH_AES_256_CBC_SHA/**< @security NIST_SHOULD_NOT */
+//#define USE_TLS_PSK_WITH_AES_128_CBC_SHA /**< @security NIST_SHOULD_NOT */
+//#define USE_TLS_PSK_WITH_AES_256_CBC_SHA /**< @security NIST_SHOULD_NOT */
 /* TLS 1.2 ciphers */
-#define USE_TLS_PSK_WITH_AES_128_CBC_SHA256/**< @security NIST_SHOULD_NOT */
-#define USE_TLS_PSK_WITH_AES_256_CBC_SHA384/**< @security NIST_SHOULD_NOT */
+//#define USE_TLS_PSK_WITH_AES_128_CBC_SHA256 /**< @security NIST_SHOULD_NOT */
+//#define USE_TLS_PSK_WITH_AES_256_CBC_SHA384  /**< @security NIST_SHOULD_NOT */
 
 /** Non-Ephemeral ECC DH keys, ECC DSA certificates */
 #define USE_TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA/**< @security NIST_MAY */
@@ -145,16 +145,16 @@ extern "C" {
 #define USE_TLS_ECDH_ECDSA_WITH_AES_256_GCM_SHA384/**< @security NIST_MAY */
 
 /** Non-Ephemeral ECC DH keys, RSA certificates */
-#define USE_TLS_ECDH_RSA_WITH_AES_128_CBC_SHA
-#define USE_TLS_ECDH_RSA_WITH_AES_256_CBC_SHA
+//#define USE_TLS_ECDH_RSA_WITH_AES_128_CBC_SHA
+//#define USE_TLS_ECDH_RSA_WITH_AES_256_CBC_SHA
 /* TLS 1.2 ciphers */
-#define USE_TLS_ECDH_RSA_WITH_AES_128_CBC_SHA256
-#define USE_TLS_ECDH_RSA_WITH_AES_256_CBC_SHA384
-#define USE_TLS_ECDH_RSA_WITH_AES_128_GCM_SHA256
-#define USE_TLS_ECDH_RSA_WITH_AES_256_GCM_SHA384
+//#define USE_TLS_ECDH_RSA_WITH_AES_128_CBC_SHA256
+//#define USE_TLS_ECDH_RSA_WITH_AES_256_CBC_SHA384
+//#define USE_TLS_ECDH_RSA_WITH_AES_128_GCM_SHA256
+//#define USE_TLS_ECDH_RSA_WITH_AES_256_GCM_SHA384
 
 /** Non-Ephemeral RSA keys/certificates */
-//#define USE_SSL_RSA_WITH_3DES_EDE_CBC_SHA /**< @security NIST_SHALL */
+#define USE_SSL_RSA_WITH_3DES_EDE_CBC_SHA/**< @security NIST_SHALL */
 
 /** @note Some of (non-mandatory) cipher suites mentioned in NIST SP 800-52
     Rev 1 are not supported by the MatrixSSL / MatrixDTLS.
@@ -175,7 +175,7 @@ extern "C" {
 	@security Do not cache Ephemeral ECC keys as it is against some standards,
 	including NIST SP 800-56A, when in FIPS 140-2 mode of operation.
 */
-//#define NO_ECC_EPHEMERAL_CACHE /**< @security NIST_SHALL */
+#define NO_ECC_EPHEMERAL_CACHE/**< @security NIST_SHALL */
 
 /******************************************************************************/
 /**
@@ -242,7 +242,7 @@ extern "C" {
 	sha1 hash of each CA file to the server for help in server selection.
 	This extra level of define is to help isolate the SHA1 requirement
 */
-//#define USE_TRUSTED_CA_INDICATION /**< @security NIST_SHOULD */
+#define USE_TRUSTED_CA_INDICATION/**< @security NIST_SHOULD */
 
 /******************************************************************************/
 /**
@@ -285,7 +285,7 @@ extern "C" {
 	however, this will also immediately expire SESSION_TICKETS below.
 */
 #ifdef USE_SERVER_SIDE_SSL
-#define SSL_SESSION_TABLE_SIZE 32
+#define SSL_SESSION_TABLE_SIZE 64
 #define SSL_SESSION_ENTRY_LIFE (86400*1000)/* one day, in milliseconds */
 #endif
 
@@ -296,7 +296,7 @@ extern "C" {
 	SSL_SESSION_TICKET_LIST_LEN is the max size of the server key list.
 */
 #define USE_STATELESS_SESSION_TICKETS
-#define SSL_SESSION_TICKET_LIST_LEN 32
+#define SSL_SESSION_TICKET_LIST_LEN 64
 
 /******************************************************************************/
 /**

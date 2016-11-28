@@ -110,7 +110,15 @@ static void statCback(void *ssl, void *stat_ptr, int32 type, int32 value);
 */
 #if !defined(USE_SERVER_SIDE_SSL) || !defined(USE_CLIENT_SIDE_SSL)
 #warning "Must enable both USE_SERVER_SIDE_SSL and USE_CLIENT_SIDE_SSL to run"
-#endif
+
+#include <stdio.h>
+int main(void)
+{
+	printf("Must enable both USE_SERVER_SIDE_SSL and USE_CLIENT_SIDE_SSL to run\n");
+	return 1;
+}
+
+#else
 
 #ifdef USE_ONLY_PSK_CIPHER_SUITE
  #ifdef USE_CLIENT_AUTH
@@ -2253,3 +2261,4 @@ static void statCback(void *ssl, void *stat_ptr, int32 type, int32 value)
 #endif
 /******************************************************************************/
 
+#endif /* !defined(USE_SERVER_SIDE_SSL) || !defined(USE_CLIENT_SIDE_SSL) */

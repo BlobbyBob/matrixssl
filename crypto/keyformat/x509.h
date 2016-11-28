@@ -50,6 +50,16 @@ enum {
 	ECDSA_FIXED_ECDH
 };
 
+/* The default value of allowed mismatch in times in X.509 messages and the
+   local clock. The default value of 24 hours is mostly equivalent to old
+   MatrixSSL behavior of ignoring hours, minutes and seconds in X.509 date
+   comparison. Note: There is different value for CRL (PS_CRL_TIME_LINGER) and OCSP
+   (PS_OCSP_TIME_LINGER). */
+#define PS_X509_TIME_LINGER (24 * 60 * 60)
+/* This is approximately equivalent to old MatrixSSL behavior of
+   only comparing date. */
+#define PS_CRL_TIME_LINGER (24 * 60 * 60)
+
 /* Parsing flags */
 #define	CERT_STORE_UNPARSED_BUFFER	0x1
 #define	CERT_STORE_DN_BUFFER		0x2
@@ -172,19 +182,21 @@ typedef struct {
 	int32	        pathLenConstraint;
 } x509extBasicConstraints_t;
 
+ typedef enum {
+	 GN_OTHER = 0,	// OtherName
+	 GN_EMAIL,		// IA5String
+	 GN_DNS,			// IA5String
+	 GN_X400,		// ORAddress
+	 GN_DIR,			// Name
+	 GN_EDI,			// EDIPartyName
+	 GN_URI,			// IA5String
+	 GN_IP,			// OCTET STRING
+	 GN_REGID		// OBJECT IDENTIFIER
+ } x509GeneralNameType_t;
+
 typedef struct psGeneralNameEntry {
 	psPool_t						*pool;
-	enum {
-		GN_OTHER = 0,	// OtherName
-		GN_EMAIL,		// IA5String
-		GN_DNS,			// IA5String
-		GN_X400,		// ORAddress
-		GN_DIR,			// Name
-		GN_EDI,			// EDIPartyName
-		GN_URI,			// IA5String
-		GN_IP,			// OCTET STRING
-		GN_REGID		// OBJECT IDENTIFIER
-	}								id;
+	x509GeneralNameType_t           id;
 	unsigned char					name[16];
 	unsigned char					oid[32]; /* SubjectAltName OtherName */
 	unsigned char					*data;
@@ -533,6 +545,16 @@ typedef struct psCRL {
 
 typedef struct psCert {
 	psPool_t			*pool;
+	int32				sigAlgorithm; /* Certificate sig alg OID */
+	int32				certAlgorithm; /* TBSCertificate sig alg OID */
+	unsigned char		*signature;
+	uint16_t			signatureLen;
+#ifdef USE_PKCS1_PSS
+	int32				pssHash; /* RSAPSS sig hash OID */
+	int32				maskGen; /* RSAPSS maskgen OID */
+	int32				maskHash; /* hash OID for MGF1 */
+	uint16_t			saltLen; /* RSAPSS salt len param */
+#endif /* USE_PKCS1_PSS */
 #ifdef USE_CERT_PARSE
 	psPubKey_t			publicKey;
 	int32				version;
@@ -545,18 +567,8 @@ typedef struct psCert {
 	char				*notBefore;
 	char				*notAfter;
 	int32				pubKeyAlgorithm; /* public key algorithm OID */
-	int32				certAlgorithm; /* signature algorithm OID */
-	int32				sigAlgorithm; /* signature algorithm OID */
-#ifdef USE_PKCS1_PSS
-	int32				pssHash; /* RSAPSS sig hash OID */
-	int32				maskGen; /* RSAPSS maskgen OID */
-	int32				maskHash; /* hash OID for MGF1 */
-	uint16_t			saltLen; /* RSAPSS salt len param */
-#endif
-	unsigned char		*signature;
 	unsigned char		*uniqueIssuerId;
 	unsigned char		*uniqueSubjectId;
-	uint16_t			signatureLen;
 	uint16_t			uniqueIssuerIdLen;
 	uint16_t			uniqueSubjectIdLen;
 	x509v3extensions_t	extensions;
@@ -582,9 +594,9 @@ typedef struct psCert {
 } psX509Cert_t;
 
 
-#ifdef USE_CERT_PARSE
 extern int32_t psX509GetSignature(psPool_t *pool, const unsigned char **pp,
 				uint16_t len, unsigned char **sig, uint16_t *sigLen);
+#ifdef USE_CERT_PARSE
 extern int32_t psX509GetDNAttributes(psPool_t *pool, const unsigned char **pp,
 				uint16_t len, x509DNattributes_t *attribs, uint32_t flags);
 extern void psX509FreeDNStruct(x509DNattributes_t *dn, psPool_t *allocPool);
@@ -694,41 +706,85 @@ typedef struct {
 	   be provided. */
 	bool *nonceMatch;
 	/* Will indicate revocation time (note: timezone = UTC). */
-	struct tm *revocationTime;
+	psBrokenDownTime_t *revocationTime;
 	/* Will indicate revocation reason. */
 	x509CrlReason_t *revocationReason;
+	/* The request for comparing nonce if nonce extension is used. */
 	const void *request;
 	size_t requestLen;
+	/* The location for use response index. */
+	int32 *index_p;
 } psValidateOCSPResponseOptions_t;
 
+/* Parse OCSP response received.
+   The result shall be unitialized with uninitOCSPResponse(). */
 extern int32_t parseOCSPResponse(psPool_t *pool, int32_t len,
 					unsigned char **cp, unsigned char *end,
 					mOCSPResponse_t *response);
 
+/* Get dates from OCSP response, to e.g. check how long server wants the
+   response to remain valid. */
 extern int32_t checkOCSPResponseDates(mOCSPResponse_t *response,
 				      int index,
-				      struct tm *time_now,
-				      struct tm *producedAt,
-				      struct tm *thisUpdate,
-				      struct tm *nextUpdate,
+				      psBrokenDownTime_t *time_now,
+				      psBrokenDownTime_t *producedAt,
+				      psBrokenDownTime_t *thisUpdate,
+				      psBrokenDownTime_t *nextUpdate,
 				      int time_linger);
 
+/* Validate OCSP response (find status of specific certificate) */
 extern int32_t validateOCSPResponse(psPool_t *pool, psX509Cert_t *trustedOCSP,
-					psX509Cert_t *srvCerts,	mOCSPResponse_t *response);
-extern int32_t validateOCSPResponse_ex(psPool_t *pool, psX509Cert_t *trustedOCSP,
-				       psX509Cert_t *srvCerts,	mOCSPResponse_t *response, psValidateOCSPResponseOptions_t *vOpts);
+									psX509Cert_t *srvCerts,
+									mOCSPResponse_t *response);
+
+/* Validation with additional parameter to obtain more details, like
+   revocation time and reason. */
+extern int32_t validateOCSPResponse_ex(psPool_t *pool,
+									   psX509Cert_t *trustedOCSP,
+									   psX509Cert_t *srvCerts,
+									   mOCSPResponse_t *response,
+									   psValidateOCSPResponseOptions_t *vOpts);
+
+/* Construct OCSP request used in OCSP protocol to obtain OCSP response.
+   The request obtained typically needs to be sent to OCSP responder using
+   HTTP protocol to obtain corresponding OCSP response.
+   After finished with the request, it shall be freed using psFree(). */
 extern int32_t matrixSslWriteOCSPRequest(psPool_t *pool, psX509Cert_t *cert,
 					psX509Cert_t *certIssuer, unsigned char **request,
 					uint32_t *requestLen, int32_t flags);
 
+/* Uninitialize OCSP response. */
+void uninitOCSPResponse(mOCSPResponse_t *res);
+
 typedef struct {
 	int32_t flags;
-	const psBuf_t *requesterId; /* Optional requestor id. */
+	psBuf_t *requesterId; /* Optional requestor id. */
 	const psBuf_t *requestExtensions; /* Optional request extensions. */
 } matrixSslWriteOCSPRequestInfo_t;
 
-#define MATRIXSSL_WRITE_OCSP_REQUEST_FLAG_NONCE 1 /* Use nonce. */
+/* Set Requester ID for matrixSslWriteOCSPRequestInfo_t structure.
+   It shall be freed using matrixSslWriteOCSPRequestInfoFreeRequestorId.
+   The data expected varies according to the general name, for instance, for
+   IPv4 address, the data shall be array of 4 bytes containing the octets.
+   However, for the most types the data shall be a string, and for this reason
+   parameters are called str and strLen.
+   For GN_DIR, the octet sequence can be created with psWriteCertDNAttributes()
+   function. */
+extern int32_t matrixSslWriteOCSPRequestInfoSetRequestorId(
+	psPool_t *pool,
+	matrixSslWriteOCSPRequestInfo_t *info,
+	const char *str, size_t strLen, x509GeneralNameType_t type);
 
+/* Free previously set Requester ID from matrixSslWriteOCSPRequestInfo_t
+   structure. */
+extern void matrixSslWriteOCSPRequestInfoFreeRequestorId(
+	psPool_t *pool, matrixSslWriteOCSPRequestInfo_t *info);
+
+#define MATRIXSSL_WRITE_OCSP_REQUEST_FLAG_NONCE 1 /* Use nonce. */
+#define MATRIXSSL_WRITE_OCSP_REQUEST_FLAG_CERT_LIST 2 /* Multiple requests. */
+
+/* Extended version of matrixSslWriteOCSPRequest: allows use of
+   requestor name and nonce extension. */
 extern int32_t matrixSslWriteOCSPRequestExt(
 	psPool_t *pool, psX509Cert_t *cert,
 	psX509Cert_t *certIssuer, unsigned char **request,

@@ -109,6 +109,7 @@ void psDeletePubKey(psPubKey_t **key)
 	*key = NULL;
 }
 
+#ifdef USE_PRIVATE_KEY_PARSING
 #ifdef MATRIX_USE_FILE_SYSTEM
 #if defined(USE_ECC) && defined(USE_RSA)
 /* Trial and error private key parse for when ECC or RSA is unknown.
@@ -199,6 +200,7 @@ parsed:
 }
 #endif /* USE_ECC && USE_RSA */
 #endif /* MATRIX_USE_FILE_SYSTEM */
+#endif /* USE_PRIVATE_KEY_PARSING */
 
 /******************************************************************************/
 

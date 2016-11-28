@@ -295,6 +295,8 @@ static int32 addCertFragOverhead(ssl_t *ssl, int32 totalCertLen)
 #endif /* ! ONLY_PSK */
 
 #ifdef USE_ECC
+#if defined(USE_SERVER_SIDE_SSL) || defined(USE_CLIENT_AUTH)
+#ifndef USE_ONLY_PSK_CIPHER_SUITE
 /* ECDSA signature is two DER INTEGER values.  Either integer could result
 	in the high bit being set which is interpreted as a negative number
 	unless proceeded by a 0x0 byte.  MatrixSSL predicts one of the two will
@@ -469,8 +471,9 @@ static int accountForEcdsaSizeChange(ssl_t *ssl, pkaAfter_t *pka, int real,
 	}
 	return PS_SUCCESS;
 }
+#endif /* !USE_ONLY_PSK_CIPHER_SUITE */
+#endif /* USE_SERVER_SIDE_SSL || USE_CLIENT_AUTH */
 #endif /* USE_ECC */
-
 
 #ifdef USE_SERVER_SIDE_SSL
 /* The ServerKeyExchange delayed PKA op */
@@ -2184,7 +2187,8 @@ static int32 encryptFlight(ssl_t *ssl, unsigned char **end)
 
 	/* NEGATIVE ECDSA - save the end of the flight buffer */
 	origEnd = *end;
-	
+	PS_VARIABLE_SET_BUT_UNUSED(origEnd);
+
 	msg = ssl->flightEncode;
 	while (msg) {
 		c = msg->start + msg->len;
@@ -6492,12 +6496,14 @@ static int32 writeCertificateRequest(ssl_t *ssl, sslBuf_t *out, int32 certLen,
 				Is this the fragment case?
 */
 				if (rc == DTLS_MUST_FRAG) {
+#ifdef USE_CLIENT_AUTH
 					rc = dtlsWriteCertificateRequest(ssl->hsPool, ssl,
 						certLen, certCount, sigHashLen, c);
 					if (rc < 0) {
 						return rc;
 					}
 					c += rc;
+#endif /* USE_CLIENT_AUTH */
 					out->end = c;
 					return MATRIXSSL_SUCCESS;
 				}

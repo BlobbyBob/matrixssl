@@ -68,6 +68,18 @@ typedef struct {
 //#define ID_ECDH_ECDSA /* EC Certificate and Key */
 //#define ID_ECDH_RSA /* EC Key with RSA signed certificate */
 
+#if !defined(ID_RSA) && !defined(ID_ECDH_ECDSA) && !defined(ID_ECDH_RSA)
+/* Choose a default identity based on which algorithms are supported. */
+#ifdef USE_RSA_CIPHER_SUITE
+#define ID_RSA
+#else
+#ifdef USE_ECC_CIPHER_SUITE
+#define ID_ECDH_ECDSA
+#else
+#error "Please enable either RSA or ECC for client"
+#endif /* USE_ECC_CIPHER_SUITE */
+#endif /* USE_RSA_CIPHER_SUITE */
+#endif /* !ID_RSA && !ID_ECDH_ECDSA && !ID_ECDH_RSA */
 
 /*	If the algorithm type is supported, load a CA for it */
 #ifdef USE_HEADER_KEYS

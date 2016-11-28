@@ -63,7 +63,7 @@ extern "C" {
 #define	PS_CERT_AUTH_FAIL_BC		-32 /* BasicConstraint failure */
 #define	PS_CERT_AUTH_FAIL_DN		-33 /* DistinguishedName failure */
 #define	PS_CERT_AUTH_FAIL_SIG		-34 /* Signature validation failure */
-#define PS_CERT_AUTH_FAIL_REVOKED	-35 /* Revoked via CRL */
+#define PS_CERT_AUTH_FAIL_REVOKED	-35 /* Revoked via CRL or OCSP */
 #define	PS_CERT_AUTH_FAIL			-36 /* Generic cert auth fail */
 #define PS_CERT_AUTH_FAIL_EXTENSION -37 /* extension permission problem */
 #define PS_CERT_AUTH_FAIL_PATH_LEN	-38 /* pathLen exceeded */
@@ -267,6 +267,10 @@ PSPUBLIC void psDes3Clear(psDes3_t *ctx);
 */
 #ifdef USE_MD5
 /******************************************************************************/
+static __inline void psMd5PreInit(psMd5_t *md5)
+{
+	/* Nothing to pre-initialize for native crypto. */
+}
 PSPUBLIC int32_t psMd5Init(psMd5_t *md5);
 PSPUBLIC void psMd5Update(psMd5_t *md5, const unsigned char *buf, uint32_t len);
 PSPUBLIC void psMd5Final(psMd5_t *md, unsigned char hash[MD5_HASHLEN]);
@@ -495,7 +499,7 @@ PSPUBLIC int32 psPkcs12Parse(psPool_t *pool, psX509Cert_t **cert,
 /*
 	PKCS#5 PBKDF v1 and v2 key generation
 */
-PSPUBLIC void pkcs5pbkdf1(unsigned char *pass, uint32 passlen,
+PSPUBLIC int32_t pkcs5pbkdf1(unsigned char *pass, uint32 passlen,
 				unsigned char *salt, int32 iter, unsigned char *key);
 PSPUBLIC void pkcs5pbkdf2(unsigned char *password, uint32 pLen,
 				 unsigned char *salt, uint32 sLen, int32 rounds,
@@ -724,6 +728,19 @@ PSPUBLIC int32_t psInitPrng(psRandom_t *ctx, void *userPtr);
 PSPUBLIC int32_t psGetPrng(psRandom_t *ctx, unsigned char *bytes, uint16_t size,
 						void *userPtr);
 
+#ifdef USE_YARROW
+/******************************************************************************/
+PSPUBLIC int32 psYarrowStart(psYarrow_t *ctx);
+PSPUBLIC int32 psYarrowAddEntropy(unsigned char *in, uint32 inlen,
+			psYarrow_t *prng);
+PSPUBLIC int32 psYarrowReseed(psYarrow_t *ctx);
+PSPUBLIC uint32 psYarrowRead(unsigned char *out, uint32 outlen, psYarrow_t *cx);
+PSPUBLIC int32 psYarrowDone(psYarrow_t *ctx);
+PSPUBLIC int32 psYarrowExport(unsigned char *out, uint32 *outlen,
+			psYarrow_t *ctx);
+PSPUBLIC int32 psYarrowImport(unsigned char *in, uint32 inlen, psYarrow_t *ctx);
+#endif /* USE_YARROW */
+
 /******************************************************************************/
 /*
 	Deprecated Algorithms
@@ -778,6 +795,10 @@ PSPUBLIC int32_t psMd4Final(psMd4_t *md, unsigned char *hash);
 
 #ifdef USE_MD2
 /******************************************************************************/
+static __inline void psMd2PreInit(psMd2_t *md2)
+{
+	/* Nothing to pre-initialize for native crypto. */
+}
 PSPUBLIC void psMd2Init(psMd2_t *md);
 PSPUBLIC int32_t psMd2Update(psMd2_t *md, const unsigned char *buf,
 					uint32_t len);

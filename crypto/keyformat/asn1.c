@@ -350,6 +350,96 @@ int32_t getAsnAlgorithmIdentifier(const unsigned char **pp, uint32_t len,
 	return rc;
 }
 
+#ifndef MATRIXSSL_NO_OID_DATABASE
+/* This function uses computed OID sums as base and adds suitable number of
+   multiples of OID_COLLISION in case the first known oid with the number
+   did not match. If function fails the value will be >= 32768. */
+static void checkAsnOidDatabase(int32_t *oi,
+								const unsigned char *oidStart,
+								uint32_t oidLen)
+{
+	/* The values are represented as C strings, although they contain
+	   binary data. Therefore the type needs to be const char *. */
+	const char *oid_hex;
+	/* Loop until match is found, adding multiples of OID_COLLISION in case of
+	   mismatch. */
+	while(1) {
+		switch(*oi) {
+		case OID_SHA1_ALG: oid_hex = OID_SHA1_ALG_HEX; break;
+		case OID_SHA256_ALG: oid_hex = OID_SHA256_ALG_HEX; break;
+		case OID_SHA384_ALG: oid_hex = OID_SHA384_ALG_HEX; break;
+		case OID_SHA512_ALG: oid_hex = OID_SHA512_ALG_HEX; break;
+		case OID_MD2_ALG: oid_hex = OID_MD2_ALG_HEX; break;
+		case OID_MD5_ALG: oid_hex = OID_MD5_ALG_HEX; break;
+		case OID_MD2_RSA_SIG: oid_hex = OID_MD2_RSA_SIG_HEX; break;
+		case OID_MD5_RSA_SIG: oid_hex = OID_MD5_RSA_SIG_HEX; break;
+		case OID_SHA1_RSA_SIG: oid_hex = OID_SHA1_RSA_SIG_HEX; break;
+		case OID_ID_MGF1: oid_hex = OID_ID_MGF1_HEX; break;
+		case OID_RSASSA_PSS: oid_hex = OID_RSASSA_PSS_HEX; break;
+		case OID_SHA256_RSA_SIG: oid_hex = OID_SHA256_RSA_SIG_HEX; break;
+		case OID_SHA384_RSA_SIG: oid_hex = OID_SHA384_RSA_SIG_HEX; break;
+		case OID_SHA512_RSA_SIG: oid_hex = OID_SHA512_RSA_SIG_HEX; break;
+		case OID_SHA1_DSA_SIG: oid_hex = OID_SHA1_DSA_SIG_HEX; break;
+		case OID_SHA1_ECDSA_SIG: oid_hex = OID_SHA1_ECDSA_SIG_HEX; break;
+		case OID_SHA224_ECDSA_SIG: oid_hex = OID_SHA224_ECDSA_SIG_HEX; break;
+		case OID_SHA256_ECDSA_SIG: oid_hex = OID_SHA256_ECDSA_SIG_HEX; break;
+		case OID_SHA384_ECDSA_SIG: oid_hex = OID_SHA384_ECDSA_SIG_HEX; break;
+		case OID_SHA512_ECDSA_SIG: oid_hex = OID_SHA512_ECDSA_SIG_HEX; break;
+		case OID_RSA_KEY_ALG: oid_hex = OID_RSA_KEY_ALG_HEX; break;
+		case OID_DSA_KEY_ALG: oid_hex = OID_DSA_KEY_ALG_HEX; break;
+		case OID_ECDSA_KEY_ALG: oid_hex = OID_ECDSA_KEY_ALG_HEX; break;
+		case OID_DES_EDE3_CBC: oid_hex = OID_DES_EDE3_CBC_HEX; break;
+		case OID_AES_128_CBC: oid_hex = OID_AES_128_CBC_HEX; break;
+		case OID_AES_128_WRAP: oid_hex = OID_AES_128_WRAP_HEX; break;
+		case OID_AES_128_GCM: oid_hex = OID_AES_128_GCM_HEX; break;
+		case OID_AES_192_CBC: oid_hex = OID_AES_192_CBC_HEX; break;
+		case OID_AES_192_WRAP: oid_hex = OID_AES_192_WRAP_HEX; break;
+		case OID_AES_192_GCM: oid_hex = OID_AES_192_GCM_HEX; break;
+		case OID_AES_256_CBC: oid_hex = OID_AES_256_CBC_HEX; break;
+		case OID_AES_256_WRAP: oid_hex = OID_AES_256_WRAP_HEX; break;
+		case OID_AES_256_GCM: oid_hex = OID_AES_256_GCM_HEX; break;
+		case OID_AES_CMAC: oid_hex = OID_AES_CMAC_HEX; break;
+		case OID_AES_CBC_CMAC_128: oid_hex = OID_AES_CBC_CMAC_128_HEX; break;
+		case OID_AES_CBC_CMAC_192: oid_hex = OID_AES_CBC_CMAC_192_HEX; break;
+		case OID_AES_CBC_CMAC_256: oid_hex = OID_AES_CBC_CMAC_256_HEX; break;
+		case OID_AUTH_ENC_256_SUM: oid_hex = OID_AUTH_ENC_256_SUM_HEX; break;
+		case OID_PKCS_PBKDF2: oid_hex = OID_PKCS_PBKDF2_HEX; break;
+		case OID_PKCS_PBES2: oid_hex = OID_PKCS_PBES2_HEX; break;
+		case OID_PKCS_PBESHA128RC4: oid_hex = OID_PKCS_PBESHA128RC4_HEX; break;
+		case OID_PKCS_PBESHA40RC4: oid_hex = OID_PKCS_PBESHA40RC4_HEX; break;
+		case OID_PKCS_PBESHA3DES3: oid_hex = OID_PKCS_PBESHA3DES3_HEX; break;
+		case OID_PKCS_PBESHA2DES3: oid_hex = OID_PKCS_PBESHA2DES3_HEX; break;
+		case OID_PKCS_PBESHA128RC2: oid_hex = OID_PKCS_PBESHA128RC2_HEX; break;
+		case OID_PKCS_PBESHA40RC2: oid_hex = OID_PKCS_PBESHA40RC2_HEX; break;
+		case OID_PKCS12_BAG_TYPE_KEY: oid_hex = OID_PKCS12_BAG_TYPE_KEY_HEX; break;
+		case OID_PKCS12_BAG_TYPE_SHROUD: oid_hex = OID_PKCS12_BAG_TYPE_SHROUD_HEX; break;
+		case OID_PKCS12_BAG_TYPE_CERT: oid_hex = OID_PKCS12_BAG_TYPE_CERT_HEX; break;
+		case OID_PKCS12_BAG_TYPE_CRL: oid_hex = OID_PKCS12_BAG_TYPE_CRL_HEX; break;
+		case OID_PKCS12_BAG_TYPE_SECRET: oid_hex = OID_PKCS12_BAG_TYPE_SECRET_HEX; break;
+		case OID_PKCS12_BAG_TYPE_SAFE: oid_hex = OID_PKCS12_BAG_TYPE_SAFE_HEX; break;
+		case OID_PKCS9_CERT_TYPE_X509: oid_hex = OID_PKCS9_CERT_TYPE_X509_HEX; break;
+		case OID_PKCS9_CERT_TYPE_SDSI: oid_hex = OID_PKCS9_CERT_TYPE_SDSI_HEX; break;
+		case OID_PKCS7_DATA: oid_hex = OID_PKCS7_DATA_HEX; break;
+		case OID_PKCS7_SIGNED_DATA: oid_hex = OID_PKCS7_SIGNED_DATA_HEX; break;
+		case OID_PKCS7_ENVELOPED_DATA: oid_hex = OID_PKCS7_ENVELOPED_DATA_HEX; break;
+		case OID_PKCS7_SIGNED_ENVELOPED_DATA: oid_hex = OID_PKCS7_SIGNED_ENVELOPED_DATA_HEX; break;
+		case OID_PKCS7_DIGESTED_DATA: oid_hex = OID_PKCS7_DIGESTED_DATA_HEX; break;
+		case OID_PKCS7_ENCRYPTED_DATA: oid_hex = OID_PKCS7_ENCRYPTED_DATA_HEX; break;
+		case OID_OCSP: oid_hex = OID_OCSP_HEX; break;
+		case OID_BASIC_OCSP_RESPONSE: oid_hex = OID_BASIC_OCSP_RESPONSE_HEX; break;
+		default:
+			/* No possible matches: bitwise-add not found constant to OID. */
+			*oi |= OID_NOT_FOUND;
+			return;
+		}
+		/* Ignore tag, but use length byte and data from binary oid. */
+		if (oidLen == oid_hex[1] && !memcmp(oidStart, &oid_hex[2], oidLen))
+			return;
+		*oi += OID_COLLISION;
+	}
+}
+#endif /* MATRIXSSL_NO_OID_DATABASE */
+
 /******************************************************************************/
 
 int32_t getAsnOID(const unsigned char **pp, uint32_t len, int32_t *oi,
@@ -358,6 +448,8 @@ int32_t getAsnOID(const unsigned char **pp, uint32_t len, int32_t *oi,
 	const unsigned char	*p = *pp, *end;
 	int32_t				plen, rc;
 	uint32_t			arcLen;
+	const unsigned char *oidStart;
+	uint32_t            oidLen;
 
 	rc = PS_PARSE_FAIL;
 	end = p + len;
@@ -375,11 +467,17 @@ int32_t getAsnOID(const unsigned char **pp, uint32_t len, int32_t *oi,
 		return PS_LIMIT_FAIL;
 	}
 	*oi = 0;
+	oidStart = p;
+	oidLen = arcLen;
 	while (arcLen > 0) {
 		*oi += *p;
 		p++;
 		arcLen--;
 	}
+
+#ifndef MATRIXSSL_NO_OID_DATABASE
+	checkAsnOidDatabase(oi, oidStart, oidLen);
+#endif /* MATRIXSSL_NO_OID_DATABASE */
 
 	if (checkForParams) {
 		plen -= (end - p);

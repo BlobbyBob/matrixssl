@@ -745,11 +745,9 @@ MatrixSSL contains a set of optional debug features that are configurable at com
 : matrixsslConfig.h - If enabled, each DTLS handshake message will be returned individually when matrixDtlsGetOutdata is called. When left disabled, the default behaviour of matrixDtlsGetOutdata is to return as much data as possible that fits within the maximum PMTU.
 
 ##4.4 Minimum Firmware Configuration <i class="icon-leaf"></i>
-MatrixSSL can be built to a minimum size using TLS 1.2, PSK cipher with AES128 and SHA256. If interoperability with *OpenSSL* is desired, this standard cipher suite is not implemented (as of 1.0.1j). In this case, `USE_SHA` must also be defined and the cipher suite changed to
+MatrixSSL can be built to a minimum size using TLS 1.2, PSK cipher with AES128 and SHA256. If interoperability with *OpenSSL* is desired, then a few changes are necessary, since the USE_TLS_PSK_WITH_AES_128_CBC_SHA256 ciphersuite is not implemented by OpenSSL (as of 1.0.2d). In this case, `USE_SHA1` and `USE_HMAC_SHA1` must also be defined and the cipher suite changed to
 `USE_TLS_PSK_WITH_AES_256_CBC_SHA` or
 `USE_TLS_PSK_WITH_AES_128_CBC_SHA`.
-
-_The MatrixSSL Performance Guide_ has more information on storage and memory requirements for various configurations and platforms.
 
 To enable minimal configuration, all options in _core/coreConfig.h_, _crypto/cryptoConfig.h_ and _matrixssl/matrixsslConfig.h_ should be commented out, except for the following:
 
@@ -758,14 +756,13 @@ _coreConfig.h_
 Optional: Disable `USE_CORE_ERROR` and `USE_CORE_ASSERT`
 
 _cryptoConfig.h_
-: `USE_AES`, `USE_SHA256`, `USE_HMAC`
+: `USE_AES_CBC`, `USE_SHA256`, `USE_HMAC`, `USE_HMAC_SHA256`
 Optional: `__AES__` block to enable *AESNI* on *Intel* platforms.
-Optional: For *OpenSSL* compatibility, also enable `USE_SHA1`
+Optional: For *OpenSSL* compatibility, also enable `USE_SHA1` and `USE_HMAC_SHA1`
 
 _matrixsslConfig.h_
 : `USE_TLS_PSK_WITH_AES_128_CBC_SHA256`
-`USE_TLS`, `USE_TLS_1_1`, `USE_TLS_1_2`, `DISABLE_TLS_1_1`, `DISABLE_TLS_1_0`, `DISABLE_SSLV3`
-`USE_CLIENT_SIDE_SSL` and/or `USE_SERVER_SIDE_SSL`
+`USE_TLS_1_2_AND_ABOVE`, `USE_CLIENT_SIDE_SSL` and/or `USE_SERVER_SIDE_SSL`
 Optional: `SSL_DEFAULT_IN_BUF_SIZE`, `SSL_DEFAULT_OUT_BUF_SIZE` set to 1500 for reduced RAM footprint.
 Optional for Server: `SSL_SESSION_TABLE_SIZE` as low as 1 for reduced RAM footprint.
 Optional: `USE_DTLS`
@@ -790,8 +787,8 @@ nonfips|Same as default
 noecc|Disables ECC support
 rsaonly|Disables ECC and DH support
 tls|The recommended configuration for TLS
-
-These configurations can be applied with the commands _make all-nonfips_, _make all-noecc_, _make all-rsaonly_ and _make all-tls_, respectively. Applying a new configuration will override the existing _./core/coreConfig.h_, _./crypto/cryptoConfig.h_, and _./matrixssl/matrixsslConfig.h_ files. After applying the configuration, these files can be further adapted per specific needs and the MatrixSSL can be compiled as usual, via the make commands described in the _MatrixSSL Getting Started_ document.
+nonfips-psk|The minimal PSK configuration described in the last subsection, except that both server- and client side support are enabled.
+These configurations can be applied with the commands _make all-nonfips_, _make all-noecc_, _make all-rsaonly_, _make all-tls_, _make all-nonfips-psk_ respectively. Applying a new configuration will override the existing _./core/coreConfig.h_, _./crypto/cryptoConfig.h_, and _./matrixssl/matrixsslConfig.h_ files. After applying the configuration, these files can be further adapted per specific needs and the MatrixSSL can be compiled as usual, via the make commands described in the _MatrixSSL Getting Started_ document.
 
 #5	SSL HANDSHAKING <i class="icon-exchange"></i>
 The core of SSL security is the handshake protocol that allows two peers to authenticate and negotiate symmetric encryption keys.  A handshake is defined by the specific sequence of SSL messages that are exchanged between the client and server.  A collection of messages being sent from one peer to another is called a flight.
@@ -1079,7 +1076,9 @@ Servers will evaluate the FALLBACK_SCSV indication automatically as per RFC:
 > If TLS_FALLBACK_SCSV appears in ClientHello.cipher_suites and the highest protocol version supported by the server is higher than the version indicated in ClientHello.client_version, the server MUST respond with a fatal inappropriate_fallback alert
 
 ##6.8 OCSP
-The Online Certificate Status Protocol (OCSP) is an alternative to the Certificate Revocation List (CRL) mechanism for performing certificate revocation tests on server keys. TLS integrates with OCSP in a mechanism known as _OCSP stapling_. This feature allows the client to request that the server provide a time-stamped OCSP response when presenting the X.509 certificate during the TLS handshake. The primary goal for this method is to allow resource constrained clients to perform certificate revocation tests without having to communicate with an OCSP Responder themselves. The general process is illustrated below.
+The Online Certificate Status Protocol (OCSP) is an alternative to the Certificate Revocation List (CRL) mechanism for performing certificate revocation tests on server keys. TLS integrates with OCSP in a mechanism known as _OCSP stapling_. This feature allows the client to request that the server provide a time-stamped OCSP response when presenting the X.509 certificate during the TLS handshake. The primary goal for this method is to allow resource constrained clients to perform certificate revocation tests without having to communicate with an OCSP Responder themselves. The general process is illustrated below. The MatrixSSL also
+supports OCSP request generation, to do revocation tests on certificates without
+TLS server supporting OCSP stapling.
 
 OCSP stapling is specified in Section 8 (Certificate Status Request) of the TLS Extensions [RFC 6066](https://tools.ietf.org/html/rfc6066#section-8). The `USE_OCSP` define in cryptoConfig.h must be enabled for these features to be available.
 
@@ -1113,6 +1112,184 @@ The OCSP stapling specification does not have guidance on how a client should be
 A server application wishing to support OCSP stapling must communicate out of band with an OCSP responder to periodically update the signed OCSP response, as defined in [RFC 6960](https://tools.ietf.org/html/rfc6960). The response is loaded into MatrixSSL by calling `matrixSslLoadOCSPResponse`. This function takes a fully formed `OCSPResponse` ASN.1 buffer as defined in [RFC6960 section 4.2](https://tools.ietf.org/html/rfc6960#section-4.2) and loads it into the provided `sslKeys_t` structure. Whenever the server application gets a new OCSP response, the same `matrixSslLoadOCSPResponse` API can be called to update the `sslKeys_t` structure.
 
 When a client sends the `status_request` extension the server will look to see if an OCSP response is available in the `sslKeys_t` structure and reply with a `status_request` extension and the `CERTIFICATE_STATUS` message that holds the OCSP response for the client to validate.
+
+### Configuring OCSP Feature for Use
+
+The OCSP functionality depends on definitions in `cryptoConfig.h`. Full read/write functionality and server features requires following defines:
+``` {.c}
+#define USE_X509
+#define USE_CERT_PARSE
+#define USE_FULL_CERT_PARSE
+#define USE_CRL
+#define USE_OCSP
+#define USE_OCSP_MUST_STAPLE
+```
+
+The standard configurations like `default` on *MatrixSSL* FIPS and Commercial releases have already neccessary features enabled.
+
+### Invoking OCSP Manually
+
+#### OCSP Example Application
+
+OCSP use has example application `ocsp.c` in `apps/crypto` subdirectory of *MatrixSSL*. The compiled application will be known as `matrixOCSP`.
+This application can be used to create OCSP requests and get responses. The easiest way to study OCSP functionality is to use and examine this application. The application provides usage instructions when invoked without parameters. Some of most interesting options include `-request`and `-reply` which allow storing requests and responses for examination with various other tools supporting OCSP and/or ASN.1 DER/BER.
+The most MatrixSSL supported functions are used by this program.
+
+The most of functionality of `ocsp.c` program is found in `OCSPRequestAndResponseTest()` function, and this function is most useful to study for creating OCSP requests and validating OCSP responses. 
+
+#### Creating OCSP request data
+
+In MatrixSSL, function `matrixSslWriteOCSPRequestExt()` is used to create OCSP requests.
+
+The function is invoked as follows:
+``` {.c}
+if (matrixSslWriteOCSPRequestExt(NULL, 
+                                 subject,
+                                 issuer,
+                                 &request,
+                                 &requestLen,
+                                 &info) != PS_SUCCESS) {
+    /* Error handling */
+    return PS_FAILURE;
+}
+```
+
+The memory pool is usually passed in as NULL. The certificates   `subject` (certificate to check) and `issuer` (for issuer of certificate to check needs to be provided).  New memory will be allocated for request and the pointer of request will be written to `request`, and the amount of memory allocated will be written to `requestLen`.
+
+`info` is used to provide options for OCSP request. These options are discussed below. The memory allocated for OCSP request shall be freed after the request
+is no longer needed.
+
+##### Providing Nonce Extension
+
+The *MatrixSSL* provides nonce for OCSP nonce extension via `info.flags` flag `MATRIXSSL_WRITE_OCSP_REQUEST_FLAG_NONCE`. The OCSP nonce extension provide unique nonce value, which can be used to the request is replied with a new (rather than cached) OCSP response.
+
+##### Providing name for requestor (requestorName)
+
+The MatrixSSL allows providing name for OCSP requestor. The name is represented
+using X.509 GeneralName. matrixSslWriteOCSPRequestInfoSetRequestorId() function
+is provided to help encoding the OCSP requestor name in suitable format for
+OCSP request. Note: This option is relatively rarely used and some OCSP
+Responders will reject requests with RequestorName.
+
+##### Providing list of requests (requestList)
+
+If `matrixSslWriteOCSPRequestInfo_t` flag `MATRIXSSL_WRITE_OCSP_REQUEST_FLAG_CERT_LIST` is specified,
+then OCSP request is made concerning a list of certificates linked
+(via `subject->next`). This is a convenient way to allow for less network
+traffic when working with the certificates from the same issuer.
+Note: Some OCSP responders only support single request, and will reject requests
+concerning multiple certificates.
+
+#### Interacting with OCSP server
+
+The most OCSP servers use **HTTP** protocol. The *MatrixSSL* provides `psUrlInteract()` function, to create HTTP request and get HTTP response. When OCSP is used in SSL/TLS context, the most commonly `subject` certificate will contain AuthorityInfoAccess information regarding what server will provide OCSP information. It is accessed via `authorityInfoAccess` field of the Certificate structure `psX509Cert_t`.
+
+You can see `getOCSPResponse()` function in `ocsp.c` for a concrete example on how to interact with the server.
+
+To use HTTP protocol, it is necessary to know the correct URL. The URL is in practice commonly specified in AuthorityInfoAccess extensions of X.509 certificate. The following function will extract authority information from X.509 certificate. 
+```{.c}
+static char *getAuthorityInfoOCSP_URI(const psX509Cert_t *subject)
+{
+    char *url = NULL;
+    x509authorityInfoAccess_t *authInfo;
+    authInfo = subject->extensions.authorityInfoAccess;
+
+    /* Find the first AuthorityInfoAccess extension data with
+       OCSP information. */
+    while(authInfo != NULL) {
+        if (authInfo->ocsp && authInfo->ocspLen > 0) {
+            url = calloc(1, authInfo->ocspLen + 1);
+            if (url) {
+                memcpy(url, authInfo->ocsp, authInfo->ocspLen);
+            }
+            break;
+        }
+        authInfo = authInfo->next;
+    }
+    return url;
+}
+```
+
+The interaction will result in getting an HTTP error code or OCSP response. The OCSP response can be analyzed and verified using the functions described in the next chapter.
+
+#### Working with OCSP response
+
+Working with OCSP response actually consists of four phases:
+
+- Obtaining and checking issuer certificate
+- Parsing
+- Checking of time-stamps
+- Validation of response
+
+The functions support both OCSP responses just retrieved as response to a constructed OCSP request and cached OCSP requests. One type of cache OCSP response often used in SSL/TLS is the ones used in OCSP stapling.
+
+#### Obtaining and checking issuer certificate
+
+To validate OCSP response, an issuer certificate is used. Many organizations use the same certificates to sign OCSP responses than are used to validate certificates themselves. In this case, the issuer certificate has been obtained and validated already as part of X.509 certificate validation. In case, OCSP responses have been signed with other keys designated for that purpose, then they shall be validated just like any other X.509 intermediate certificate, e.g. using `psX509ParseCert()` and `psX509AuthenticateCert()`.
+
+The certificate of keys intended to be used for OCSP may have been marked for that purpose. This can be checked e.g. with the following code: 
+```{.c}
+bool gotEKU_OCSP = false;
+bool gotKU_OCSP = false;
+const x509v3extensions_t *ext = &issuer->extensions;
+/* Specific flag for OCSP. */
+if ((ext->ekuFlags & EXT_KEY_USAGE_OCSP_SIGNING) > 0)
+    gotEKU_OCSP = true;
+/* No OCSP specific flag, use generic digital signatures flag. */
+if ((ext->keyUsageFlags & KEY_USAGE_DIGITAL_SIGNATURE) > 0)
+    gotKY_OCSP = true;
+```
+Only if both key usage and extended key usage flags are found in the certificate, the key can be considered to be marked for OCSP usage. However, many of the keys used for OCSP do not have this purpose marked in their certificate, and the most important validity check for OCSP signers remains ensuring that they have been signed by (one of) the CA root(s).
+
+#### Parsing OCSP response
+
+OCSP response can be parsed using function `parseOCSPResponse()`. Parsing does not validate the response for correctness, but translates the response to internal form (`mOCSPResponse_t`), which allows easier working with the response.
+
+#### Checking time-stamps
+
+The times in OCSP response are validated with `checkOCSPResponseDates()` function. The function will check the times in the OCSP response with respect to the current time and provide `struct tm` field representing various times (*ProducedAt*, *thisUpdate*, *nextUpdate*) within OCSP response. If OCSP response has timed out the function will return `PS_TIMEOUT_FAIL`.
+
+The time validation function allows some clock skew between server and client. The default value is provided by `PS_OCSP_TIME_LINGER`, it is two minutes. It is possible to provide different values depending on how well the clocks are expected to be synchronized. 
+
+If OCSP response is found to be no longer valid or there is another issue in timestamps, then the application should not accept the OCSP response or process it further.
+
+#### Validating OCSP response
+
+The purpose of OCSP is to check if a certificate is revoked. `validateOCSPResponse_ex()` function is (finally) provided for this purpose. The function supports many different arguments. The options are used to pass in optional arguments.
+
+``` {.c}
+opts.knownFlag = &known;
+opts.revocationFlag = &revocated;
+opts.nonceMatch = &nonceOk;
+opts.revocationTime = &revocationTime;
+opts.revocationReason = &revocationReason;
+opts.request = request;
+opts.requestLen = requestLen;
+if (validateOCSPResponse_ex(NULL,
+                            issuer,
+                            subject,
+                            &response,
+                            &opts) != PS_SUCCESS) {
+    /* Error handling */
+    return PS_FAILURE;
+}
+```
+
+The memory pool is usually passed in as NULL. The certificates   `subject` (certificate to check) and `issuer` (for expected issuer of certificate needs to be provided). `response` is the response to work with. This function returns *PS_SUCCESS* only when validation has been deemed success, and the certificate has not been found to be revoked.
+
+In the simplest usage of this function, only the return code is checked. The *PS_SUCCESS* return code is only gotten if certificate is **not revoked** and the response has been successfully validated.
+
+`opts` is used to provide options for OCSP response parsing. These options will provide more information regarding successful and unsuccessful invocation of `validateOCSPResponse_ex()`. The options are discussed below.
+
+##### Revocation status and reason
+Flag pointed by `opts.knownFlag` will be set to *true* (1) if OCSP response contained information regarding this certificate (`subject`). Responses not containing information regarding the certificate should be dismissed. 
+If certificate has been revoked, flag pointed by `opts.revocationFlag` will be set to *true* (1). If available,  variables pointed by `opts.revocationReason` and `opts.revocationTime` and will be set to indicate the revocation reason and time respectively. In OCSP protocol, revocation reasons are indicated by numbers between 1 and 10, the same codes used by CRL. (See function `mapRevocationReason()` in `ocsp.c` for mapping the numbers to various reasons). 
+
+##### Nonce validation
+
+For validating OCSP nonce, it is necessary to provide the OCSP request as pointer and length pair to `validateOCSPResponse_ex()` function, using `opts.request` and `opts.requestLen`. If the same nonce is found in OCSP request and response, that is considered a match and flag pointed to by `opts.nonceMatch` is set to *true* (1).
+
+Currently, OCSP nonce is not supported by many of the OCSP servers deployed in practice, and therefore, it is recommended to not rely on OCSP nonce feature to be provided by third party OCSP servers.
 
 ##6.9 MatrixSSL Statistics Framework
 Implementations that wish to capture counts of SSL events can tap into the `MATRIXSSL_STATS` framework by enabling `USE_MATRIXSSL_STATS` during the compile.  The mechanism is a very simple callback that can be registered to record whatever specific SSL event the user wants.   The default set of events capture the following:

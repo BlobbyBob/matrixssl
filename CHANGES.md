@@ -1,6 +1,179 @@
 MatrixSSL Release Notes
 =======================
 
+Changes in 3.8.7
+----------------
+
+> **Version 3.8.7**
+> November 2016
+> (C) Copyright 2016 INSIDE Secure - All Rights Reserved
+
+
+
+1. BUG FIXES SINCE 3.8.6
+ - Fixed Wrong Computation Results Bug In pstm.c Division
+ - Fixed Memory Corruption In psDhImportPubKey
+ - Fixed RSA Public Key Read Overflow
+ - X.509/CRL/OCSP Timestamp Validation
+ - Unix Year 2038 Problem Fix
+ - Stricter OID Comparison
+ - Multibyte String Handling
+ - Configuration Robustness Improvements
+ - X.509 Certificate Parsing Read Overflow
+ - PKCS #8 Buffer Read Overflow
+ - OCSP Bug Fixes
+ - Generic Bug Fixes For Test Programs
+ - Changes to Recommended Configurations
+ - psMutex Locking and Unlocking APIs Compiler Warnings Removed
+ - MD5 and SHA-1 Combined Digest Function
+ - Coverity Issues Fixed
+ - Yarrow Build Issues Fixed
+
+2. NEW FEATURES SINCE 3.8.6
+  - SHA-512 for X.509 Certificates Improvements
+  - OCSP Improvements
+  - X.509 Certificate Domain Components
+  - New Configuration: Minimal PSK
+
+
+#1. BUG FIXES SINCE 3.8.6
+
+## Fixed Wrong Computation Results Bug In pstm.c Division
+
+The bug could cause some big number mathematics to return wrong values when divisor and dividend are very far from each other.
+This issue is related to public key computation problems
+reported by Security Researcher [Hanno Böck](https://hboeck.de/).
+
+## Fixed Memory Corruption In psDhImportPubKey
+
+Importing Diffie-Hellman public key cleared some memory beyond end of the key.
+On some systems this bug may have caused memory corruption.
+
+## Fixed RSA Public Key Read Overflow
+
+When importing RSA key from certificate, maliciously crafted RSA public key could cause read buffer overflow and crash.
+
+## X.509/CRL/OCSP Timestamp Validation
+
+MatrixSSL accepted some X.509 certificates with illegal timestamps,
+such as leap day in an ordinary year. In additional, some two
+digit years were parsed incorrectly. Timestamp parsing has been
+altered everywhere to use new psBrokenDownDate API, which correctly
+handles these corner cases. Some of X.509 time parsing issues were
+reported by Sze Yiu Chau.
+
+## Unix Year 2038 Problem Fix
+
+On 32-bit Unix devices, time_t type, which is signed will overflow in 2038.
+A workaround was added that will allow timestamps and dates to be processed
+correctly by MatrixSSL on and after Tuesday 19 January 2038.
+
+## Stricter OID Comparison
+
+The OID comparison in MatrixSSL uses a simple non-cryptographic digest
+function, based on sum of bytes, which is not collision free. Comparison of OID
+binary representation was added to ensure unknown OIDs are not accidentally
+interpreted the same than some of existing OIDs.
+This issue was reported by Sze Yiu Chau.
+
+## Multibyte String Handling
+
+The MatrixSSL now includes function to recode strings containing multibyte
+(BMPString) characters as UTF-8 strings. This handling is applied to
+X.509 certificate fields, such as Subject Name. This allows code using
+MatrixSSL to work with BMPString input without actually knowing the encoding
+used.
+
+## Configuration Robustness Improvements
+
+MatrixSSL has been made more robust with configurations: changing
+configuration options is less likely to cause problems building the software.
+
+These improvements allow smaller configurations for embedded systems.
+(E.g. build without DTLS, or build only server-side or client-side support.)
+
+## X.509 Certificate Parsing Read Overflow
+
+Fixed read overflow from X.509 certificate date handling and
+removed possible buffer read overflow in parseGeneralNames().
+Without these fixes maliciously crafted X.509 certificate could
+cause software crash.
+
+
+## PKCS #8 Buffer Read Overflow
+
+Fixed reading overly large invalid PKCS #8 encoded private key.
+Without this fix, maliciously crafted PKCS #8 file could cause
+software crash.
+
+
+## OCSP Bug Fixes
+
+In lieu of OCSP improvements, small bugs in OCSP implementation have
+been fixed. The most notable bug was a memory leak.
+
+
+## Generic Bug Fixes For Test Programs
+
+Removed some warnings and memory leaks from test programs.
+Made test programs confirm to Unix/POSIX return value scheme on relevant
+platforms.
+
+
+## Changes to Recommended Configurations
+
+The recommended configurations have been edited slightly.
+Most notably, the tracing is disabled by default on non-debug configurations.
+
+
+## psMutex Locking and Unlocking APIs Compiler Warnings Removed
+
+Removed return value from psLockMutex() and psUnlockMutex() APIs.
+This removes several warnings regarding return values not being used.
+
+
+## MD5 and SHA-1 Combined Digest Function
+
+The MatrixSSL will now invoke combined MD5 and SHA-1 hash function `psMd5Sha1`,
+whenever possible instead of separate MD5 and SHA-1 hash functions.
+
+## Coverity Issues Fixed
+
+Implementation of `getTicketKeys` and `parseSSLHandshake`
+functions was changed to remove issues detected by Coverity.
+
+## Yarrow Build Issues Fixed
+
+MatrixSSL comes with a version of Yarrow PRNG. Its use has been deprecated,
+but the PRNG continued to be shipped with MatrixSSL. Unfortunately, the
+latest versions of MatrixSSL had compilation errors in yarrow.c.
+Those errors have been fixed, and the source code file has been marked
+deprecated.
+
+#2. NEW FEATURES SINCE 3.8.6
+
+## SHA-512 for X.509 Certificates Improvements
+
+MatrixSSL can use SHA-512 to sign self-signed certificate or certificate request. SHA-512 was already previously supported for verification of X.509 certificates.
+(This feature can be used only on MatrixSSL Commercial Edition.)
+
+## OCSP Improvements
+
+OCSP example application apps/crypto/ocsp.c
+(Commercial Edition Only) and MatrixSSL Developer Guide have
+been improved to give more documentation regarding OCSP request.
+OCSP request can now use requestorId feature and request status of list of certificates.
+
+## X.509 Certificate Domain Components
+
+Added Functions for obtaining contents of X.509 certificate Domain
+Component field(s).
+
+## New Configuration: Minimal PSK
+
+New configuration psk added. This configuration provides small footprint MatrixSSL build with only Pre-Shared Key and TLS 1.2 functionality using Matrix Crypto.
+
+
 Changes in 3.8.6
 ----------------
 
@@ -40,7 +213,7 @@ In some cases RSA key generation of 4096 bit keys would fail and return with an 
 Warnings across multiple platforms and compilers were fixed. Various compile time configuration combination build issues were fixed.
 
 ##MatrixSSH compatibility issue
-Newer versions of MatrixSSH server were incompatible with the PuTTY client. A fix has been included and enabled by default `USE_PUTTY_WORKAROUND`. 
+Newer versions of MatrixSSH server were incompatible with the PuTTY client. A fix has been included and enabled by default `USE_PUTTY_WORKAROUND`.
 *Note this does not affect the standard MatrixSSL codebase*.
 
 #2 FEATURES AND IMPROVEMENTS
@@ -283,7 +456,7 @@ HMAC-SHA1 or HMAC-SHA256 are now used to generate the DTLS cookie, and additiona
 ##Fixed key type verification for chosen cipher suite
 An internal verification function that determined whether the server key type was correct for the chosen cipher suite has now been fixed.  Previous versions would sometimes incorrectly determine the server was using the wrong key type if the server was using a certificate chain where parent certificates did not use the same key type.  This bug resulted in a failed handshake and is now fixed.
 
-##Validation of RSA Signature Creation 
+##Validation of RSA Signature Creation
 An internal RSA validation of created signatures has been added to the library in the `psRsaEncryptPriv()` function.
 
 Security researcher Florian Weimer has shown it is possible for RSA private key information to leak under some special failure circumstances.  Information on the exploit can be found here: https://people.redhat.com/~fweimer/rsa-crt-leaks.pdf
@@ -360,7 +533,7 @@ Test keys and certificates moved from ./sampleCerts to ./testkeys.
 XCode and Visual Studio projects moved to ./xcode and ./visualstudio.
 
 Several file changes and renames are present as well:
- 
+
 TLS Decoding moved ./matrixssl/sslDecode.c from ./matrixssl/sslDecode.c,
 ./matrixssl/hsDecode.c and ./matrixssl/extDecode.c.
 Private key import/export from ./crypto/pubkey/pkcs.c. to

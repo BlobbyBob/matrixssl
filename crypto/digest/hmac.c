@@ -137,8 +137,8 @@ void psHmacFinal(psHmac_t *ctx, unsigned char hash[MAX_HASHLEN])
 
 	If the keyLen is > 64 bytes, we hash the key and use it instead
 */
-#ifndef USE_MATRIX_MD5
-#error USE_MATRIX_MD5 required
+#if !defined(USE_MATRIX_MD5) && !defined(USE_CL_DIGESTS)
+#error USE_MATRIX_MD5 or USE_CL_DIGESTS required
 #endif
 int32_t psHmacMd5(const unsigned char *key, uint16_t keyLen,
 				const unsigned char *buf, uint32_t len,

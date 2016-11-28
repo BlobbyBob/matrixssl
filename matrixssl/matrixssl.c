@@ -301,7 +301,9 @@ int32 curveIdToFlag(int32 id)
 static int32 testUserEc(int32 ecFlags, const sslKeys_t *keys)
 {
 	const psEccKey_t	*eccKey;
+#ifdef USE_CERT_PARSE
 	psX509Cert_t		*cert;
+#endif /* USE_CERT_PARSE */
 
 #if defined(USE_SERVER_SIDE_SSL) || defined(USE_CLIENT_AUTH)
 	if (keys->privKey.type == PS_ECC) {
@@ -311,6 +313,7 @@ static int32 testUserEc(int32 ecFlags, const sslKeys_t *keys)
 		}
 	}
 
+#ifdef USE_CERT_PARSE
 	cert = keys->cert;
 	while (cert) {
 		if (cert->publicKey.type == PS_ECC) {
@@ -321,7 +324,8 @@ static int32 testUserEc(int32 ecFlags, const sslKeys_t *keys)
 		}
 		cert = cert->next;
 	}
-#endif
+#endif /* USE_CERT_PARSE */
+#endif /* USE_SERVER_SIDE_SSL || USE_CLIENT_AUTH */
 
 #if defined(USE_CLIENT_SIDE_SSL) || defined(USE_CLIENT_AUTH)
 	cert = keys->CAcerts;
@@ -334,7 +338,7 @@ static int32 testUserEc(int32 ecFlags, const sslKeys_t *keys)
 		}
 		cert = cert->next;
 	}
-#endif
+#endif /* USE_CLIENT_SIDE_SSL || USE_CLIENT_AUTH */
 
 	return PS_SUCCESS;
 }
@@ -344,6 +348,7 @@ static int32 testUserEc(int32 ecFlags, const sslKeys_t *keys)
 #ifdef MATRIX_USE_FILE_SYSTEM
 #ifdef USE_PKCS12
 
+#ifdef USE_CERT_PARSE
 /* Have seen cases where the PKCS#12 files are not in a child-to-parent order */
 static void ReorderCertChain(psX509Cert_t *a_cert)
 {
@@ -369,6 +374,7 @@ static void ReorderCertChain(psX509Cert_t *a_cert)
 		currCert = currCert->next;
 	}
 }
+#endif /* USE_CERT_PARSE */
 
 /******************************************************************************/
 /*
@@ -404,7 +410,9 @@ int32 matrixSslLoadPkcs12(sslKeys_t *keys, const unsigned char *certFile,
 		psClearPubKey(&keys->privKey);
 		return rc;
 	}
+#ifdef USE_CERT_PARSE
 	ReorderCertChain(keys->cert);
+#endif /* USE_CERT_PARSE */
 #if defined(USE_SERVER_SIDE_SSL) || defined(USE_CLIENT_AUTH)
 	if (verifyReadKeys(pool, keys, keys->poolUserPtr) < PS_SUCCESS) {
 		psTraceInfo("PKCS#12 parse success but material didn't validate\n");
@@ -480,14 +488,16 @@ static int32 matrixSslLoadKeyMaterial(sslKeys_t *keys, const char *certFile,
 				&keys->cert, flags)) < 0) {
 			return err;
 		}
+#ifdef USE_CERT_PARSE
 		if (keys->cert->authFailFlags) {
 			psAssert(keys->cert->authFailFlags == PS_CERT_AUTH_FAIL_DATE_FLAG);
 #ifdef POSIX /* TODO - implement date check on WIN32, etc. */
 			psX509FreeCert(keys->cert);
 			keys->cert = NULL;
 			return PS_CERT_AUTH_FAIL_EXTENSION;
-#endif
+#endif /* POSIX */
 		}
+#endif /* USE_CERT_PARSE */
 #else
 		psTraceStrInfo("Ignoring %s certFile in matrixSslReadKeys\n",
 					(char *)certFile);
@@ -637,7 +647,7 @@ int32_t matrixSslGenEphemeralEcKey(sslKeys_t *keys, psEccKey_t *ecc,
 	psAssert(keys && curve);
 #if ECC_EPHEMERAL_CACHE_USAGE > 0
 	psGetTime(&t, keys->poolUserPtr);
-	(void)psLockMutex(&keys->cache.lock);
+	psLockMutex(&keys->cache.lock);
 	if (keys->cache.eccPrivKey.curve != curve) {
 		psTraceStrInfo("Generating ephemeral %s key (new curve)\n",
 			curve->name);
@@ -659,7 +669,7 @@ int32_t matrixSslGenEphemeralEcKey(sslKeys_t *keys, psEccKey_t *ecc,
 	if (ecc) {
 		rc = psEccCopyKey(ecc, &keys->cache.eccPrivKey);
 	}
-	(void)psUnlockMutex(&keys->cache.lock);
+	psUnlockMutex(&keys->cache.lock);
 	return rc;
 L_REGEN:
 	if (keys->cache.eccPrivKeyUse) {
@@ -669,7 +679,7 @@ L_REGEN:
 	}
 	rc = psEccGenKey(keys->pool, &keys->cache.eccPrivKey, curve, hwCtx);
 	if (rc < 0) {
-		(void)psUnlockMutex(&keys->cache.lock);
+		psUnlockMutex(&keys->cache.lock);
 		return rc;
 	}
 	keys->cache.eccPrivKeyTime = t;
@@ -678,7 +688,7 @@ L_REGEN:
 	if (ecc) {
 		rc = psEccCopyKey(ecc, &keys->cache.eccPrivKey);
 	}
-	(void)psUnlockMutex(&keys->cache.lock);
+	psUnlockMutex(&keys->cache.lock);
 	return rc;
 #else
 	/* Not using ephemeral caching. */
@@ -2379,14 +2389,15 @@ ERR_LOCKED:
 
 /******************************************************************************/
 /*
-	@note careful, this function assumes the lock is on so must relock before
-	leaving if SUCCESS case.  Failure assumes it's unlocked
+	@pre Must be called with g_sessTicketLock locked. Returns in all cases
+	with g_sessTicketLock locked.
 */
 static int32 getTicketKeys(ssl_t *ssl, unsigned char *c,
 				psSessionTicketKeys_t **keys)
 {
 	psSessionTicketKeys_t	*lkey;
 	unsigned char			name[16];
+	int32_t					rc;
 	short					cachedTicket = 0;
 
 	/* First 16 bytes are the key name */
@@ -2398,7 +2409,7 @@ static int32 getTicketKeys(ssl_t *ssl, unsigned char *c,
 		if (memcmp(lkey->name, name, 16) == 0) {
 			lkey->inUse = 1;
 			*keys = lkey;
-			/* Have the key.  Invoke callback with SUCCESS */
+			/* Have the key. Invoke callback with SUCCESS */
 			if (ssl->keys->ticket_cb) {
 				cachedTicket++;
 				break;
@@ -2412,40 +2423,33 @@ static int32 getTicketKeys(ssl_t *ssl, unsigned char *c,
 	if (ssl->keys->ticket_cb) {
 		/* Unlock. Cback will likely call matrixSslLoadSessionTicketKeys */
 		psUnlockMutex(&g_sessTicketLock);
-		if (ssl->keys->ticket_cb((struct sslKeys_t*)ssl->keys, name,
-				cachedTicket) < 0) {
+		rc = ssl->keys->ticket_cb((struct sslKeys_t*)ssl->keys, name, cachedTicket);
+		psLockMutex(&g_sessTicketLock);
+		if (rc < 0) {
 			if (lkey) {
 				/* inUse could be set in the odd case where we
 				found the cached key but the user didn't want to use it. */
 				lkey->inUse = 0;
 			}
 			return PS_FAILURE; /* user couldn't find it either */
-		} else {
-			/* found it */
-			psLockMutex(&g_sessTicketLock);
-			if (cachedTicket == 0) {
-				/* it's been found and added at end of list.  confirm this */
-				lkey = ssl->keys->sessTickets;
-				if (lkey == NULL) {
-					psUnlockMutex(&g_sessTicketLock);
-					return PS_FAILURE; /* user claims they added, but empty */
-				}
-				while (lkey->next) {
-					lkey = lkey->next;
-				}
-				if (memcmp(lkey->name, c, 16) != 0) {
-					psUnlockMutex(&g_sessTicketLock);
-					return PS_FAILURE; /* user claims to have added, but... */
-				}
-				lkey->inUse = 1;
-				*keys = lkey;
+		} 
+		/* found it */
+		if (cachedTicket == 0) {
+			/* it's been found and added at end of list.  confirm this */
+			lkey = ssl->keys->sessTickets;
+			if (lkey == NULL) {
+				return PS_FAILURE; /* user claims they added, but empty */
 			}
-			return PS_SUCCESS;
+			while (lkey->next) {
+				lkey = lkey->next;
+			}
+			if (memcmp(lkey->name, c, 16) != 0) {
+				return PS_FAILURE; /* user claims to have added, but... */
+			}
+			lkey->inUse = 1;
+			*keys = lkey;
 		}
-	} else {
-		/* Unlock, because if the function fails, the
-		   locking status need to be unlocked. */
-		psUnlockMutex(&g_sessTicketLock);
+		return PS_SUCCESS;
 	}
 	return PS_FAILURE; /* not in list and no callback registered */
 }
@@ -2478,8 +2482,8 @@ int32 matrixUnlockSessionTicket(ssl_t *ssl, unsigned char *in, int32 inLen)
 	len = inLen;
 	psLockMutex(&g_sessTicketLock);
 	if (getTicketKeys(ssl, c, &keys) < 0) {
+		psUnlockMutex(&g_sessTicketLock);
 		psTraceInfo("No key found for session ticket\n");
-		/* We've been unlocked in getTicketKeys */
 		return PS_FAILURE;
 	}
 
@@ -2758,9 +2762,7 @@ void sslResetContext(ssl_t *ssl)
 	ssl->bFlags = 0;  /* Reset buffer control */
 }
 
-#ifndef USE_ONLY_PSK_CIPHER_SUITE
-#if defined(USE_CLIENT_SIDE_SSL) || defined(USE_CLIENT_AUTH)
-
+#ifdef USE_CERT_VALIDATE
 static int wildcardMatch(char *wild, char *s)
 {
 	char *c, *e;
@@ -2946,7 +2948,6 @@ int32 matrixValidateCerts(psPool_t *pool, psX509Cert_t *subjectCerts,
 */
 	return PS_CERT_AUTH_FAIL;
 }
-#endif /* USE_CLIENT_SIDE_SSL || USE_CLIENT_AUTH */
 
 /******************************************************************************/
 /*
@@ -2991,7 +2992,7 @@ int32 matrixUserCertValidator(ssl_t *ssl, int32 alert,
 */
 	return certValidator(ssl, subjectCert, status);
 }
-#endif /* !USE_ONLY_PSK_CIPHER_SUITE */
+#endif /* USE_CERT_VALIDATE */
 
 /******************************************************************************/
 #ifdef USE_MATRIXSSL_STATS

@@ -125,6 +125,11 @@
 #define PSTM_OKAY		PS_SUCCESS
 #define PSTM_MEM		PS_MEM_FAIL
 
+/* replies */
+#define PSTM_YES        1   /* yes response */
+#define PSTM_NO         0   /* no response */
+
+
 /******************************************************************************/
 /*	This is the maximum size that pstm_int.alloc can be for crypto operations.
 	Effectively, it is three times the size of the largest private key. */

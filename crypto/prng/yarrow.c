@@ -35,6 +35,13 @@
 #include "../cryptoApi.h"
 
 #ifdef USE_YARROW
+
+#ifdef WIN32
+#pragma message("THIS CODE IS DEPRECATED. PLEASE CONNECT psGetEntropy() directly to a TRNG or PRNG.")
+#else
+#warning "THIS CODE IS DEPRECATED. PLEASE CONNECT psGetEntropy() directly to a TRNG or PRNG."
+#endif
+
 /******************************************************************************/
 /*
 	A basic yarrow implementation hardcoded to AES and SHA.  Only one
@@ -72,7 +79,11 @@ int32 psYarrowStart(psYarrow_t *ctx)
 */
 int32 psYarrowAddEntropy(unsigned char *in, uint32 inlen, psYarrow_t *prng)
 {
-	psDigestContext_t md;
+#ifdef USE_SHA256
+	psSha256_t md;
+#else
+	psSha1_t md;
+#endif
 	int32 err;
 
 	if (in == NULL || prng == NULL) {
@@ -81,6 +92,7 @@ int32 psYarrowAddEntropy(unsigned char *in, uint32 inlen, psYarrow_t *prng)
 
 #ifdef USE_SHA256
 	/* start the hash */
+	psSha256PreInit(&md);
 	psSha256Init(&md);
 
 	/* hash the current pool */
@@ -90,11 +102,10 @@ int32 psYarrowAddEntropy(unsigned char *in, uint32 inlen, psYarrow_t *prng)
 	psSha256Update(&md, in, inlen);
 
 	/* store result */
-	if ((err = psSha256Final(&md, prng->pool)) != SHA256_HASH_SIZE) {
-		return err;
-	}
+	psSha256Final(&md, prng->pool);
 #else
 	/* start the hash */
+	psSha1PreInit(&md);
 	psSha1Init(&md);
 
 	/* hash the current pool */
@@ -104,9 +115,7 @@ int32 psYarrowAddEntropy(unsigned char *in, uint32 inlen, psYarrow_t *prng)
 	psSha1Update(&md, in, inlen);
 
 	/* store result */
-	if ((err = psSha1Final(&md, prng->pool)) != SHA1_HASH_SIZE) {
-		return err;
-	}
+	psSha1Final(&md, prng->pool);
 #endif
 	return PS_SUCCESS;
 }
@@ -136,7 +145,8 @@ int32 psYarrowReseed(psYarrow_t *ctx)
 	}
 
 	/* setup cipher */
-	if ((err = psAesInitBlockKey(ctx->pool, keylen, &ctx->key)) != PS_SUCCESS) {
+	if ((err = psAesInitBlockKey(&ctx->key, ctx->pool, keylen,
+								 PS_AES_ENCRYPT)) != PS_SUCCESS) {
 		return err;
 	}
 
@@ -166,7 +176,7 @@ int32 psYarrowReseed(psYarrow_t *ctx)
 		}
 	}
 
-	psAesEncryptBlock(ctx->ctr, ctx->pad, &ctx->key);
+	psAesEncryptBlock(&ctx->key, ctx->ctr, ctx->pad);
 	return PS_SUCCESS;
 }
 
@@ -221,7 +231,7 @@ uint32 psYarrowRead(unsigned char *out, uint32 outlen, psYarrow_t *ctx)
 			}
 
 			/* encrypt new pad and reset */
-			psAesEncryptBlock(ctx->ctr, ctx->pad, &ctx->key);
+			psAesEncryptBlock(&ctx->key, ctx->ctr, ctx->pad);
 			ctx->padlen = 0;
 		}
 		*ct++ = *pt++ ^ ctx->pad[ctx->padlen++];

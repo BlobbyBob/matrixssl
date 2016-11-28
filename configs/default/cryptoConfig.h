@@ -44,7 +44,7 @@
 //#define USE_CRYPTO_TRACE
 
 #ifdef DEBUG
-//#define CRYPTO_ASSERT	/**< Extra sanity asserts */
+#define CRYPTO_ASSERT/**< Extra sanity asserts */
 #endif
 
 /******************************************************************************/
@@ -74,10 +74,10 @@
 */
 #define USE_RSA
 #define USE_ECC
-#define USE_DH
+//#define USE_DH
 /**< @note Enable verification of DSA signatures in certificate validation.
-   Works only when using the CL/SL library. */
-//#define USE_DSA_VERIFY
+   Works only when using the CL/SL library. @pre USE_CERT_PARSE. */
+#define USE_DSA_VERIFY
 
 /******************************************************************************/
 /**
@@ -92,11 +92,11 @@
 	@see http://csrc.nist.gov/groups/ST/toolkit/documents/dss/NISTReCur.pdf
 */
 #ifdef USE_ECC
-  #define USE_SECP192R1/**< @security FIPS allowed for sig ver only. */
- #define USE_SECP224R1
+//#define USE_SECP192R1	/**< @security FIPS allowed for sig ver only. */
+//#define USE_SECP224R1
  #define USE_SECP256R1/**< @security NIST_SHALL */
  #define USE_SECP384R1/**< @security NIST_SHALL */
- #define USE_SECP521R1
+//#define USE_SECP521R1
 #endif
 
 /**
@@ -116,7 +116,7 @@
 	Symmetric and AEAD ciphers.
 	@security Deprecated ciphers must be enabled in cryptolib.h
 */
-//#define USE_AES /* Enable/Disable AES */
+#define USE_AES/* Enable/Disable AES */
 #define USE_AES_CBC
 #define USE_AES_GCM
 
@@ -136,7 +136,8 @@
 
 	@security MD5 is deprecated, but still required in combination with SHA-1
 	for TLS handshakes before TLS 1.2, meaning that the strength is at least
-	that of SHA-1 in this usage. The only other usage of MD5 by TLS is for
+	that of SHA-1 in this usage. The define USE_MD5SHA1 can be used to enable
+	MD5 only for this purpose. The only other usage of MD5 by TLS is for
 	certificate signatures and MD5 based cipher suites. Both of which are
 	disabled at compile time by default.
 
@@ -167,7 +168,7 @@
 */
 #define USE_MD5
 #define USE_MD5SHA1/* Required for < TLS 1.2 Handshake */
-#define USE_HMAC_MD5/* TODO currently needed for prf */
+//#define USE_HMAC_MD5
 
 /**
     @security MD2 is considered insecure, but is sometimes used for
@@ -185,14 +186,14 @@
 	X.509 Certificates/PKI
 */
 #define USE_BASE64_DECODE
-#define USE_X509
-#define USE_CERT_PARSE/**< Usually required. @pre USE_X509 */
+#define USE_X509/**< Enable minimal X.509 support. */
+#define USE_CERT_PARSE/**< Enable TBSCertificate parsing. Usually required. @pre USE_X509 */
 #define USE_FULL_CERT_PARSE/**< @pre USE_CERT_PARSE */
  /**< Support extra distinguished name attributes that SHOULD be supported according to RFC 5280. */
 //#define USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD
  /**< Support extra distinguished name attributes not mentioned in RFC 5280. */
 //#define USE_EXTRA_DN_ATTRIBUTES
-//#define ENABLE_CA_CERT_HASH /**< Used only for TLS trusted CA ind ext. */
+#define ENABLE_CA_CERT_HASH/**< Used only for TLS trusted CA ind ext. */
 //#define ENABLE_MD5_SIGNED_CERTS /** @security Accept MD5 signed certs? */
 #define ENABLE_SHA1_SIGNED_CERTS/** @security Accept SHA1 signed certs? */
  /**< @security Allow parsing of locally trusted v1 root certs? */
@@ -206,10 +207,12 @@
 */
 #define USE_PRIVATE_KEY_PARSING
 //#define USE_PKCS5		/**< v2.0 PBKDF encrypted priv keys. @pre USE_3DES */
+/**< Enable PBKDF1 in priv key PEM encryption. @pre USE_PKCS5 and @pre USE_MD5. @security Not recommended. */
+#define USE_PBKDF1
 #define USE_PKCS8/* Alternative private key storage format */
-#define USE_PKCS12/**< @pre USE_PKCS8 */
-#define USE_PKCS1_OAEP/* OAEP padding algorithm */
-#define USE_PKCS1_PSS/* PSS padding algorithm */
+//#define USE_PKCS12	/**< @pre USE_PKCS8 */
+//#define USE_PKCS1_OAEP	/* OAEP padding algorithm */
+//#define USE_PKCS1_PSS		/* PSS padding algorithm */
 
 #endif /* _h_PS_CRYPTOCONFIG */
 

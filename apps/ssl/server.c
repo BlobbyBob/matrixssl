@@ -925,17 +925,21 @@ int32 main(int32 argc, char **argv)
 
 	/* Still don't have a generic key loading function.  Try RSA first and
 		then ECC if that doesn't load */
+#ifdef USE_RSA
 	if ((rc = matrixSslLoadRsaKeys(keys, certpath, keypath, g_password, capath)) < 0) {
+#endif /* USE_RSA */
 #ifdef USE_ECC_CIPHER_SUITE
 		if ((rc = matrixSslLoadEcKeys(keys, certpath, keypath, g_password, capath)) < 0) {
 			_psTrace("Unable to load key material.  Exiting\n");
 			return rc;
 		}
 #else
-		_psTrace("Unable to load key material.  Possibly ECC key?\n");
-			return rc;
-#endif
+		_psTrace("Unable to load key material. Please enable RSA or ECC from config.\n");
+		return rc;
+#endif /* USE_ECC_CIPHER_SUITE */
+#ifdef USE_RSA
 	}
+#endif /* USE_RSA */
 
 
 #ifdef REQUIRE_DH_PARAMS

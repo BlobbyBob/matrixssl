@@ -81,7 +81,11 @@ int32 parseClientHello(ssl_t *ssl, unsigned char **cp, unsigned char *end)
 #ifndef USE_SSL_PROTOCOL_VERSIONS_OTHER_THAN_3
 	/* RFC 5246 Suggests to accept all RSA minor versions, but only
 	   major version 0x03 (SSLv3, TLS 1.0, TLS 1.1, TLS 1.2, TLS 1.3 etc) */
-	if (ssl->reqMajVer != 0x03 && ssl->reqMajVer != DTLS_MAJ_VER) {
+	if (ssl->reqMajVer != 0x03
+#ifdef USE_DTLS
+	    && ssl->reqMajVer != DTLS_MAJ_VER
+#endif /* USE_DTLS */
+		) {
 		/* Consider invalid major version protocol version error. */
 		ssl->err = SSL_ALERT_PROTOCOL_VERSION;
 		psTraceInfo("Won't support client's SSL major version\n");

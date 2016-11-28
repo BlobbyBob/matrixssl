@@ -47,9 +47,17 @@
  #endif
 #endif
 
+#ifdef USE_PBKDF1
+ #ifndef USE_PKCS5
+  #error "Enable USE_PKCS5 in cryptoConfig.h for PKBDF1 support"
+ #endif
+#endif
+
 #ifdef USE_PKCS5
- #ifndef USE_MD5
-  #error "Enable USE_MD5 in cryptoConfig.h for PKCS5 support"
+ #ifdef USE_PBKDF1
+  #ifndef USE_MD5
+   #error "Enable USE_MD5 in cryptoConfig.h for PBKDF1 support"
+  #endif
  #endif
  #ifndef USE_3DES
   #error "Enable USE_3DES in cryptoConfig.h for PKCS5 support"

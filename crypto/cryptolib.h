@@ -110,81 +110,231 @@ extern int32_t matrixCryptoGetPrngData(unsigned char *bytes, uint16_t size,
 
 /******************************************************************************/
 /*
-	RFC 3279 OID
+	RFC 3279 OID and PKCS standards OIDs
 	Matrix uses an oid summing mechanism to arrive at these defines.
-	The byte values of the OID are summed to produce a "relatively unique" int
-
-	The duplicate defines do not pose a problem as long as they don't
-	exist in the same OID groupings
+	The byte values of the OID are summed and compared with OID database
+	entries to produce a unique numbers (assuming MATRIXSSL_NO_OID_DATABASE
+	is not set.)
 */
+
+#ifdef MATRIXSSL_NO_OID_DATABASE
+/* Without OID database, some entries will be duplicates. */
+#define OID_COLLISION 0
+#else
+/* To prevent collisions, some oids are added a sufficient multiple of this
+   to make them unique. */
+#define OID_COLLISION 1024
+
+/* Marking for OIDs that have not been discovered in the database.
+   The OIDs not discovered are guaranteed to be this value or larger. */
+#define OID_NOT_FOUND 32768
+#endif /* MATRIXSSL_NO_OID_DATABASE */
+
 /* Raw digest algorithms */
-#define OID_SHA1_ALG			88
-#define OID_SHA256_ALG			414
-#define OID_SHA384_ALG			415
-#define OID_SHA512_ALG			416
-#define OID_MD2_ALG				646
-#define OID_MD5_ALG				649
+
+#define OID_SHA1_ALG_STR                 "1.3.14.3.2.26"
+#define OID_SHA1_ALG                     88
+#define OID_SHA1_ALG_HEX                 "\x06\x05\x2B\x0E\x03\x02\x1A"
+#define OID_SHA256_ALG_STR               "2.16.840.1.101.3.4.2.1"
+#define OID_SHA256_ALG                   414
+#define OID_SHA256_ALG_HEX               "\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x01"
+#define OID_SHA384_ALG_STR               "2.16.840.1.101.3.4.2.2"
+#define OID_SHA384_ALG                   415
+#define OID_SHA384_ALG_HEX               "\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x02"
+#define OID_SHA512_ALG_STR               "2.16.840.1.101.3.4.2.3"
+#define OID_SHA512_ALG                   416
+#define OID_SHA512_ALG_HEX               "\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x03"
+#define OID_MD2_ALG_STR                  "1.2.840.113549.2.2"
+#define OID_MD2_ALG                      646
+#define OID_MD2_ALG_HEX                  "\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x02"
+#define OID_MD5_ALG_STR                  "1.2.840.113549.2.5"
+#define OID_MD5_ALG                      649
+#define OID_MD5_ALG_HEX                  "\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x05"
 
 /* Signature algorithms */
-#define OID_MD2_RSA_SIG			646
-#define OID_MD5_RSA_SIG			648 /* 42.134.72.134.247.13.1.1.4 */
-#define OID_SHA1_RSA_SIG		649 /* 42.134.72.134.247.13.1.1.5 */
-#define OID_ID_MGF1				652 /* 42.134.72.134.247.13.1.1.8 */
-#define OID_RSASSA_PSS			654 /* 42.134.72.134.247.13.1.1.10 */
-#define OID_SHA256_RSA_SIG		655 /* 42.134.72.134.247.13.1.1.11 */
-#define OID_SHA384_RSA_SIG		656 /* 42.134.72.134.247.13.1.1.12 */
-#define OID_SHA512_RSA_SIG		657 /* 42.134.72.134.247.13.1.1.13 */
-#define OID_SHA1_DSA_SIG        517 /* 1.2.840.10040.4.3 */
-#define OID_SHA1_ECDSA_SIG		520	/* 42.134.72.206.61.4.1 */
-#define OID_SHA224_ECDSA_SIG	523 /* 42.134.72.206.61.4.3.1 */
-#define OID_SHA256_ECDSA_SIG	524 /* 42.134.72.206.61.4.3.2 */
-#define OID_SHA384_ECDSA_SIG	525 /* 42.134.72.206.61.4.3.3 */
-#define OID_SHA512_ECDSA_SIG	526 /* 42.134.72.206.61.4.3.4 */
+#define OID_MD2_RSA_SIG_STR              "1.2.840.113549.1.1.2"
+#define OID_MD2_RSA_SIG                  (646 + OID_COLLISION)
+#define OID_MD2_RSA_SIG_HEX              "\x06\x09\x2A\x86\x48\x86\xF7\x0D\x01\x01\x02"
+#define OID_MD5_RSA_SIG_STR              "1.2.840.113549.1.1.4"
+#define OID_MD5_RSA_SIG                  648
+#define OID_MD5_RSA_SIG_HEX              "\x06\x09\x2A\x86\x48\x86\xF7\x0D\x01\x01\x04"
+#define OID_SHA1_RSA_SIG_STR             "1.2.840.113549.1.1.5"
+#define OID_SHA1_RSA_SIG                 (649 + OID_COLLISION)
+#define OID_SHA1_RSA_SIG_HEX             "\x06\x09\x2A\x86\x48\x86\xF7\x0D\x01\x01\x05"
+#define OID_ID_MGF1_STR                  "1.2.840.113549.1.1.8"
+#define OID_ID_MGF1                      (652 + OID_COLLISION * 2)
+#define OID_ID_MGF1_HEX                  "\x06\x09\x2A\x86\x48\x86\xF7\x0D\x01\x01\x08"
+#define OID_RSASSA_PSS_STR               "1.2.840.113549.1.1.10"
+#define OID_RSASSA_PSS                   (654 + OID_COLLISION)
+#define OID_RSASSA_PSS_HEX               "\x06\x09\x2A\x86\x48\x86\xF7\x0D\x01\x01\x0A"
+#define OID_SHA256_RSA_SIG_STR           "1.2.840.113549.1.1.11"
+#define OID_SHA256_RSA_SIG               (655 + OID_COLLISION)
+#define OID_SHA256_RSA_SIG_HEX           "\x06\x09\x2A\x86\x48\x86\xF7\x0D\x01\x01\x0B"
+#define OID_SHA384_RSA_SIG_STR           "1.2.840.113549.1.1.12"
+#define OID_SHA384_RSA_SIG               (656 + OID_COLLISION)
+#define OID_SHA384_RSA_SIG_HEX           "\x06\x09\x2A\x86\x48\x86\xF7\x0D\x01\x01\x0C"
+#define OID_SHA512_RSA_SIG_STR           "1.2.840.113549.1.1.13"
+#define OID_SHA512_RSA_SIG               (657 + OID_COLLISION)
+#define OID_SHA512_RSA_SIG_HEX           "\x06\x09\x2A\x86\x48\x86\xF7\x0D\x01\x01\x0D"
+#define OID_SHA1_DSA_SIG_STR             "1.2.840.10040.4.3"
+#define OID_SHA1_DSA_SIG                 517
+#define OID_SHA1_DSA_SIG_HEX             "\x06\x07\x2A\x86\x48\xCE\x38\x04\x03"
+#define OID_SHA1_ECDSA_SIG_STR           "1.2.840.10045.4.1"
+#define OID_SHA1_ECDSA_SIG               520
+#define OID_SHA1_ECDSA_SIG_HEX           "\x06\x07\x2A\x86\x48\xCE\x3D\x04\x01"
+#define OID_SHA224_ECDSA_SIG_STR         "1.2.840.10045.4.3.1"
+#define OID_SHA224_ECDSA_SIG             523
+#define OID_SHA224_ECDSA_SIG_HEX         "\x06\x08\x2A\x86\x48\xCE\x3D\x04\x03\x01"
+#define OID_SHA256_ECDSA_SIG_STR         "1.2.840.10045.4.3.2"
+#define OID_SHA256_ECDSA_SIG             524
+#define OID_SHA256_ECDSA_SIG_HEX         "\x06\x08\x2A\x86\x48\xCE\x3D\x04\x03\x02"
+#define OID_SHA384_ECDSA_SIG_STR         "1.2.840.10045.4.3.3"
+#define OID_SHA384_ECDSA_SIG             525
+#define OID_SHA384_ECDSA_SIG_HEX         "\x06\x08\x2A\x86\x48\xCE\x3D\x04\x03\x03"
+#define OID_SHA512_ECDSA_SIG_STR         "1.2.840.10045.4.3.4"
+#define OID_SHA512_ECDSA_SIG             526
+#define OID_SHA512_ECDSA_SIG_HEX         "\x06\x08\x2A\x86\x48\xCE\x3D\x04\x03\x04"
 
 /* Public key algorithms */
-#define OID_RSA_KEY_ALG			645
-#define OID_DSA_KEY_ALG         515 /* 1.2.840.10040.4.1 */
-#define OID_ECDSA_KEY_ALG		518 /* 1.2.840.10045.2.1 */
+#define OID_RSA_KEY_ALG_STR              "1.2.840.113549.1.1.1"
+#define OID_RSA_KEY_ALG                  645
+#define OID_RSA_KEY_ALG_HEX              "\x06\x09\x2A\x86\x48\x86\xF7\x0D\x01\x01\x01"
+#define OID_DSA_KEY_ALG_STR              "1.2.840.10040.4.1"
+#define OID_DSA_KEY_ALG                  515
+#define OID_DSA_KEY_ALG_HEX              "\x06\x07\x2A\x86\x48\xCE\x38\x04\x01"
+#define OID_ECDSA_KEY_ALG_STR            "1.2.840.10045.2.1"
+#define OID_ECDSA_KEY_ALG                518
+#define OID_ECDSA_KEY_ALG_HEX            "\x06\x07\x2A\x86\x48\xCE\x3D\x02\x01"
 
 /* Encryption algorithms */
-#define OID_DES_EDE3_CBC		652 /* 42.134.72.134.247.13.3.7 */
-#define OID_AES_128_CBC			414	/* 2.16.840.1.101.3.4.1.2 */
-#define OID_AES_128_WRAP		417 /* 2.16.840.1.101.3.4.1.5 */
-#define OID_AES_128_GCM			418 /* 2.16.840.1.101.3.4.1.6 */
-#define OID_AES_192_CBC			434	/* 2.16.840.1.101.3.4.1.22 */
-#define OID_AES_192_WRAP		437	/* 2.16.840.1.101.3.4.1.25 */
-#define OID_AES_192_GCM			438	/* 2.16.840.1.101.3.4.1.26 */
-#define OID_AES_256_CBC			454 /* 2.16.840.1.101.3.4.1.42 */
-#define OID_AES_256_WRAP		457 /* 2.16.840.1.101.3.4.1.45 */
-#define OID_AES_256_GCM			458	/* 2.16.840.1.101.3.4.1.46 */
+#define OID_DES_EDE3_CBC_STR             "1.2.840.113549.3.7"
+#define OID_DES_EDE3_CBC                 (652 + OID_COLLISION)
+#define OID_DES_EDE3_CBC_HEX             "\x06\x08\x2A\x86\x48\x86\xF7\x0D\x03\x07"
 
-#define OID_AES_CMAC			612	/* 2.16.840.1.101.3.4.1.200 */
+#define OID_AES_128_CBC_STR              "2.16.840.1.101.3.4.1.2"
+#define OID_AES_128_CBC                  (414 + OID_COLLISION)
+#define OID_AES_128_CBC_HEX              "\x06\x09\x60\x86\x48\x01\x65\x03\x04\x01\x02"
+#define OID_AES_128_WRAP_STR             "2.16.840.1.101.3.4.1.5"
+#define OID_AES_128_WRAP                 417
+#define OID_AES_128_WRAP_HEX             "\x06\x09\x60\x86\x48\x01\x65\x03\x04\x01\x05"
+#define OID_AES_128_GCM_STR              "2.16.840.1.101.3.4.1.6"
+#define OID_AES_128_GCM                  418
+#define OID_AES_128_GCM_HEX              "\x06\x09\x60\x86\x48\x01\x65\x03\x04\x01\x06"
+#define OID_AES_192_CBC_STR              "2.16.840.1.101.3.4.1.22"
+#define OID_AES_192_CBC                  434
+#define OID_AES_192_CBC_HEX              "\x06\x09\x60\x86\x48\x01\x65\x03\x04\x01\x16"
+#define OID_AES_192_WRAP_STR             "2.16.840.1.101.3.4.1.25"
+#define OID_AES_192_WRAP                 437
+#define OID_AES_192_WRAP_HEX             "\x06\x09\x60\x86\x48\x01\x65\x03\x04\x01\x19"
+#define OID_AES_192_GCM_STR              "2.16.840.1.101.3.4.1.26"
+#define OID_AES_192_GCM                  438
+#define OID_AES_192_GCM_HEX              "\x06\x09\x60\x86\x48\x01\x65\x03\x04\x01\x1A"
+#define OID_AES_256_CBC_STR              "2.16.840.1.101.3.4.1.42"
+#define OID_AES_256_CBC                  454
+#define OID_AES_256_CBC_HEX              "\x06\x09\x60\x86\x48\x01\x65\x03\x04\x01\x2A"
+#define OID_AES_256_WRAP_STR             "2.16.840.1.101.3.4.1.45"
+#define OID_AES_256_WRAP                 457
+#define OID_AES_256_WRAP_HEX             "\x06\x09\x60\x86\x48\x01\x65\x03\x04\x01\x2D"
+#define OID_AES_256_GCM_STR              "2.16.840.1.101.3.4.1.46"
+#define OID_AES_256_GCM                  458
+#define OID_AES_256_GCM_HEX              "\x06\x09\x60\x86\x48\x01\x65\x03\x04\x01\x2E"
 
-#define OID_AES_CBC_CMAC_128	143
-#define OID_AES_CBC_CMAC_192	144
-#define OID_AES_CBC_CMAC_256	145
+#define OID_AES_CMAC_STR        "2.16.840.1.101.3.4.1.200_alt"
+#define OID_AES_CMAC			612
+#define OID_AES_CMAC_HEX        "\x06\x0A\x60\x86\x48\x01\x65\x03\x04\x01\xC8"
 
-#define OID_AUTH_ENC_256_SUM	687 /* The RFC 6476 authEnc OID */
+#define OID_AES_CBC_CMAC_128_STR         "0.4.0.127.0.7.1.1.1.2"
+#define OID_AES_CBC_CMAC_128             143
+#define OID_AES_CBC_CMAC_128_HEX         "\x06\x09\x04\x00\x7F\x00\x07\x01\x01\x01\x02"
+#define OID_AES_CBC_CMAC_192_STR         "0.4.0.127.0.7.1.1.1.3"
+#define OID_AES_CBC_CMAC_192             144
+#define OID_AES_CBC_CMAC_192_HEX         "\x06\x09\x04\x00\x7F\x00\x07\x01\x01\x01\x03"
+#define OID_AES_CBC_CMAC_256_STR         "0.4.0.127.0.7.1.1.1.4"
+#define OID_AES_CBC_CMAC_256             145
+#define OID_AES_CBC_CMAC_256_HEX         "\x06\x09\x04\x00\x7F\x00\x07\x01\x01\x01\x04"
 
-#ifdef USE_PKCS5
-#define OID_PKCS_PBKDF2			660 /* 42.134.72.134.247.13.1.5.12 */
-#define OID_PKCS_PBES2			661 /* 42.134.72.134.247.13.1.5.13 */
-#endif /* USE_PKCS5 */
+#define OID_AUTH_ENC_256_SUM_STR         "1.2.840.113549.1.9.16.3.16"
+#define OID_AUTH_ENC_256_SUM             687 /* See RFC 6476 */
+#define OID_AUTH_ENC_256_SUM_HEX         "\x06\x0B\x2A\x86\x48\x86\xF7\x0D\x01\x09\x10\x03\x10"
 
-#ifdef USE_PKCS12
-#define OID_PKCS_PBESHA128RC4	657
-#define OID_PKCS_PBESHA40RC4	658
-#define OID_PKCS_PBESHA3DES3	659
-#define OID_PKCS_PBESHA3DES2	660 /* warning: collision with pkcs5 */
-#define OID_PKCS_PBESHA128RC2	661 /* warning: collision with pkcs5 */
-#define OID_PKCS_PBESHA40RC2	662
+#define OID_PKCS_PBKDF2_STR              "1.2.840.113549.1.5.12"
+#define OID_PKCS_PBKDF2                  (660 + OID_COLLISION)
+#define OID_PKCS_PBKDF2_HEX              "\x06\x09\x2A\x86\x48\x86\xF7\x0D\x01\x05\x0C"
+#define OID_PKCS_PBES2_STR               "1.2.840.113549.1.5.13"
+#define OID_PKCS_PBES2                   (661 + OID_COLLISION)
+#define OID_PKCS_PBES2_HEX               "\x06\x09\x2A\x86\x48\x86\xF7\x0D\x01\x05\x0D"
 
-#define PKCS12_BAG_TYPE_KEY			667
-#define PKCS12_BAG_TYPE_SHROUD		668
-#define PKCS12_BAG_TYPE_CERT		669
-#define PKCS12_BAG_TYPE_CRL			670
-#define PKCS12_BAG_TYPE_SECRET		671
-#define PKCS12_BAG_TYPE_SAFE		672
+#define OID_PKCS_PBESHA128RC4_STR        "1.2.840.113549.1.12.1.1"
+#define OID_PKCS_PBESHA128RC4            657
+#define OID_PKCS_PBESHA128RC4_HEX        "\x06\x0A\x2A\x86\x48\x86\xF7\x0D\x01\x0C\x01\x01"
+#define OID_PKCS_PBESHA40RC4_STR         "1.2.840.113549.1.12.1.2"
+#define OID_PKCS_PBESHA40RC4             658
+#define OID_PKCS_PBESHA40RC4_HEX         "\x06\x0A\x2A\x86\x48\x86\xF7\x0D\x01\x0C\x01\x02"
+#define OID_PKCS_PBESHA3DES3_STR         "1.2.840.113549.1.12.1.3"
+#define OID_PKCS_PBESHA3DES3             659
+#define OID_PKCS_PBESHA3DES3_HEX         "\x06\x0A\x2A\x86\x48\x86\xF7\x0D\x01\x0C\x01\x03"
+#define OID_PKCS_PBESHA2DES3_STR         "1.2.840.113549.1.12.1.4"
+#define OID_PKCS_PBESHA2DES3             660
+#define OID_PKCS_PBESHA2DES3_HEX         "\x06\x0A\x2A\x86\x48\x86\xF7\x0D\x01\x0C\x01\x04"
+#define OID_PKCS_PBESHA128RC2_STR        "1.2.840.113549.1.12.1.5"
+#define OID_PKCS_PBESHA128RC2            661
+#define OID_PKCS_PBESHA128RC2_HEX        "\x06\x0A\x2A\x86\x48\x86\xF7\x0D\x01\x0C\x01\x05"
+#define OID_PKCS_PBESHA40RC2_STR         "1.2.840.113549.1.12.1.6"
+#define OID_PKCS_PBESHA40RC2             662
+#define OID_PKCS_PBESHA40RC2_HEX         "\x06\x0A\x2A\x86\x48\x86\xF7\x0D\x01\x0C\x01\x06"
+
+#define OID_PKCS12_BAG_TYPE_KEY_STR      "1.2.840.113549.1.12.10.1.1"
+#define OID_PKCS12_BAG_TYPE_KEY          667
+#define OID_PKCS12_BAG_TYPE_KEY_HEX      "\x06\x0B\x2A\x86\x48\x86\xF7\x0D\x01\x0C\x0A\x01\x01"
+#define OID_PKCS12_BAG_TYPE_SHROUD_STR   "1.2.840.113549.1.12.10.1.2"
+#define OID_PKCS12_BAG_TYPE_SHROUD       668
+#define OID_PKCS12_BAG_TYPE_SHROUD_HEX   "\x06\x0B\x2A\x86\x48\x86\xF7\x0D\x01\x0C\x0A\x01\x02"
+#define OID_PKCS12_BAG_TYPE_CERT_STR     "1.2.840.113549.1.12.10.1.3"
+#define OID_PKCS12_BAG_TYPE_CERT         669
+#define OID_PKCS12_BAG_TYPE_CERT_HEX     "\x06\x0B\x2A\x86\x48\x86\xF7\x0D\x01\x0C\x0A\x01\x03"
+#define OID_PKCS12_BAG_TYPE_CRL_STR      "1.2.840.113549.1.12.10.1.4"
+#define OID_PKCS12_BAG_TYPE_CRL          670
+#define OID_PKCS12_BAG_TYPE_CRL_HEX      "\x06\x0B\x2A\x86\x48\x86\xF7\x0D\x01\x0C\x0A\x01\x04"
+#define OID_PKCS12_BAG_TYPE_SECRET_STR   "1.2.840.113549.1.12.10.1.5"
+#define OID_PKCS12_BAG_TYPE_SECRET       671
+#define OID_PKCS12_BAG_TYPE_SECRET_HEX   "\x06\x0B\x2A\x86\x48\x86\xF7\x0D\x01\x0C\x0A\x01\x05"
+#define OID_PKCS12_BAG_TYPE_SAFE_STR     "1.2.840.113549.1.12.10.1.6"
+#define OID_PKCS12_BAG_TYPE_SAFE         672
+#define OID_PKCS12_BAG_TYPE_SAFE_HEX     "\x06\x0B\x2A\x86\x48\x86\xF7\x0D\x01\x0C\x0A\x01\x06"
+
+#define OID_PKCS9_CERT_TYPE_X509_STR     "1.2.840.113549.1.9.22.1"
+#define OID_PKCS9_CERT_TYPE_X509         675
+#define OID_PKCS9_CERT_TYPE_X509_HEX     "\x06\x0A\x2A\x86\x48\x86\xF7\x0D\x01\x09\x16\x01"
+#define OID_PKCS9_CERT_TYPE_SDSI_STR     "1.2.840.113549.1.9.22.2"
+#define OID_PKCS9_CERT_TYPE_SDSI         676
+#define OID_PKCS9_CERT_TYPE_SDSI_HEX     "\x06\x0A\x2A\x86\x48\x86\xF7\x0D\x01\x09\x16\x02"
+
+#define OID_PKCS7_DATA_STR               "1.2.840.113549.1.7.1"
+#define OID_PKCS7_DATA                   651
+#define OID_PKCS7_DATA_HEX               "\x06\x09\x2A\x86\x48\x86\xF7\x0D\x01\x07\x01"
+#define OID_PKCS7_SIGNED_DATA_STR        "1.2.840.113549.1.7.2"
+#define OID_PKCS7_SIGNED_DATA            652
+#define OID_PKCS7_SIGNED_DATA_HEX        "\x06\x09\x2A\x86\x48\x86\xF7\x0D\x01\x07\x02"
+#define OID_PKCS7_ENVELOPED_DATA_STR     "1.2.840.113549.1.7.3"
+#define OID_PKCS7_ENVELOPED_DATA         653
+#define OID_PKCS7_ENVELOPED_DATA_HEX     "\x06\x09\x2A\x86\x48\x86\xF7\x0D\x01\x07\x03"
+#define OID_PKCS7_SIGNED_ENVELOPED_DATA_STR "1.2.840.113549.1.7.4"
+#define OID_PKCS7_SIGNED_ENVELOPED_DATA  654
+#define OID_PKCS7_SIGNED_ENVELOPED_DATA_HEX "\x06\x09\x2A\x86\x48\x86\xF7\x0D\x01\x07\x04"
+#define OID_PKCS7_DIGESTED_DATA_STR      "1.2.840.113549.1.7.5"
+#define OID_PKCS7_DIGESTED_DATA          655
+#define OID_PKCS7_DIGESTED_DATA_HEX      "\x06\x09\x2A\x86\x48\x86\xF7\x0D\x01\x07\x05"
+#define OID_PKCS7_ENCRYPTED_DATA_STR     "1.2.840.113549.1.7.6"
+#define OID_PKCS7_ENCRYPTED_DATA         656
+#define OID_PKCS7_ENCRYPTED_DATA_HEX     "\x06\x09\x2A\x86\x48\x86\xF7\x0D\x01\x07\x06"
+
+#define OID_OCSP_STR                     "1.3.6.1.5.5.7.48.1"
+#define OID_OCSP                         116
+#define OID_OCSP_HEX                     "\x06\x08\x2B\x06\x01\x05\x05\x07\x30\x01"
+#define OID_BASIC_OCSP_RESPONSE_STR      "1.3.6.1.5.5.7.48.1.1"
+#define OID_BASIC_OCSP_RESPONSE          117
+#define OID_BASIC_OCSP_RESPONSE_HEX      "\x06\x09\x2B\x06\x01\x05\x05\x07\x30\x01\x01"
+
 
 #define PBE12						1
 #define PBES2						2
@@ -194,18 +344,6 @@ extern int32_t matrixCryptoGetPrngData(unsigned char *bytes, uint16_t size,
 #define PKCS12_KEY_ID				1
 #define PKCS12_IV_ID				2
 #define PKCS12_MAC_ID				3
-
-#define PKCS9_CERT_TYPE_X509		675
-#define PKCS9_CERT_TYPE_SDSI		676
-
-#define PKCS7_DATA					651
-/* signedData 1.2.840.113549.1.7.2  (2A 86 48 86 F7 0D 01 07 02) */
-#define PKCS7_SIGNED_DATA			652
-#define PKCS7_ENVELOPED_DATA		653
-#define PKCS7_SIGNED_ENVELOPED_DATA	654
-#define PKCS7_DIGESTED_DATA			655
-#define PKCS7_ENCRYPTED_DATA		656
-#endif /* USE_PKCS12 */
 
 #if defined(USE_PKCS1_OAEP) || defined(USE_PKCS1_PSS)
 #define PKCS1_SHA1_ID	0

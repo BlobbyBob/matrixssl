@@ -35,6 +35,8 @@
 #include <unistd.h> /* sleep */
 #include "crypto/cryptoApi.h"
 
+#if defined(USE_RSA) && defined(USE_PRIVATE_KEY_PARSING)
+
 typedef void pkaCmdInfo_t;
 
 /* OPERATIONS TO TEST */
@@ -538,3 +540,15 @@ int main(int argc, char **argv)
 	psCryptoClose();
 	return 0;
 }
+#else /* --> !USE_RSA || !USE_PRIVATE_KEY_PARSING*/
+int main(int argc, char **argv)
+{
+#ifndef USE_RSA
+	_psTrace("Please enable USE_RSA for this test\n");
+#endif /* USE_RSA */
+#ifndef USE_PRIVATE_KEY_PARSING
+	_psTrace("Please enable USE_PRIVATE_KEY_PARSING for this test\n");
+#endif /* USE_PRIVATE_KEY_PARSING */
+	return 1;
+}
+#endif /* USE_RSA && USE_PRIVATE_KEY_PARSING */

@@ -196,7 +196,7 @@ int32 dtlsWriteCertificate(ssl_t *ssl, int32 certLen, int32 lsize,
 }
 
 
-#if defined(USE_SERVER_SIDE_SSL) || defined(USE_CLIENT_AUTH)
+#if defined(USE_SERVER_SIDE_SSL) && defined(USE_CLIENT_AUTH)
 /******************************************************************************/
 /*
 	The certificate_request message spans records
@@ -314,7 +314,9 @@ int32 dtlsWriteCertificateRequest(psPool_t *pool, ssl_t *ssl, int32 certLen,
 	psFree(tmpStart, pool);
 	return wLen;
 }
+#endif /* USE_SERVER_SIDE_SSL && USE_CLIENT_AUTH */
 
+#if defined(USE_SERVER_SIDE_SSL) || defined(USE_CLIENT_AUTH)
 /******************************************************************************/
 /*
 	Given the data message and lengths, chunk up the message into a
