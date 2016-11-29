@@ -167,8 +167,8 @@
 	@note ENABLE_MD5_SIGNED_CERTS can additionally be configured below.
 */
 #define USE_MD5
-#define USE_MD5SHA1/* Required for < TLS 1.2 Handshake */
-//#define USE_HMAC_MD5
+#define USE_MD5SHA1	/* Required for < TLS 1.2 Handshake */
+#define USE_HMAC_MD5 /* Required for < TLS 1.2 Handshake (PRF) */
 
 /**
     @security MD2 is considered insecure, but is sometimes used for
@@ -208,7 +208,7 @@
 #define USE_PRIVATE_KEY_PARSING
 //#define USE_PKCS5		/**< v2.0 PBKDF encrypted priv keys. @pre USE_3DES */
 /**< Enable PBKDF1 in priv key PEM encryption. @pre USE_PKCS5 and @pre USE_MD5. @security Not recommended. */
-#define USE_PBKDF1
+//#define USE_PBKDF1
 #define USE_PKCS8/* Alternative private key storage format */
 //#define USE_PKCS12	/**< @pre USE_PKCS8 */
 //#define USE_PKCS1_OAEP	/* OAEP padding algorithm */
