@@ -45,6 +45,7 @@
 #define MD5_HASH_SIZE		16
 
 #define SHA1_HASHLEN		20
+#define SHA224_HASHLEN		28
 #define SHA256_HASHLEN		32
 #define SHA384_HASHLEN		48
 #define SHA512_HASHLEN		64
