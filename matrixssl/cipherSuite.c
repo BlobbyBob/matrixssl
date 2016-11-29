@@ -2284,8 +2284,13 @@ int32 chooseCipherSuite(ssl_t *ssl, unsigned char *listStart, int32 listLen)
 					ssl->err = SSL_ALERT_UNRECOGNIZED_NAME;
 					return MATRIXSSL_ERROR;
 				}
+				/* New ssl->keys may have been loaded by the callback,
+					see if they match the potential cipher suite */
+				if (haveKeyMaterial(ssl, spec->type, 1) < 0) {
+					continue;
+				}
 			}
-			/* This is here becuase it still could be useful to support the
+			/* This is here because it still could be useful to support the
 				old mechanism where the server just loads the single known
 				ID key at new session and never looks back */
 			givenKey = ssl->keys;
@@ -2304,7 +2309,7 @@ int32 chooseCipherSuite(ssl_t *ssl, unsigned char *listStart, int32 listLen)
 		}
 #endif
 	}
-	
+	psTraceInfo("No matching keys for any requested cipher suite.\n");
 	psAssert(givenKey == NULL);
 	return PS_UNSUPPORTED_FAIL; /* Server can't match anything */
 }
