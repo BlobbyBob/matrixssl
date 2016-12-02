@@ -1,3 +1,7 @@
+---
+title: MatrixSSL Developer's Guide
+layout: doc
+---
 #MatrixSSL Developer's Guide
 
 ![INSIDE Secure](http://www.insidesecure.com/extension/isinside/design/front/images/logo.png)
