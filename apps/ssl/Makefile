@@ -9,10 +9,11 @@
 MATRIXSSL_ROOT:=../..
 SERVER_SRC:=server.c http.c
 CLIENT_SRC:=client.c http.c
+NET_SRC:=net.c
 SRC=$(SERVER_SRC) $(CLIENT_SRC)
-
 SERVER_EXE:=server$(E)
 CLIENT_EXE:=client$(E)
+NET_EXE:=matrixnet$(E)
 EXE=$(SERVER_EXE) $(CLIENT_EXE)
 
 #The Mac OS X Xcode project has a target name of 'server' or 'client'
@@ -26,13 +27,18 @@ ifneq (,$(TARGET_NAME))
  endif
 endif
 
+# Optional extensions to CFLAGS/LDFLAGS
+CFLAGS+=$(CFLAGS_INTERNAL)
+LDFLAGS+=$(LDFLAGS_INTERNAL)
+
 include $(MATRIXSSL_ROOT)/common.mk
 
 # Linked files
 STATIC:=\
 	$(MATRIXSSL_ROOT)/matrixssl/libssl_s.a \
 	$(MATRIXSSL_ROOT)/crypto/libcrypt_s.a \
-	$(MATRIXSSL_ROOT)/core/libcore_s.a
+	$(MATRIXSSL_ROOT)/core/libcore_s.a \
+	$(STATIC_INTERNAL)
 
 # Allow selecting the client auth identity (ID_RSA, ID_ECDH_ECDSA,
 # etc.) via an environment variable.
@@ -49,6 +55,9 @@ $(SERVER_EXE): $(SERVER_SRC:.c=.o) $(STATIC)
 	$(CC) -o $@ $^ $(LDFLAGS) $(CFLAGS)
 
 $(CLIENT_EXE): $(CLIENT_SRC:.c=.o) $(STATIC)
+	$(CC) -o $@ $^ $(LDFLAGS) $(CFLAGS)
+
+$(NET_EXE): $(NET_SRC:.c=.o) $(STATIC)
 	$(CC) -o $@ $^ $(LDFLAGS) $(CFLAGS)
 
 clean:

@@ -1,13 +1,9 @@
----
-title: MatrixSSL Developer's Guide
-layout: doc
----
 #MatrixSSL Developer's Guide
 
 ![INSIDE Secure](http://www.insidesecure.com/extension/isinside/design/front/images/logo.png)
 
-**Version 3.8**
-*&copy; INSIDE Secure - 2016 - All Rights Reserved*
+**Version 3.9**
+*&copy; INSIDE Secure - 2017 - All Rights Reserved*
 
 [TOC]
 
@@ -603,6 +599,9 @@ MatrixSSL contains a set of optional features that are configurable at compile t
 `USE_CLIENT_AUTH`
 : matrixsslConfig.h - Enables  two-way(mutual) authentication
 
+`USE_EXT_CERTIFICATE_VERIFY_SIGNING`
+: matrixsslConfig.h - Enables client authentication using an external module. See the `MatrixSSL External Module Integration` manual for details.
+
 `SERVER_CAN_SEND_EMPTY_CERT_REQUEST`
 : matrixsslConfig.h – A client authentication feature.  Allows the server to send an empty CertificateRequest message if no CA files have been loaded
 
@@ -635,8 +634,14 @@ MatrixSSL contains a set of optional features that are configurable at compile t
 `ENABLE_SHA1_SIGNED_CERTS`
 : cryptoConfig.h – Support MD5 or SHA1 signature algorithm in X.509 certificates and Certificate Revocation Lists.
 
+`ALWAYS_KEEP_CERT_DER`
+: cryptoConfig.h - When parsing certificates, always also retain the unparsed DER data in the psX509Cert_t structure.
+
 `USE_CRL`
 : cryptoConfig.h - Enable Certificate Revocation List APIs.
+
+`ALLOW_CRL_ISSUERS_WITHOUT_KEYUSAGE`
+: cryptoConfig.h - Compatibility option. Allows CRL authentication to succeed when signer CA's cert does not have the keyUsage extension.
 
 `USE_FIPS_CRYPTO`
 `USE_CL_CRYPTO`
@@ -1310,6 +1315,10 @@ To add an event to the framework the user must:
 
 1.	Add a unique ID to the list of existing stats in matrixsslApi.h
 2.	Add the call to `matrixsslUpdateStat` in the appropriate place in the MatrixSSL library
+
+##6.10 Client Authentication using an External Security Token
+
+MatrixSSL allows the TLS client to authenticate itself using an external security token. The external client authentication feature allows the client-side private key operation (i.e. the signing of the handshake_messages hash in the CertificateVerify handshake message) to be offloaded from MatrixSSL to an external module. Please consult the `External Client Authentication` section in MatrixSSL External Module Integration manual for details on how to use this feature.
 
 #7 Deprecated Features <i class="icon-down"></i>
 The features in this section are minimally supported and should only be used in cases where they are explicitly required for compatibility. Please be aware of any security implications of these features before enabling them.

@@ -102,6 +102,12 @@ CONFIG_FIPS_AVAILABLE=1
 CONFIG_NONFIPS_PREFIX=nonfips-
 endif
 
+ifneq (,$(findstring -DUSE_EXT_EXAMPLE_MODULE, $(CFLAGS)))
+D_USE_EXT_EXAMPLE_MODULE=1
+else
+D_USE_EXT_EXAMPLE_MODULE=0
+endif
+
 # These are some examples of configuration selection targets for MatrixSSL.
 # You can instead apply any of any of configurations in configs directory with
 # make CONFIGNAME-config and then proceed with make all / make libs etc.
@@ -179,12 +185,17 @@ test-combined-default-nonfips:
 
 .PHONY: all libs tests apps clean
 
+ext:
+	if [ "$(D_USE_EXT_EXAMPLE_MODULE)" = "1" ]; then $(MAKE) --directory=ext/psext-example; \
+	elif $(MAKE) --directory=matrixssl parse-config | grep -q '#define USE_EXT_EXAMPLE_MODULE'; then $(MAKE) --directory=ext/psext-example; fi \
+
 # Add dependencies
 all: libs tests apps
 all: check-config
 libs: check-config
-tests: check-config libs
-apps: check-config libs
+tests: check-config libs ext
+apps: check-config libs ext
+ext: check-config libs
 all-utils: check-config
 
 # Alias
@@ -232,6 +243,7 @@ clean:
 	if [ -e apps/crypto ];then $(MAKE) clean --directory=apps/crypto;fi
 	if [ -e crypto/cms/test ]; then $(MAKE) clean --directory=crypto/cms/test;fi
 	if [ -e matrixssh ]; then $(MAKE) clean --directory=matrixssh; fi
+	if [ -e ext/psext-example ]; then $(MAKE) clean --directory=ext/psext-example;fi
 
 clobber: clean clean-config
 
