@@ -59,8 +59,10 @@ possible to specify the type of name to match with new session
 options. See the Session Options section in the MatrixSSL APIs manual
 for details.
 
-The issues in certificate matching were reported by Suphannee Sivakorn from
-Columbia University.
+The issues in certificate matching were reported by a team of
+researchers from Columbia University, consisting of Suphannee
+Sivakorn, George Argyros, Kexin Pei, Suman Jana and Angelos
+D. Keromytis.
 
 ## Certificate Validation Configuration Options
 

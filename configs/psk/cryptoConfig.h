@@ -195,7 +195,14 @@
 /* #define USE_EXTRA_DN_ATTRIBUTES */
 /* #define ENABLE_CA_CERT_HASH  *//**< Used only for TLS trusted CA ind ext. */
 /* #define ENABLE_MD5_SIGNED_CERTS  *//** @security Accept MD5 signed certs? */
-/* #define ENABLE_SHA1_SIGNED_CERTS  *//** @security Accept SHA1 signed certs? */
+
+/**
+    @security SHA-1 based signatures are insecure, as SHA-1 can no longer
+    be considered collision resistant (https://shattered.it/static/shattered.pdf).
+    Enable if compatibility with old certificates is required.
+ */
+/* #define ENABLE_SHA1_SIGNED_CERTS */
+
 /**< @security Allow parsing of locally trusted v1 root certs? */
 /* #define ALLOW_VERSION_1_ROOT_CERT_PARSE */
 /**

@@ -433,7 +433,7 @@ int do_dialog_client(const char *host, const char *port)
 }
 
 /* The MatrixSSL certificate validation callback. */
-int32 ssl_cert_auth(ssl_t *ssl, psX509Cert_t *cert, int32 alert)
+static int32 ssl_cert_auth(ssl_t *ssl, psX509Cert_t *cert, int32 alert)
 {
     return MATRIXSSL_SUCCESS;
 }

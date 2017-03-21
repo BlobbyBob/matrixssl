@@ -3406,6 +3406,7 @@ SKIP_CERT_CHAIN_INIT:
         if ((parseLen = psX509ParseCert(ssl->hsPool, c, certLen, &cert, certFlags))
             < 0)
         {
+            psTraceInfo("Parsing of the peer certificate failed\n");
             psX509FreeCert(cert);
             if (parseLen == PS_MEM_FAIL)
             {
@@ -3426,7 +3427,7 @@ SKIP_CERT_CHAIN_INIT:
            trusted due to missing Basic Constraints, etc. */
         if (cert->version != 2)
         {
-            psX509FreeCert(cert);
+            psTraceInfo("Version 1 peer certificates not allowed\n");
             ssl->err = SSL_ALERT_BAD_CERTIFICATE;
         }
 #  endif /* ALLOW_VERSION_1_ROOT_CERT_PARSE */

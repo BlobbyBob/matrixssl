@@ -47,8 +47,11 @@ static const psCipher16_t cipherlist_default[] = { 47 };
 
 # define logMessage(l, t, ...) do { printf(#l " " #t ": " __VA_ARGS__); printf("\n"); } while (0) /* Log_Verbose, TAG, "Wrote %d bytes", transferred */
 
-/* This function should be specifiable as a callback. */
-int32 ssl_cert_auth(ssl_t *ssl, psX509Cert_t *cert, int32 alert);
+/* The MatrixSSL certificate validation callback. */
+static int32 ssl_cert_auth_default(ssl_t *ssl, psX509Cert_t *cert, int32 alert)
+{
+    return MATRIXSSL_SUCCESS;
+}
 
 # ifdef USE_CLIENT_SIDE_SSL
 static int32 extensionCb(ssl_t *ssl, uint16_t extType, uint8_t extLen, void *e)
@@ -101,6 +104,7 @@ static int init_client_tls(psSocket_t *sock, const char *capath, int tls)
     int32 extLen;
     ssl_t *ssl = NULL;
     const char *host = (const char *) node_global;
+    int32 (*ssl_cert_auth_cb)(ssl_t *ssl, psX509Cert_t *cert, int32 alert);
 
     memset(&options, 0x0, sizeof(sslSessOpts_t));
     set_tls_options_version(&options, tls);
@@ -151,10 +155,16 @@ static int init_client_tls(psSocket_t *sock, const char *capath, int tls)
         psFree(ext, NULL);
     }
 
+    ssl_cert_auth_cb = sock->extra.tls->ssl_socket_cert_auth;
+    if (ssl_cert_auth_cb == NULL)
+    {
+        ssl_cert_auth_cb = &ssl_cert_auth_default;
+    }
+
     rc = matrixSslNewClientSession(&ssl, keys, sid,
         sock->extra.tls->cipherlist,
         sock->extra.tls->ciphers,
-        ssl_cert_auth, NULL,
+        ssl_cert_auth_cb, NULL,
         extension,
         extensionCb, &options);
     matrixSslDeleteHelloExtension(extension);
@@ -221,6 +231,16 @@ static const char *getCapath(psSocket_t *sock)
         return sock->extra.tls->capath;
     }
     return NULL;
+}
+
+void setSocketTlsCertAuthCb(
+        psSocket_t *sock,
+        int32 (*ssl_cert_auth_cb)(ssl_t *ssl, psX509Cert_t *cert, int32 alert))
+{
+    if (sock && sock->type == PS_SOCKET_TLS && sock->extra.tls)
+    {
+        sock->extra.tls->ssl_socket_cert_auth = ssl_cert_auth_cb;
+    }
 }
 
 static int getTlsVersion(psSocket_t *sock)

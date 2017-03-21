@@ -41,7 +41,13 @@ struct psSocketTls
     int nested_call;
     int handshaked;
     matrixSslInteract_t msi;
+    int32 (*ssl_socket_cert_auth)(ssl_t *ssl, psX509Cert_t *cert, int32 alert);
 };
+
+/* Set certificate callback for psSockets of TLS type. */
+void setSocketTlsCertAuthCb(
+        psSocket_t *sock,
+        int32 (*ssl_cert_auth_cb)(ssl_t *ssl, psX509Cert_t *cert, int32 alert));
 
 #endif /* USE_PS_NETWORKING */
 
