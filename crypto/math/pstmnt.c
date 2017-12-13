@@ -131,6 +131,11 @@
 #  endif /* PSTMNT_OMIT_ASSEMBLY_OPTIMIZATIONS */
 # endif  /* __arm__ */
 
+# if defined __arm__ && defined __thumb__ && !defined __thumb2__
+#  error "Platform not supported: Thumb1 mode on ARMv4-v6."
+#  error "Please, turn off thumb mode or enable thumb2."
+# endif
+
 /* --- low-level mathematics operations --- */
 
 # ifdef PSTMNT_USE_X86_ASSEMBLY
@@ -854,7 +859,7 @@ pstmnt_square(
     }
 
     /* No square function, just use multiplier. */
-    pstmnt_mult(a, a, r, n);
+    pstmnt_mult(a, a, r, sz);
 }
 # endif
 

@@ -70,7 +70,10 @@
 #   define psFree(A, B)        free(A)
 #   define psFreeNoPool        free
 
+#ifndef PS_POOL_T_DEFINED
+#define PS_POOL_T_DEFINED
 typedef int32 psPool_t;
+#endif
 
 /* Functions without pool: Add N to the name, omit pool. */
 #  define psCallocN(B, C) psCalloc(MATRIX_NO_POOL, (B), (C))
