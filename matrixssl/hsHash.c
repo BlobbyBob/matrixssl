@@ -2,10 +2,10 @@
  *      @file    hsHash.c
  *      @version $Format:%h%d$
  *
- *      "Native" handshake hash.
+ *      "Native" handshake hash for SSL 3.0 and TLS 1.0/1.1/1.2.
  */
 /*
- *      Copyright (c) 2013-2017 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 INSIDE Secure Corporation
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -78,6 +78,18 @@ int32_t sslInitHSHash(ssl_t *ssl)
     }
 # endif /* USE_DTLS */
 
+#ifdef USE_TLS_1_3
+    if (ssl->tls13IncorrectDheKeyShare)
+    {
+        /* Don't allow second ClientHello after HelloRetryRequest
+           to reset the hash. */
+        return 0;
+    }
+    /* Always has to init all hashes since we don't know with what
+       version we end up with. */
+    tls13TranscriptHashInit(ssl);
+#endif
+
 # ifndef USE_ONLY_TLS_1_2
     psMd5Sha1Init(&ssl->sec.msgHashMd5Sha1);
 # endif
@@ -108,6 +120,22 @@ int32_t sslInitHSHash(ssl_t *ssl)
  */
 int32_t sslUpdateHSHash(ssl_t *ssl, const unsigned char *in, psSize_t len)
 {
+
+#ifdef USE_TLS_1_3
+    /* If we just received ClientHello, we have not set the
+       version flag yet. */
+    if (anyTls13VersionSupported(ssl) &&
+        (ssl->hsState == SSL_HS_CLIENT_HELLO))
+    {
+        /* Postpone updating the hash. This is because if the CH contains
+           any PSK binders, we need to hash it in two parts in order to
+           generate the binder key. We shall update the hash either in
+           tls13VerifyBinder, if binders are present, or in
+           parseSSLHandshake if not. */
+        ssl->sec.tls13CHStart = in;
+        ssl->sec.tls13CHLen = len;
+    }
+#endif
 
 # ifdef USE_DTLS
     if (ssl->flags & SSL_FLAGS_DTLS)
@@ -162,21 +190,21 @@ int32_t sslUpdateHSHash(ssl_t *ssl, const unsigned char *in, psSize_t len)
 #   ifdef USE_SHA1
 int32 sslSha1RetrieveHSHash(ssl_t *ssl, unsigned char *out)
 {
-    memcpy(out, ssl->sec.sha1Snapshot, SHA1_HASH_SIZE);
+    Memcpy(out, ssl->sec.sha1Snapshot, SHA1_HASH_SIZE);
     return SHA1_HASH_SIZE;
 }
 #   endif
 #   ifdef USE_SHA384
 int32 sslSha384RetrieveHSHash(ssl_t *ssl, unsigned char *out)
 {
-    memcpy(out, ssl->sec.sha384Snapshot, SHA384_HASH_SIZE);
+    Memcpy(out, ssl->sec.sha384Snapshot, SHA384_HASH_SIZE);
     return SHA384_HASH_SIZE;
 }
 #   endif
 #   ifdef USE_SHA512
 int32 sslSha512RetrieveHSHash(ssl_t *ssl, unsigned char *out)
 {
-    memcpy(out, ssl->sec.sha512Snapshot, SHA512_HASH_SIZE);
+    Memcpy(out, ssl->sec.sha512Snapshot, SHA512_HASH_SIZE);
     return SHA512_HASH_SIZE;
 }
 #   endif
@@ -250,26 +278,14 @@ static int32_t tlsGenerateFinishedHash(ssl_t *ssl,
 #  ifndef USE_ONLY_TLS_1_2
     psMd5Sha1_t md5sha1_backup;
 #  endif
-#  ifdef USE_SHA1
-    psSha1_t sha1_backup;
-#  endif
-#  ifdef USE_SHA256
-    psSha256_t sha256_backup;
-#  endif
-#  ifdef USE_SHA384
-    psSha384_t sha384_backup;
-#  endif
-#  ifdef USE_SHA512
-    psSha512_t sha512_backup;
-#  endif
+
 /*
     In each branch: Use a backup of the message hash-to-date because we don't
     want to destroy the state of the handshaking until truly complete
  */
-
     if (senderFlag >= 0)
     {
-        memcpy(tmp, (senderFlag & SSL_FLAGS_SERVER) ? LABEL_SERVER : LABEL_CLIENT,
+        Memcpy(tmp, (senderFlag & SSL_FLAGS_SERVER) ? LABEL_SERVER : LABEL_CLIENT,
             FINISHED_LABEL_SIZE);
 #  ifdef USE_TLS_1_2
         if (ssl->flags & SSL_FLAGS_TLS_1_2)
@@ -277,6 +293,7 @@ static int32_t tlsGenerateFinishedHash(ssl_t *ssl,
             if (ssl->cipher->flags & CRYPTO_FLAGS_SHA3)
             {
 #   ifdef USE_SHA384
+                psSha384_t sha384_backup;
                 psSha384Cpy(&sha384_backup, sha384);
                 psSha384Final(&sha384_backup, tmp + FINISHED_LABEL_SIZE);
                 return prf2(masterSecret, SSL_HS_MASTER_SIZE, tmp,
@@ -286,6 +303,7 @@ static int32_t tlsGenerateFinishedHash(ssl_t *ssl,
             }
             else
             {
+                psSha256_t sha256_backup;
                 psSha256Cpy(&sha256_backup, sha256);
                 psSha256Final(&sha256_backup, tmp + FINISHED_LABEL_SIZE);
                 return prf2(masterSecret, SSL_HS_MASTER_SIZE, tmp,
@@ -318,8 +336,10 @@ static int32_t tlsGenerateFinishedHash(ssl_t *ssl,
 #  ifdef USE_TLS_1_2
         if (ssl->flags & SSL_FLAGS_TLS_1_2)
         {
+            psSha256_t sha256_backup;
             psSha256Cpy(&sha256_backup, sha256);
             psSha256Final(&sha256_backup, out);
+
 #   if defined(USE_SERVER_SIDE_SSL) && defined(USE_CLIENT_AUTH)
             /* Check to make sure we are a server because clients come
                 through here as well and they do not need to snapshot any
@@ -335,16 +355,25 @@ static int32_t tlsGenerateFinishedHash(ssl_t *ssl,
             if (ssl->flags & SSL_FLAGS_SERVER)
             {
 #    ifdef USE_SHA384
-                psSha384Cpy(&sha384_backup, sha384);
-                psSha384Final(&sha384_backup, ssl->sec.sha384Snapshot);
+                {
+                    psSha384_t sha384_backup;
+                    psSha384Cpy(&sha384_backup, sha384);
+                    psSha384Final(&sha384_backup, ssl->sec.sha384Snapshot);
+                }
 #    endif
 #    ifdef USE_SHA512
-                psSha512Cpy(&sha512_backup, sha512);
-                psSha512Final(&sha512_backup, ssl->sec.sha512Snapshot);
+                {
+                    psSha512_t sha512_backup;
+                    psSha512Cpy(&sha512_backup, sha512);
+                    psSha512Final(&sha512_backup, ssl->sec.sha512Snapshot);
+                }
 #    endif
 #    ifdef USE_SHA1
-                psSha1Cpy(&sha1_backup, sha1);
-                psSha1Final(&sha1_backup, ssl->sec.sha1Snapshot);
+                {
+                    psSha1_t sha1_backup;
+                    psSha1Cpy(&sha1_backup, sha1);
+                    psSha1Final(&sha1_backup, ssl->sec.sha1Snapshot);
+                }
 #    endif
             }
 #   endif
@@ -368,7 +397,11 @@ static int32_t tlsGenerateFinishedHash(ssl_t *ssl,
         return MD5SHA1_HASHLEN;
 #  endif  /* USE_TLS_1_2 */
     }
-    return PS_FAILURE; /* Should not reach this */
+
+    /* Should not reach this */
+#include "psunreachable_begin.h"
+    return PS_FAILURE;
+#include "psunreachable_end.h"
 }
 # endif /* USE_TLS */
 
@@ -379,12 +412,6 @@ int32_t extMasterSecretSnapshotHSHash(ssl_t *ssl, unsigned char *out,
 {
 # ifndef USE_ONLY_TLS_1_2
     psMd5Sha1_t md5sha1;
-# endif
-# ifdef USE_SHA256
-    psSha256_t sha256;
-# endif
-# ifdef USE_SHA384
-    psSha384_t sha384;
 # endif
 
 /*
@@ -400,6 +427,7 @@ int32_t extMasterSecretSnapshotHSHash(ssl_t *ssl, unsigned char *out,
         if (ssl->cipher->flags & CRYPTO_FLAGS_SHA3)
         {
 #  ifdef USE_SHA384
+            psSha384_t sha384;
             psSha384Cpy(&sha384, &ssl->sec.msgHashSha384);
             psSha384Final(&sha384, out);
             *outLen = SHA384_HASH_SIZE;
@@ -407,9 +435,12 @@ int32_t extMasterSecretSnapshotHSHash(ssl_t *ssl, unsigned char *out,
         }
         else
         {
+#  ifdef USE_SHA256
+            psSha256_t sha256;
             psSha256Cpy(&sha256, &ssl->sec.msgHashSha256);
             psSha256Final(&sha256, out);
             *outLen = SHA256_HASH_SIZE;
+#  endif
         }
 #  ifndef USE_ONLY_TLS_1_2
     }
@@ -446,7 +477,7 @@ int32_t sslSnapshotHSHash(ssl_t *ssl, unsigned char *out, int32 senderFlag)
         /* Don't allow FINISHED message retransmit to re-calc hash */
         if (ssl->retransmit)
         {
-            memcpy(out, ssl->hsSnapshot, ssl->hsSnapshotLen);
+            Memcpy(out, ssl->hsSnapshot, ssl->hsSnapshotLen);
             return ssl->hsSnapshotLen;
         }
     }
@@ -490,7 +521,7 @@ int32_t sslSnapshotHSHash(ssl_t *ssl, unsigned char *out, int32 senderFlag)
     {
         if (len > 0)
         {
-            memcpy(ssl->hsSnapshot, out, len);
+            Memcpy(ssl->hsSnapshot, out, len);
             ssl->hsSnapshotLen = len;
         }
     }
@@ -501,4 +532,3 @@ int32_t sslSnapshotHSHash(ssl_t *ssl, unsigned char *out, int32 senderFlag)
 #endif /* USE_NATIVE_TLS_HS_HASH */
 
 /******************************************************************************/
-

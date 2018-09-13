@@ -36,6 +36,8 @@
 /* Currently this example uses _psTrace for tracing, so osdep.h is needed: */
 #include "core/osdep.h"
 #include "core/psUtil.h"
+#include "osdep_sys_time.h"
+#include "osdep_stdio.h"
 #include "../common/client_common.h"
 
 #if defined(USE_DTLS) && defined(USE_CLIENT_SIDE_SSL)
@@ -57,11 +59,9 @@ typedef struct
 } sslDtls_t;
 
 # ifndef MATRIX_TESTING_ENVIRONMENT /* Omit the message when testing. */
-#  ifdef WIN32
-#   pragma message("DO NOT USE THESE DEFAULT KEYS IN PRODUCTION ENVIRONMENTS.")
-#  else
-#   warning "DO NOT USE THESE DEFAULT KEYS IN PRODUCTION ENVIRONMENTS."
-#  endif
+#  define WARNING_MESSAGE "DO NOT USE THESE DEFAULT KEYS IN PRODUCTION ENVIRONMENTS."
+#  define WARNING_MESSAGE_DEFAULT_KEY
+#  include "pscompilerwarning.h"
 # endif
 
 # define ALLOW_ANON_CONNECTIONS  1
@@ -111,14 +111,14 @@ static SOCKET dtlsInitClientSocket(sslDtls_t **newCtx, ssl_t *ssl)
     }
     dtls->ssl = ssl;
 
-    if ((dtls->fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0)
+    if ((dtls->fd = Socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0)
     {
         _psTrace("Error creating INET UDP socket\n");
         psFree(dtls, NULL);
         return INVALID_SOCKET;
     }
 
-    memset(&dtls->addr, 0x0, sizeof(struct sockaddr_in));
+    Memset(&dtls->addr, 0x0, sizeof(struct sockaddr_in));
     dtls->addr.sin_family = AF_INET;
     dtls->addr.sin_port = htons((short) g_port);
     dtls->addr.sin_addr.s_addr = inet_addr(g_ip);
@@ -156,7 +156,7 @@ static int32 dtlsClientConnection(sslKeys_t *keys, sslSessionId_t *sid)
     int drop_next_cipherspec_packet = 0;
 # endif /* DTLS_TEST_LOST_CIPHERSPEC_CHANGE_REHANDSHAKE */
 
-    memset(&options, 0x0, sizeof(sslSessOpts_t));
+    Memset(&options, 0x0, sizeof(sslSessOpts_t));
     options.versionFlag = SSL_FLAGS_DTLS;
     options.trustedCAindication = 1;
 
@@ -194,7 +194,7 @@ static int32 dtlsClientConnection(sslKeys_t *keys, sslSessionId_t *sid)
     rehandshakeTestDone = resumedRehandshakeTestDone = 0;
     weAreDone = 0; /* resumed handshake exit hint mechanism */
     addrlen =  sizeof(dtlsCtx->addr);
-    memset(&from, 0x0, sizeof(struct sockaddr_in));
+    Memset(&from, 0x0, sizeof(struct sockaddr_in));
 
 /*
     Timeout mechanism is implemented according to guidelines in spec
@@ -265,7 +265,7 @@ READ_MORE:
     FD_SET(fd, &readfd);
     timeout.tv_sec = tSec;
 
-    if ((val = select(fd + 1, &readfd, NULL, NULL, &timeout)) < 0)
+    if ((val = Select(fd + 1, &readfd, NULL, NULL, &timeout)) < 0)
     {
         if (SOCKET_ERRNO != EINTR)
         {
@@ -460,7 +460,7 @@ static int32 sendHelloWorld(sslDtls_t *dtlsCtx)
     int32 avail, len, ret;
 
     _psTrace("DTLS handshake complete.  Sending sample application data\n");
-    len = (int32) strlen((char *) helloWorld) + 1;
+    len = (int32) Strlen((char *) helloWorld) + 1;
 /*
     Get free buffer, copy in plaintext, and encode
  */
@@ -469,7 +469,7 @@ static int32 sendHelloWorld(sslDtls_t *dtlsCtx)
         return PS_MEM_FAIL;
     }
     avail = min(avail, len);
-    strncpy((char *) buf, (char *) helloWorld, avail);
+    Strncpy((char *) buf, (char *) helloWorld, avail);
 
     if ((ret = matrixSslEncodeWritebuf(dtlsCtx->ssl, avail)) < 0)
     {
@@ -494,7 +494,7 @@ static int32 sendHelloWorld(sslDtls_t *dtlsCtx)
 
 static void usage(void)
 {
-    printf("\nusage: client { option }\n"
+    Printf("\nusage: client { option }\n"
         "\n"
         "where option can be one of the following:\n"
         "\n"
@@ -549,7 +549,7 @@ static void usage(void)
         "serverPortNum is usually 443 or 4433. The cipherList is a comma separated list\n"
         "of cipher numbers to propose.  It should NOT contain any spaces.\n\n");
 
-    printf("Common ciphers and the cipher number to use in the cipherList:\n"
+    Printf("Common ciphers and the cipher number to use in the cipherList:\n"
         "    53 TLS_RSA_WITH_AES_256_CBC_SHA\n"
         "    47 TLS_RSA_WITH_AES_128_CBC_SHA\n"
         "    10 SSL_RSA_WITH_3DES_EDE_CBC_SHA\n"
@@ -569,16 +569,16 @@ static int32 parse_cipher_list(char *cipherListString,
     numCiphers = 0;
     while (cipherListString != NULL)
     {
-        cipher = (int32) strtol(cipherListString, &endPtr, 10);
+        cipher = (int32) Strtol(cipherListString, &endPtr, 10);
         if (endPtr == cipherListString)
         {
-            printf("The remaining cipherList has no cipher numbers - '%s'\n",
+            Printf("The remaining cipherList has no cipher numbers - '%s'\n",
                 cipherListString);
             return -1;
         }
         else if (size_of_cipher_array <= numCiphers)
         {
-            printf("Too many cipher numbers supplied.  limit is %d\n",
+            Printf("Too many cipher numbers supplied.  limit is %d\n",
                 size_of_cipher_array);
             return -1;
         }
@@ -591,7 +591,7 @@ static int32 parse_cipher_list(char *cipherListString,
             }
             else if (*endPtr != ',')
             {
-                printf("\n");
+                Printf("\n");
                 return -1;
             }
 
@@ -610,11 +610,11 @@ static int32 process_cmd_options(int32 argc, char **argv)
     char *cipherListString;
 
     /* Set some default options: */
-    memset(g_cipher, 0, sizeof(g_cipher));
-    memset(g_ip,     0, sizeof(g_ip));
-    memset(g_path,   0, sizeof(g_path));
+    Memset(g_cipher, 0, sizeof(g_cipher));
+    Memset(g_ip,     0, sizeof(g_ip));
+    Memset(g_path,   0, sizeof(g_path));
 
-    strcpy(g_ip,          "127.0.0.1");
+    Strcpy(g_ip,          "127.0.0.1");
     g_ciphers            = 1;
     g_cipher[0]          = 47;
     g_disableCertNameChk = 0;
@@ -635,6 +635,7 @@ static int32 process_cmd_options(int32 argc, char **argv)
 #define ARG_CERT 2
 #define ARG_KEY 3
 #define ARG_KEYTYPE 4
+#define ARG_PSK 5
 
     static struct option long_options[] =
     {
@@ -653,6 +654,7 @@ static int32 process_cmd_options(int32 argc, char **argv)
         {"cert", required_argument, NULL, ARG_CERT},
         {"key", required_argument, NULL, ARG_KEY},
         {"keytype", required_argument, NULL, ARG_KEYTYPE},
+        {"psk", no_argument, NULL, ARG_PSK},
         {0, 0, 0, 0}
     };
 
@@ -697,7 +699,7 @@ static int32 process_cmd_options(int32 argc, char **argv)
             if ((key_len != 1024) && (key_len != 2048) && (key_len != 3072)
                 && (key_len != 4096))
             {
-                printf("-k option must be followed by a key_len whose value "
+                Printf("-k option must be followed by a key_len whose value "
                     " must be 1024, 2048, 3072 or 4096\n");
                 return -1;
             }
@@ -718,7 +720,7 @@ static int32 process_cmd_options(int32 argc, char **argv)
             break;
 
         case 's':
-            strncpy(g_ip, optarg, 15);
+            Strncpy(g_ip, optarg, 15);
             break;
 
 # ifdef DTLS_PACKET_LOSS_TEST
@@ -726,12 +728,12 @@ static int32 process_cmd_options(int32 argc, char **argv)
             packet_loss_prob = atoi(optarg);
             if (packet_loss_prob < 0)
             {
-                printf("invalid -l option\n");
+                Printf("invalid -l option\n");
                 return -1;
             }
             if (packet_loss_prob > 0)
             {
-                printf("Client simulating packet loss with probability 1/%d\n",
+                Printf("Client simulating packet loss with probability 1/%d\n",
                     packet_loss_prob);
             }
             break;
@@ -763,20 +765,24 @@ static int32 process_cmd_options(int32 argc, char **argv)
             break;
 
         case ARG_KEYTYPE:
-            if (strcmp("any", optarg) == 0) {
+            if (Strcmp("any", optarg) == 0) {
                 g_clientconfig.load_key = &loadKeysFromFile;
-            } else if (strcmp("rsa", optarg) == 0) {
+            } else if (Strcmp("rsa", optarg) == 0) {
                 g_clientconfig.load_key = &loadRsaKeysFromFile;
-            } else if (strcmp("ec", optarg) == 0) {
+            } else if (Strcmp("ec", optarg) == 0) {
                 g_clientconfig.load_key = &loadECDH_ECDSAKeysFromFile;
-            } else if (strcmp("ecrsa", optarg) == 0) {
+            } else if (Strcmp("ecrsa", optarg) == 0) {
                 g_clientconfig.load_key = &loadECDHRsaKeysFromFile;
             } else {
-                printf("Invalid option: %s\n", optarg);
+                Printf("Invalid option: %s\n", optarg);
                 return -1;
             }
 
             g_clientconfig.loadKeysFromMemory = 0;
+            break;
+
+        case ARG_PSK:
+            g_clientconfig.loadPreSharedKeys = 1;
             break;
 #endif /* USE_GETOPT_LONG */
         }
@@ -825,7 +831,7 @@ int32 main(int32 argc, char **argv)
         clientconfigFree();
         return 0;
     }
-    printf("client https://%s:%d%s "
+    Printf("client https://%s:%d%s "
         "new:%d resumed:%d keylen:%d nciphers:%d\n",
         g_ip, g_port, g_path, g_new, g_resumed, g_key_len,
         g_ciphers);
@@ -838,7 +844,7 @@ int32 main(int32 argc, char **argv)
     rv = MATRIXSSL_ERROR;
 
     matrixSslNewSessionId(&sid, NULL);
-    printf("=== %d new connections ===\n", g_new);
+    Printf("=== %d new connections ===\n", g_new);
     for (rc = 0; rc < g_new; rc++)
     {
         matrixSslNewSessionId(&sid, NULL);
@@ -855,12 +861,12 @@ int32 main(int32 argc, char **argv)
     }
     if (g_new)
     {
-        printf("\n");
+        Printf("\n");
     }
 
 
 
-    printf("=== %d resumed connections ===\n", g_resumed);
+    Printf("=== %d resumed connections ===\n", g_resumed);
     for (rc = 0; rc < g_resumed; rc++)
     {
         rv = dtlsClientConnection(keys, sid);
@@ -945,8 +951,11 @@ static int32 certCb(ssl_t *ssl, psX509Cert_t *cert, int32 alert)
                 cert->subject.commonName);
             return SSL_ALLOW_ANON_CONNECTION;
         }
-        _psTrace("Certificate callback returning fatal alert\n");
-        return alert;
+        else
+        {
+            _psTrace("Certificate callback returning fatal alert\n");
+            return alert;
+        }
     }
 
     psTraceStrDtls("Validated cert for: %s.\n", cert->subject.commonName);
@@ -962,7 +971,7 @@ static int32 certCb(ssl_t *ssl, psX509Cert_t *cert, int32 alert)
  */
 int32 main(int32 argc, char **argv)
 {
-    printf("USE_DTLS and USE_CLIENT_SIDE_SSL must be enabled in " \
+    Printf("USE_DTLS and USE_CLIENT_SIDE_SSL must be enabled in " \
         "matrixsslConfig.h at build time to run this application\n");
     return -1;
 }

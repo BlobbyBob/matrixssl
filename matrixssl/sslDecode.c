@@ -2,10 +2,10 @@
  *      @file    sslDecode.c
  *      @version $Format:%h%d$
  *
- *      Secure Sockets Layer protocol message decoding portion of MatrixSSL.
+ *      SSL/TLS protocol message decoding portion of MatrixSSL.
  */
 /*
- *      Copyright (c) 2013-2017 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 INSIDE Secure Corporation
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -115,7 +115,7 @@ int32 matrixSslDecode(ssl_t *ssl, unsigned char **buf, uint32 *len,
     int32 *error, unsigned char *alertLevel,
     unsigned char *alertDescription)
 {
-    unsigned char *c, *p, *end, *pend, *ctStart, *origbuf;
+    unsigned char *c, *p, *end, *pend, *decryptedStart, *origbuf;
     unsigned char *mac;
     unsigned char macError;
     int32 rc;
@@ -132,6 +132,9 @@ int32 matrixSslDecode(ssl_t *ssl, unsigned char **buf, uint32 *len,
     int32 preInflateLen, postInflateLen, currLen;
     int zret;
 #endif
+#ifdef USE_TLS_1_3
+    psBool_t useOutbufForResponse = PS_FALSE;
+#endif
 /*
     If we've had a protocol error, don't allow further use of the session
  */
@@ -143,9 +146,63 @@ int32 matrixSslDecode(ssl_t *ssl, unsigned char **buf, uint32 *len,
         return MATRIXSSL_ERROR;
     }
 
+#ifdef USE_TLS_1_3
+    if (USING_TLS_1_3(ssl))
+    {
+        /* TLS 1.3 specific decode path. Note that if we're the server
+           and just about to decode ClientHello, we have not negotiated
+           TLS 1.3 yet and thus will not take the TLS 1.3 path yet. */
+        rc = matrixSslDecodeTls13(ssl,
+                buf,
+                len,
+                size,
+                remaining,
+                requiredLen,
+                error,
+                alertLevel,
+                alertDescription);
+        if (rc != SSL_NO_TLS_1_3)
+        {
+            return rc;
+        }
+        psAssert(rc == SSL_NO_TLS_1_3);
+
+        if (IS_CLIENT(ssl))
+        {
+            /*
+              Check for possibility to fail early on an unsupported downgrade.
+              If version range was specified via the supportedVersions list
+              and only TLS 1.3 versions are present in that list, there's no
+              point in trying to continue if the server chose <1.3.
+              Note that his check is only an optimization; we will check
+              for illegal downgrades later after having parsed the
+              entire ServerHello. Without this check, we could fail for
+              an obscure reason, such as the ServerHello not containing
+              renegotiation_info extension if the client sent it.*/
+            if (ssl->supportedVersionsLen > 0
+                    && !anyNonTls13VersionSupported(ssl))
+            {
+                psTraceErrr("Server tried to downgrade to an earlier" \
+                        " version, but we only support TLS 1.3\n");
+                ssl->err = SSL_ALERT_PROTOCOL_VERSION;
+                origbuf = *buf;
+                goto encodeResponse;
+            }
+        }
+        /*
+          Pre-TLS 1.3 version negotiated.*/
+        ssl->flags &= ~(SSL_FLAGS_TLS_1_3 |
+                SSL_FLAGS_TLS_1_3_DRAFT_22 |
+                SSL_FLAGS_TLS_1_3_DRAFT_23 |
+                SSL_FLAGS_TLS_1_3_DRAFT_24 |
+                SSL_FLAGS_TLS_1_3_DRAFT_26 |
+                SSL_FLAGS_TLS_1_3_DRAFT_28);
+    }
+#endif /* USE_TLS_1_3 */
+
     origbuf = *buf; /* Save the original buffer location */
 
-    p = pend = mac = ctStart = NULL;
+    p = pend = mac = decryptedStart = NULL;
     padLen = 0;
 
 #ifdef USE_EXT_CLIENT_CERT_KEY_LOADING
@@ -289,8 +346,10 @@ decodeMore:
                 /* Consider invalid major version protocol
                    version error. */
                 ssl->err = SSL_ALERT_PROTOCOL_VERSION;
-                psTraceInfo(
-                    "Won't support client's SSL major version\n");
+                //*error = PS_PROTOCOL_FAIL;
+                psTraceErrr(
+                    "Won't support client's SSL major version. (or maybe decode unexpected data)\n");
+                *error = PS_PROTOCOL_FAIL;
                 return MATRIXSSL_ERROR;
             }
         }
@@ -313,10 +372,11 @@ decodeMore:
         /* OpenSSL 0.9.8 will send a SSLv2 CLIENT_HELLO.  Use the -no_ssl2
             option when running a 0.9.8 client to prevent this */
         ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-        psTraceInfo("SSLv2 records not supported\n");
+        psTraceErrr("SSLv2 records not supported\n");
         goto encodeResponse;
 #endif
     }
+
 /*
     Validate the various record headers.  The type must be valid,
     the major and minor versions must match the negotiated versions (if we're
@@ -355,12 +415,12 @@ decodeMore:
                 ssl->rec.type != SSL_RECORD_TYPE_HANDSHAKE)
             {
                 ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-                psTraceInfo("Record header version not valid\n");
+                psTraceErrr("Record header version not valid\n");
                 goto encodeResponse;
             }
 #else
             ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-            psTraceInfo("Record header version not valid\n");
+            psTraceErrr("Record header version not valid\n");
             goto encodeResponse;
 #endif
         }
@@ -512,8 +572,8 @@ SKIP_RECORD_PARSE:
 # ifdef USE_DTLS
         if (ssl->flags & SSL_FLAGS_DTLS)
         {
-            psTraceInfo("DTLS error: Received PARTIAL record from peer.\n");
-            psTraceInfo("This indicates a PMTU mismatch\n");
+            psTraceErrr("DTLS error: Received PARTIAL record from peer.\n");
+            psTraceErrr("This indicates a PMTU mismatch\n");
             ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
             goto encodeResponse;
         }
@@ -682,7 +742,7 @@ ADVANCE_TO_APP_DATA:
     callback will point to a null provider that passes the data unchanged
  */
 
-    ctStart = origbuf; /* Clear-text start.  Decrypt to the front */
+    decryptedStart = origbuf; /* Clear-text start.  Decrypt to the front */
 
     /* Sanity check ct len.  Step 1 of Lucky 13 MEE-TLS-CBC decryption.
         max{b, t + 1} is always "t + 1" because largest possible blocksize
@@ -698,7 +758,7 @@ ADVANCE_TO_APP_DATA:
             if (ssl->rec.len < (ssl->deMacSize + 1 + ssl->deBlockSize))
             {
                 ssl->err = SSL_ALERT_BAD_RECORD_MAC;
-                psTraceInfo("Ciphertext length failed sanity\n");
+                psTraceErrr("Ciphertext length failed sanity\n");
                 goto encodeResponse;
             }
         }
@@ -707,7 +767,7 @@ ADVANCE_TO_APP_DATA:
             if (ssl->rec.len < (ssl->deMacSize + 1))
             {
                 ssl->err = SSL_ALERT_BAD_RECORD_MAC;
-                psTraceInfo("Ciphertext length failed sanity\n");
+                psTraceErrr("Ciphertext length failed sanity\n");
                 goto encodeResponse;
             }
         }
@@ -715,19 +775,42 @@ ADVANCE_TO_APP_DATA:
         if (ssl->rec.len < (ssl->deMacSize + 1))
         {
             ssl->err = SSL_ALERT_BAD_RECORD_MAC;
-            psTraceInfo("Ciphertext length failed sanity\n");
+            psTraceErrr("Ciphertext length failed sanity\n");
             goto encodeResponse;
         }
 #endif  /* USE_TLS_1_1 */
     }
 
-    /* CT to PT */
-    if (ssl->decrypt(ssl, c, ctStart, ssl->rec.len) < 0)
+    /*
+       Decrypt the record contents using the current cipher (may be NULL).
+       The caller of this function expects to find the decrypted data
+       at the start of the input buffer, where we currently have the
+       record header (5 bytes if TLS, 13 if DTLS).
+
+       For most cipher implementations, overlapping input and output
+       buffers are not a problem, but our current ChaCha20 implementation
+       requires decryption to be exactly in-situ in that case.
+    */
+# ifdef USE_CHACHA20_POLY1305_IETF_CIPHER_SUITE
+    if (DECRYPTING_WITH_CHACHA20(ssl))
+    {
+        decryptedStart = c;
+    }
+# endif /* USE_CHACHA20_POLY1305_IETF_CIPHER_SUITE */
+    rc = ssl->decrypt(ssl, c, decryptedStart, ssl->rec.len);
+    if (rc < 0)
     {
         ssl->err = SSL_ALERT_DECRYPT_ERROR;
-        psTraceInfo("Couldn't decrypt record data 2\n");
+        psTraceErrr("Couldn't decrypt record data 2\n");
         goto encodeResponse;
     }
+# ifdef USE_CHACHA20_POLY1305_IETF_CIPHER_SUITE
+    if (DECRYPTING_WITH_CHACHA20(ssl) && decryptedStart > origbuf)
+    {
+        Memmove(origbuf, decryptedStart, ssl->rec.len);
+        decryptedStart = origbuf;
+    }
+# endif /* USE_CHACHA20_POLY1305_IETF_CIPHER_SUITE */
 
     c += ssl->rec.len;
 
@@ -764,7 +847,7 @@ ADVANCE_TO_APP_DATA:
  */
         if (ssl->deBlockSize <= 1)
         {
-            mac = ctStart + ssl->rec.len - ssl->deMacSize;
+            mac = decryptedStart + ssl->rec.len - ssl->deMacSize;
         }
         else
         {
@@ -787,7 +870,7 @@ ADVANCE_TO_APP_DATA:
             c points within the cipher text, p points within the plaintext
             The last byte of the record is the pad length
  */
-            p = ctStart + ssl->rec.len;
+            p = decryptedStart + ssl->rec.len;
             padLen = *(p - 1);
 /*
             SSL3.0 requires the pad length to be less than blockSize
@@ -913,7 +996,7 @@ ADVANCE_TO_APP_DATA:
 #ifdef USE_TLS_1_1
         if ((ssl->flags & SSL_FLAGS_TLS_1_1) && (ssl->deBlockSize > 1))
         {
-            ctStart += ssl->deBlockSize; /* skip explicit IV */
+            decryptedStart += ssl->deBlockSize; /* skip explicit IV */
         }
 #endif
 
@@ -929,7 +1012,7 @@ ADVANCE_TO_APP_DATA:
         if (ssl->deBlockSize > 1)
         {
             /* Run this helper regardless of error status thus far */
-            rc = addCompressCount(ssl, padLen);
+            (void) addCompressCount(ssl, padLen);
             if (macError == 0)
             {
                 psDigestContext_t md;
@@ -980,18 +1063,18 @@ ADVANCE_TO_APP_DATA:
         }
 #endif  /* LUCKY13 */
 
-        if (ssl->verifyMac(ssl, ssl->rec.type, ctStart,
-                (uint32) (mac - ctStart), mac) < 0 || macError)
+        if (ssl->verifyMac(ssl, ssl->rec.type, decryptedStart,
+                (uint32) (mac - decryptedStart), mac) < 0 || macError)
         {
             ssl->err = SSL_ALERT_BAD_RECORD_MAC;
-            psTraceInfo("Couldn't verify MAC or pad of record data\n");
+            psTraceErrr("Couldn't verify MAC or pad of record data\n");
             goto encodeResponse;
         }
 
-        memset(mac, 0x0, ssl->deMacSize);
+        Memset(mac, 0x0, ssl->deMacSize);
 
-        /* Record data starts at ctStart and ends at mac */
-        p = ctStart;
+        /* Record data starts at decryptedStart and ends at mac */
+        p = decryptedStart;
         pend = mac;
     }
     else
@@ -999,8 +1082,8 @@ ADVANCE_TO_APP_DATA:
 /*
         The record data is the entire record as there is no MAC or padding
  */
-        p = ctStart;
-        pend = mac = ctStart + ssl->rec.len;
+        p = decryptedStart;
+        pend = mac = decryptedStart + ssl->rec.len;
     }
 
 #ifdef USE_ZLIB_COMPRESSION
@@ -1013,7 +1096,7 @@ ADVANCE_TO_APP_DATA:
         ssl->rec.type == SSL_RECORD_TYPE_HANDSHAKE)
     {
         ssl->err = SSL_ALERT_INTERNAL_ERROR;
-        psTraceInfo("Re-handshakes not supported on compressed sessions\n");
+        psTraceErrr("Re-handshakes not supported on compressed sessions\n");
         goto encodeResponse;
     }
     if (ssl->compression && ssl->flags & SSL_FLAGS_READ_SECURE &&
@@ -1027,13 +1110,13 @@ ADVANCE_TO_APP_DATA:
         if (ssl->zlibBuffer == NULL)
         {
             ssl->err = SSL_ALERT_INTERNAL_ERROR;
-            psTraceInfo("Couldn't allocate compressed scratch pad\n");
+            psTraceErrr("Couldn't allocate compressed scratch pad\n");
             goto encodeResponse;
         }
-        memset(ssl->zlibBuffer, 0, preInflateLen + MATRIX_INFLATE_FINISHED_OH);
+        Memset(ssl->zlibBuffer, 0, preInflateLen + MATRIX_INFLATE_FINISHED_OH);
         if (preInflateLen > 0)   /* zero length record possible */
-        {   /* psTraceBytes("pre inflate", ctStart, preInflateLen); */
-            ssl->inflate.next_in = ctStart;
+        {   /* psTraceBytes("pre inflate", decryptedStart, preInflateLen); */
+            ssl->inflate.next_in = decryptedStart;
             ssl->inflate.avail_in = preInflateLen;
             ssl->inflate.next_out = ssl->zlibBuffer;
             ssl->inflate.avail_out = SSL_MAX_PLAINTEXT_LEN;
@@ -1050,7 +1133,7 @@ ADVANCE_TO_APP_DATA:
                 ssl->err = SSL_ALERT_INTERNAL_ERROR;
                 psFree(ssl->zlibBuffer, ssl->bufferPool); ssl->zlibBuffer = NULL;
                 inflateEnd(&ssl->inflate);
-                psTraceInfo("ZLIB inflate didn't work in one pass\n");
+                psTraceErrr("ZLIB inflate didn't work in one pass\n");
                 goto encodeResponse;
             }
             postInflateLen = ssl->inflate.total_out - currLen;
@@ -1063,7 +1146,7 @@ ADVANCE_TO_APP_DATA:
                 /* Easy case where compressed data was actually larger.
                     Don't need to update c or inlen because the next
                     good data is already correctly being pointed to */
-                memcpy(p, ssl->zlibBuffer, postInflateLen);
+                Memcpy(p, ssl->zlibBuffer, postInflateLen);
                 mac = p + postInflateLen;
                 pend = mac;
             }
@@ -1083,7 +1166,7 @@ ADVANCE_TO_APP_DATA:
                         check there is room to append */
                     if ((ssl->insize - ssl->inlen) >= postInflateLen)
                     {
-                        memcpy(p, ssl->zlibBuffer, postInflateLen);
+                        Memcpy(p, ssl->zlibBuffer, postInflateLen);
                         c += currLen;
                         mac = p + postInflateLen;
                         pend = mac;
@@ -1095,7 +1178,7 @@ ADVANCE_TO_APP_DATA:
                         psFree(ssl->zlibBuffer, ssl->bufferPool);
                         ssl->zlibBuffer = NULL;
                         inflateEnd(&ssl->inflate);
-                        psTraceInfo("ZLIB buffer management needed\n");
+                        psTraceErrr("ZLIB buffer management needed\n");
                         goto encodeResponse;
                     }
                 }
@@ -1111,10 +1194,10 @@ ADVANCE_TO_APP_DATA:
                     {
                         /* Good, fits in current buffer.  Move all valid
                             data back currLen */
-                        memmove(c + currLen, c,
+                        Memmove(c + currLen, c,
                             ssl->inlen - (int32) (c - ssl->inbuf));
                         c += currLen;
-                        memcpy(p, ssl->zlibBuffer, postInflateLen);
+                        Memcpy(p, ssl->zlibBuffer, postInflateLen);
                         mac = p + postInflateLen;
                         pend = mac;
                     }
@@ -1126,7 +1209,7 @@ ADVANCE_TO_APP_DATA:
                         psFree(ssl->zlibBuffer, ssl->bufferPool);
                         ssl->zlibBuffer = NULL;
                         inflateEnd(&ssl->inflate);
-                        psTraceInfo("ZLIB buffer management needed\n");
+                        psTraceErrr("ZLIB buffer management needed\n");
                         goto encodeResponse;
                     }
                 }
@@ -1150,7 +1233,7 @@ ADVANCE_TO_APP_DATA:
         if ((int32) (pend - p) > SSL_MAX_PLAINTEXT_LEN)
         {
             ssl->err = SSL_ALERT_RECORD_OVERFLOW;
-            psTraceInfo("Record overflow\n");
+            psTraceErrr("Record overflow\n");
             goto encodeResponse;
         }
     }
@@ -1159,7 +1242,7 @@ ADVANCE_TO_APP_DATA:
         if ((int32) (pend - p) > ssl->maxPtFrag)
         {
             ssl->err = SSL_ALERT_RECORD_OVERFLOW;
-            psTraceInfo("Record overflow\n");
+            psTraceErrr("Record overflow\n");
             goto encodeResponse;
         }
     }
@@ -1171,8 +1254,7 @@ ADVANCE_TO_APP_DATA:
     switch (ssl->rec.type)
     {
     case SSL_RECORD_TYPE_CHANGE_CIPHER_SPEC:
-        psTraceStrHs(">>> %s parsing CHANGE_CIPHER_SPEC message\n",
-            (ssl->flags & SSL_FLAGS_SERVER) ? "Server" : "Client");
+        psTracePrintChangeCipherSpecParse(ssl);
 /*
         Body is single byte with value 1 to indicate that the next message
         will be encrypted using the negotiated cipher suite
@@ -1180,7 +1262,7 @@ ADVANCE_TO_APP_DATA:
         if (pend - p < 1)
         {
             ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-            psTraceInfo("Invalid length for CipherSpec\n");
+            psTraceErrr("Invalid length for CipherSpec\n");
             goto encodeResponse;
         }
         if (*p == 1)
@@ -1190,7 +1272,7 @@ ADVANCE_TO_APP_DATA:
         else
         {
             ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-            psTraceInfo("Invalid value for CipherSpec\n");
+            psTraceErrr("Invalid value for CipherSpec\n");
             goto encodeResponse;
         }
 
@@ -1312,7 +1394,11 @@ ADVANCE_TO_APP_DATA:
                 ssl->sid->sessionTicketState = SESS_TICKET_STATE_INIT;
 # endif         /* USE_PSK_CIPHER_SUITE */
             }
+# ifdef USE_TLS_1_3
+            else if (!ssl->tls13IncorrectDheKeyShare)
+# else
             else
+# endif
             {
                 ssl->err = SSL_ALERT_UNEXPECTED_MESSAGE;
                 psTraceIntInfo("Invalid CipherSpec order: %d\n", ssl->hsState);
@@ -1338,31 +1424,14 @@ ADVANCE_TO_APP_DATA:
         if (pend - p < 2)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("Error in length of alert record\n");
+            psTraceErrr("Error in length of alert record\n");
             goto encodeResponse;
         }
         *alertLevel = *p; p++;
         *alertDescription = *p; p++;
         *len =  2;
-#ifdef USE_SSL_HANDSHAKE_MSG_TRACE
-        if (ssl->flags & SSL_FLAGS_SERVER)
-        {
-            psTraceHs(">>> Server");
-        }
-        else
-        {
-            psTraceHs(">>> Client");
-        }
-        if (*alertDescription == SSL_ALERT_CLOSE_NOTIFY)
-        {
-            psTraceHs(" parsing ALERT (CLOSE_NOTIFY) message\n");
-        }
-        else
-        {
-            psTraceHs(" parsing ALERT message\n");
-        }
-#endif
-        psTraceIntInfo("Received alert %d\n", (int32) (*alertDescription));
+        psTracePrintAlertReceiveInfo(ssl, *alertDescription);
+
 /*
         If the alert is fatal, or is a close message (usually a warning),
         flag the session with ERROR so it cannot be used anymore.
@@ -1430,6 +1499,7 @@ ADVANCE_TO_APP_DATA:
                 psTraceInfo("matrixSslDecode returning PS_PENDING\n");
                 return PS_PENDING;
             }
+            break;
 #endif /* USE_EXT_CLIENT_CERT_KEY_LOADING */
 #ifdef USE_DTLS
         case DTLS_RETRANSMIT:
@@ -1447,6 +1517,7 @@ ADVANCE_TO_APP_DATA:
             {
                 return MATRIXSSL_SUCCESS;
             }
+            break;
 #endif      /* USE_DTLS */
 
         case SSL_PROCESS_DATA:
@@ -1456,7 +1527,7 @@ ADVANCE_TO_APP_DATA:
                 expect to have any data remaining in the incoming buffer, since
                 the peer would be waiting for our response.
              */
-#ifdef ENABLE_FALSE_START
+#if defined(ENABLE_FALSE_START) || defined(USE_TLS_1_3)
             if (c < origbuf + *len)
             {
                 /*
@@ -1467,16 +1538,41 @@ ADVANCE_TO_APP_DATA:
                     some values to support this case.
                     http://tools.ietf.org/html/draft-bmoeller-tls-falsestart-00
                  */
+# ifdef ENABLE_FALSE_START
                 if (*c == SSL_RECORD_TYPE_APPLICATION_DATA &&
                     ssl->hsState == SSL_HS_DONE &&
                     (ssl->flags & SSL_FLAGS_SERVER))
                 {
-                    psTraceHs(">>> Server buffering FALSE START APPLICATION_DATA\n");
+                    psTraceInfo(">>> Server buffering FALSE START APPLICATION_DATA\n");
                     ssl->flags |= SSL_FLAGS_FALSE_START;
                     *remaining = *len - (c - origbuf);
                     *buf = c;
                 }
                 else
+# endif /* ENABLE_FALSE_START */
+# ifdef USE_TLS_1_3
+                /* This case handles early data that can be received
+                   during the handshake. In that case we might need to use
+                   outbuf for encoding the response since inbuf still contains
+                   non-decoded packets. Note that SSL_FULL mechanism for outbuf
+                   is not supported so if the handshake flight grows > default
+                   buf size then handshake is aborted. This however should
+                   not happen with PSK since the flight is small. */
+                if ((ssl->sec.tls13ChosenPsk != NULL) &&
+                     (*c == SSL_RECORD_TYPE_APPLICATION_DATA ||
+                     *c == SSL_RECORD_TYPE_CHANGE_CIPHER_SPEC ) &&
+                     (ssl->hsState == SSL_HS_TLS_1_3_RECVD_CH ||
+                      ssl->hsState == SSL_HS_TLS_1_3_WAIT_EOED) &&
+                      (ssl->flags & SSL_FLAGS_SERVER))
+                {
+                    /* Outgoing data needs a buffer but there is still probably
+                       early_data in inbuf so use outbuf for outgoing data */
+                    useOutbufForResponse = PS_TRUE;
+                    *remaining = *len - (c - origbuf);
+                    *buf = c;
+                }
+                else
+# endif /* USE_TLS_1_3 */
                 {
                     /*
                         Implies successful parse of supposed last message in
@@ -1484,48 +1580,48 @@ ADVANCE_TO_APP_DATA:
                         buffer to start to write response
                      */
 #endif
-            if (*c == SSL_RECORD_TYPE_APPLICATION_DATA &&
-                ssl->hsState == SSL_HS_DONE &&
-                (ssl->flags & SSL_FLAGS_SERVER))
-            {
-                /* If this asserts, try defining ENABLE_FALSE_START */
-                psAssert(origbuf + *len == c);
-                *buf = origbuf;
-            }
-            else if (*c == SSL_RECORD_TYPE_APPLICATION_DATA &&
-                     ssl->hsState == SSL_HS_HELLO_REQUEST &&
-                     (c < (origbuf + *len)))
-            {
-                /* message tacked on to end of HELLO_REQUEST. Very
-                    complicated scenario for the state machine and
-                    API so we're going to ignore the HELLO_REQUEST
-                    (fine by the specification) and give precedence to
-                    the app data. This backup flag data was set aside
-                    in sslResetContext when     the HELLO_REQUEST was
-                    received */
-                *buf = c;
-#ifdef USE_CLIENT_SIDE_SSL
-                ssl->sec.anon = ssl->anonBk;
-                ssl->flags = ssl->flagsBk;
-                ssl->bFlags = ssl->bFlagsBk;
-#endif
-                ssl->hsState = SSL_HS_DONE;
-                return MATRIXSSL_SUCCESS;
+                    if (*c == SSL_RECORD_TYPE_APPLICATION_DATA &&
+                        ssl->hsState == SSL_HS_DONE &&
+                        (ssl->flags & SSL_FLAGS_SERVER))
+                    {
+                        /* If this asserts, try defining ENABLE_FALSE_START */
+                        psAssert(origbuf + *len == c);
+                        *buf = origbuf;
+                    }
+                    else if (*c == SSL_RECORD_TYPE_APPLICATION_DATA &&
+                             ssl->hsState == SSL_HS_HELLO_REQUEST &&
+                             (c < (origbuf + *len)))
+                    {
+                        /* message tacked on to end of HELLO_REQUEST. Very
+                            complicated scenario for the state machine and
+                            API so we're going to ignore the HELLO_REQUEST
+                            (fine by the specification) and give precedence to
+                            the app data. This backup flag data was set aside
+                            in sslResetContext when     the HELLO_REQUEST was
+                            received */
+                        *buf = c;
+        #ifdef USE_CLIENT_SIDE_SSL
+                        ssl->sec.anon = ssl->anonBk;
+                        ssl->flags = ssl->flagsBk;
+                        ssl->bFlags = ssl->bFlagsBk;
+        #endif
+                        ssl->hsState = SSL_HS_DONE;
+                        return MATRIXSSL_SUCCESS;
+                    }
+                    else
+                    {
+                        /* If this asserts, please report the values of the
+                         * c byte and ssl->hsState to support */
+                        psAssert(origbuf + *len == c);
+                        *buf = origbuf;
+                    }
+#if defined(ENABLE_FALSE_START) || defined(USE_TLS_1_3)
+                }
             }
             else
             {
-                /* If this asserts, please report the values of the
-                 * c byte and ssl->hsState to support */
-                psAssert(origbuf + *len == c);
                 *buf = origbuf;
             }
-#ifdef ENABLE_FALSE_START
-        }
-    }
-    else
-    {
-        *buf = origbuf;
-    }
 #endif
             goto encodeResponse;
 
@@ -1537,16 +1633,48 @@ ADVANCE_TO_APP_DATA:
             }
             goto encodeResponse;
         default:
-            psTraceIntInfo("Unknown return %d from parseSSLHandshake!\n", rc);
-            if (ssl->err == SSL_ALERT_NONE)
-            {
-                ssl->err = SSL_ALERT_INTERNAL_ERROR;
-            }
-            goto encodeResponse;
+            break;
         }
-        break;
+
+        psTraceIntInfo("Unknown return %d from parseSSLHandshake!\n", rc);
+        if (ssl->err == SSL_ALERT_NONE)
+        {
+            ssl->err = SSL_ALERT_INTERNAL_ERROR;
+        }
+        goto encodeResponse;
 
     case SSL_RECORD_TYPE_APPLICATION_DATA:
+
+#ifdef USE_TLS_1_3
+        if (ssl->tls13IncorrectDheKeyShare == PS_TRUE &&
+            ssl->hsState == SSL_HS_CLIENT_HELLO)
+        {
+/*
+             This is a special scenario where TLS1.3 HelloRetryRequest
+             was sent by us and we are waiting for new ClientHello.
+             If application data is received in this state then
+             it probably is TLS1.3 early data that was following the
+             original ClientHello. The spec chapter 4.2.19 says that
+             in this case we must ignore all such records.
+*/
+            /* Just skip over the data */
+            *buf = c;
+            *remaining = *len - (c - origbuf);
+
+            psTraceIntInfo("Skipped over %d bytes of unexpected application data.\n", c - origbuf);
+
+            if (*remaining > 0 || ssl->outlen == 0)
+            {
+                /* Still data to be processed in inbuf or
+                   nothing to be sent, so need more data */
+                return MATRIXSSL_SUCCESS;
+            }
+            /* There is probably our ServerHello in outbuf waiting
+               to be sent */
+            *len = 0;
+            return SSL_SEND_RESPONSE;
+        }
+#endif
 /*
         Data is in the out buffer, let user handle it
         Don't allow application data until handshake is complete, and we are
@@ -1599,7 +1727,7 @@ ADVANCE_TO_APP_DATA:
         in, the ignored message count is decremented, ensuring that we only
         error on a large number of consecutive blanks.
  */
-        if (ctStart == mac)
+        if (decryptedStart == mac)
         {
             if (ssl->ignoredMessageCount++ >= SSL_MAX_IGNORED_MESSAGE_COUNT)
             {
@@ -1650,45 +1778,61 @@ encodeResponse:
          */
         tmpout.buf = tmpout.start = tmpout.end = ssl->outbuf + ssl->outlen;
         tmpout.size = ssl->outsize - ssl->outlen;
-        memset(origbuf, 0x0, (*buf - origbuf)); /* SECURITY (see below) */
+        Memset(origbuf, 0x0, (*buf - origbuf)); /* SECURITY (see below) */
     }
     else
-    {
 # endif
-    psAssert(origbuf == *buf);
-    tmpout.buf = tmpout.end = tmpout.start = origbuf;
-    tmpout.size = size;
+# ifdef USE_TLS_1_3
+    if (useOutbufForResponse && *buf != origbuf)
+    {
+        /*
+            Encode the output into ssl->outbuf in this case, rather than back
+            into origbuf, since there is still valid data in origbuf that
+            needs to be decoded later.
+            Other places in this function we do not reference the ssl inbuf
+            or outbuf directly, but this was the cleanest way for this hack.
+            Caller must test to see if *buf has been modified if
+            ssl->flags & SSL_FLAGS_FALSE_START
+         */
+        tmpout.buf = tmpout.start = tmpout.end = ssl->outbuf + ssl->outlen;
+        tmpout.size = ssl->outsize - ssl->outlen;
+        Memset(origbuf, 0x0, (*buf - origbuf)); /* SECURITY (see below) */
+    }
+    else
+# endif
+    {
+        psAssert(origbuf == *buf);
+        tmpout.buf = tmpout.end = tmpout.start = origbuf;
+        tmpout.size = size;
 
 # if defined(USE_HARDWARE_CRYPTO_RECORD) || defined(USE_HARDWARE_CRYPTO_PKA) || defined(USE_EXT_CERTIFICATE_VERIFY_SIGNING)
-    if (!(ssl->hwflags & SSL_HWFLAGS_PENDING_PKA_W) &&
-        !(ssl->hwflags & SSL_HWFLAGS_PENDING_FLIGHT_W))
-    {
-        /* If we are coming back through on a pending, this data is GOLD */
-        memset(tmpout.buf, 0x0, tmpout.size);
-    }
+        if (!(ssl->hwflags & SSL_HWFLAGS_PENDING_PKA_W) &&
+            !(ssl->hwflags & SSL_HWFLAGS_PENDING_FLIGHT_W))
+        {
+            /* If we are coming back through on a pending, this data is GOLD */
+            Memset(tmpout.buf, 0x0, tmpout.size);
+        }
 # else
-/*
-        SECURITY - Clear the decoded incoming record from outbuf before encoding
-        the response into outbuf.
- */
-    memset(tmpout.buf, 0x0, tmpout.size);
+        /*
+            SECURITY - Clear the decoded incoming record from outbuf before encoding
+            the response into outbuf.
+        */
+        Memset(tmpout.buf, 0x0, tmpout.size);
 # endif
-
-# ifdef ENABLE_FALSE_START
-}
-# endif
+    }
 
 # ifdef USE_CLIENT_SIDE_SSL
     if (ssl->hsState == SSL_HS_HELLO_REQUEST)
     {
-        memset(&options, 0x0, sizeof(sslSessOpts_t));
+        Memset(&options, 0x0, sizeof(sslSessOpts_t));
 /*
         Don't clear the session info.  If receiving a HELLO_REQUEST from a
         MatrixSSL enabled server the determination on whether to reuse the
         session is made on that side, so always send the current session
- */
-        rc = matrixSslEncodeClientHello(ssl, &tmpout, 0, 0, requiredLen, NULL,
-            &options);
+        Re-send the backed up user extensions (if any). TODO: test this.
+*/
+        rc = matrixSslEncodeClientHello(ssl, &tmpout, 0, 0, requiredLen,
+                ssl->userExt, &options);
     }
     else
     {
@@ -1711,7 +1855,7 @@ encodeResponse:
  */
             if (tmpout.buf == tmpout.end)
             {
-                psTraceInfo("Unexpected data\n");
+                psTraceErrr("Unexpected data\n");
                 *error = PS_PROTOCOL_FAIL;
                 return MATRIXSSL_ERROR;
             }
@@ -1725,19 +1869,26 @@ encodeResponse:
             ssl->outlen += tmpout.end - tmpout.buf;
         }
         else
+# endif
+# ifdef USE_TLS_1_3
+        if (useOutbufForResponse && *buf != origbuf)
         {
+            /* Update outlen with the data we added */
+            ssl->outlen += tmpout.end - tmpout.buf;
+            return MATRIXSSL_SUCCESS;
+        }
+        else
 # endif
-        *remaining = 0;
-        *len = tmpout.end - tmpout.buf;
-# ifdef ENABLE_FALSE_START
-    }
-# endif
+        {
+            *remaining = 0;
+            *len = tmpout.end - tmpout.buf;
+        }
         return SSL_SEND_RESPONSE;
     }
     if (rc == SSL_FULL)
     {
-# ifdef ENABLE_FALSE_START
-        /* We don't support growing outbuf in the false start case */
+# if defined(ENABLE_FALSE_START) || defined (USE_TLS_1_3)
+        /* We don't support growing outbuf in the false start or early data case */
         if (*buf != origbuf)
         {
             psAssert(rc != SSL_FULL);
@@ -1843,6 +1994,7 @@ static int32 addCompressCount(ssl_t *ssl, int32 padLen)
 static int32 parseSSLHandshake(ssl_t *ssl, char *inbuf, uint32 len)
 {
     unsigned char *c, *end;
+    unsigned char *saved_c = NULL;
     unsigned char hsType;
     int32 rc;
     uint32 hsLen;
@@ -1873,10 +2025,12 @@ static int32 parseSSLHandshake(ssl_t *ssl, char *inbuf, uint32 len)
         /* Just borrowing hsLen variable.  Is the rest here or do we still
             need more? */
         hsLen = min((uint32) (end - c), ssl->fragTotal - ssl->fragIndex);
-        memcpy(ssl->fragMessage + ssl->fragIndex, c, hsLen);
+        Memcpy(ssl->fragMessage + ssl->fragIndex, c, hsLen);
         ssl->fragIndex += hsLen;
         c += hsLen;
-
+        /* Save the read pointer so that we can return parsing the buffer
+           after the fragment has been handled */
+        saved_c = c;
         if (ssl->fragIndex == ssl->fragTotal)
         {
             c = ssl->fragMessage + ssl->hshakeHeadLen;
@@ -1904,7 +2058,7 @@ parseHandshake:
     if (end - c < 1)
     {
         ssl->err = SSL_ALERT_DECODE_ERROR;
-        psTraceInfo("Invalid length of handshake message 1\n");
+        psTraceErrr("Invalid length of handshake message 1\n");
         psTraceIntInfo("%d\n", (int32) (end - c));
         return MATRIXSSL_ERROR;
     }
@@ -1918,7 +2072,7 @@ parseHandshake:
     {
         if (hsType == SSL_HS_CLIENT_HELLO && ssl->hsState == SSL_HS_DONE)
         {
-            psTraceInfo("Closing conn with client. Rehandshake is disabled\n");
+            psTraceErrr("Closing conn with client. Rehandshake is disabled\n");
             ssl->err = SSL_ALERT_NO_RENEGOTIATION;
             return MATRIXSSL_ERROR;
         }
@@ -1927,7 +2081,7 @@ parseHandshake:
     {
         if (hsType == SSL_HS_HELLO_REQUEST && ssl->hsState == SSL_HS_DONE)
         {
-            psTraceInfo("Closing conn with server. Rehandshake is disabled\n");
+            psTraceErrr("Closing conn with server. Rehandshake is disabled\n");
             ssl->err = SSL_ALERT_NO_RENEGOTIATION;
             return MATRIXSSL_ERROR;
         }
@@ -1949,7 +2103,7 @@ parseHandshake:
         if (end - c < 5)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("Invalid length of handshake message\n");
+            psTraceErrr("Invalid length of handshake message\n");
             return MATRIXSSL_ERROR;
         }
         msn = c[3] << 8;
@@ -1994,7 +2148,7 @@ parseHandshake:
             goto hsStateDetermined;
         }
 /*
-        Another possible mismatch allowed is for a HELLO_REQEST message.
+        Another possible mismatch allowed is for a HELLO_REQUEST message.
         Indicates a rehandshake initiated from the server.
  */
         if ((hsType == SSL_HS_HELLO_REQUEST) &&
@@ -2021,7 +2175,7 @@ parseHandshake:
             if (end - c < 3)
             {
                 ssl->err = SSL_ALERT_DECODE_ERROR;
-                psTraceInfo("Invalid length of handshake message 2\n");
+                psTraceErrr("Invalid length of handshake message 2\n");
                 psTraceIntInfo("%d\n", (int32) (end - c));
                 return MATRIXSSL_ERROR;
             }
@@ -2034,7 +2188,7 @@ parseHandshake:
                 if (end - c < 8)
                 {
                     ssl->err = SSL_ALERT_DECODE_ERROR;
-                    psTraceInfo("Invalid length of handshake message\n");
+                    psTraceErrr("Invalid length of handshake message\n");
                     return MATRIXSSL_ERROR;
                 }
                 c += 8;
@@ -2044,7 +2198,7 @@ parseHandshake:
             if (ssl->rehandshakeCount <= 0)
             {
                 ssl->err = SSL_ALERT_NO_RENEGOTIATION;
-                psTraceInfo("Server re-handshaking denied.  Out of credits.\n");
+                psTraceErrr("Server re-handshaking denied.  Out of credits.\n");
                 return MATRIXSSL_ERROR;
             }
             ssl->rehandshakeCount--;
@@ -2088,7 +2242,7 @@ parseHandshake:
             /* This is the case where the server sent a reply to our
                 status_request extension but didn't actually send the
                 handshake message. If we are in a MUST state, time to fail */
-            psTraceInfo("Expecting CERTIFICATE_STATUS message\n");
+            psTraceErrr("Expecting CERTIFICATE_STATUS message\n");
             ssl->err = SSL_ALERT_UNEXPECTED_MESSAGE;
             return MATRIXSSL_ERROR;
 # else
@@ -2191,7 +2345,7 @@ hsStateDetermined:
             if (ssl->rehandshakeCount <= 0)
             {
                 ssl->err = SSL_ALERT_NO_RENEGOTIATION;
-                psTraceInfo("Client re-handshaking denied\n");
+                psTraceErrr("Client re-handshaking denied\n");
                 return MATRIXSSL_ERROR;
             }
             ssl->rehandshakeBytes = 0; /* reset */
@@ -2213,7 +2367,7 @@ hsStateDetermined:
         if (sslSnapshotHSHash(ssl, hsMsgHash,
                 (ssl->flags & SSL_FLAGS_SERVER) ? 0 : SSL_FLAGS_SERVER) <= 0)
         {
-            psTraceInfo("Error snapshotting HS hash\n");
+            psTraceErrr("Error snapshotting HS hash\n");
             ssl->err = SSL_ALERT_INTERNAL_ERROR;
             return MATRIXSSL_ERROR;
         }
@@ -2225,7 +2379,7 @@ hsStateDetermined:
             that doesn't include this message we are about to process */
         if (sslSnapshotHSHash(ssl, hsMsgHash, -1) <= 0)
         {
-            psTraceInfo("Error snapshotting HS hash\n");
+            psTraceErrr("Error snapshotting HS hash\n");
             ssl->err = SSL_ALERT_INTERNAL_ERROR;
             return MATRIXSSL_ERROR;
         }
@@ -2245,7 +2399,7 @@ hsStateDetermined:
         if (end - c < 3)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("Invalid length of handshake message 2\n");
+            psTraceErrr("Invalid length of handshake message 2\n");
             psTraceIntInfo("%d\n", (int32) (end - c));
             return MATRIXSSL_ERROR;
         }
@@ -2258,7 +2412,7 @@ hsStateDetermined:
             if (end - c < 8)
             {
                 ssl->err = SSL_ALERT_DECODE_ERROR;
-                psTraceInfo("Invalid length of handshake message\n");
+                psTraceErrr("Invalid length of handshake message\n");
                 return MATRIXSSL_ERROR;
             }
             msn = *c << 8; c++;
@@ -2350,13 +2504,13 @@ hsStateDetermined:
                     dtlsInitFrag(ssl); /* init to free */
                     return SSL_MEM_ERROR;
                 }
-                memcpy(ssl->fragHeaders[j].hsHeader, c - ssl->hshakeHeadLen,
+                Memcpy(ssl->fragHeaders[j].hsHeader, c - ssl->hshakeHeadLen,
                     ssl->hshakeHeadLen);
                 ssl->fragHeaders[j].offset = fragOffset;
                 ssl->fragHeaders[j].fragLen = fragLen;
 
                 ssl->fragTotal += fragLen;
-                memcpy(ssl->fragMessage + fragOffset, c, fragLen);
+                Memcpy(ssl->fragMessage + fragOffset, c, fragLen);
                 if (ssl->fragTotal != hsLen)
                 {
 
@@ -2384,18 +2538,18 @@ hsStateDetermined:
                 if (ssl->fragMessage == NULL)
                 {
                     ssl->err = SSL_ALERT_INTERNAL_ERROR;
-                    psTraceInfo("Memory allocation error\n");
+                    psTraceErrr("Memory allocation error\n");
                     return MATRIXSSL_ERROR;
                 }
                 ssl->fragIndex = (uint32) (end - c) + ssl->hshakeHeadLen;
-                memcpy(ssl->fragMessage, c - ssl->hshakeHeadLen,
+                Memcpy(ssl->fragMessage, c - ssl->hshakeHeadLen,
                     ssl->fragIndex);
                 return MATRIXSSL_SUCCESS;
             }
             else
             {
                 ssl->err = SSL_ALERT_DECODE_ERROR;
-                psTraceInfo("Invalid handshake length\n");
+                psTraceErrr("Invalid handshake length\n");
                 return MATRIXSSL_ERROR;
             }
         }
@@ -2488,15 +2642,31 @@ SKIP_HSHEADER_PARSE:
         if (c + hsLen != end)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("Invalid length for Client Hello.\n");
+            psTraceErrr("Invalid length for Client Hello.\n");
             return MATRIXSSL_ERROR;
         }
+
         rc = parseClientHello(ssl, &c, end);
+#ifdef USE_TLS_1_3
+        if (USING_TLS_1_3(ssl))
+        {
+            /* Tr-Hash already up-to-date if binders were parsed. If not,
+               we have delayed updating until now. */
+            if (!ssl->sec.tls13UsingPsk || ssl->sec.tls13BindersLen == 0)
+            {
+                tls13TranscriptHashUpdate(ssl,
+                        ssl->sec.tls13CHStart,
+                        ssl->sec.tls13CHLen);
+            }
+        }
+#endif
+
         /* SSL_PROCESS_DATA is a valid code to indicate the end of a flight */
         if (rc < 0 && rc != SSL_PROCESS_DATA)
         {
             return rc;
         }
+
         break;
 
 /******************************************************************************/
@@ -2527,18 +2697,18 @@ SKIP_HSHEADER_PARSE:
 #ifdef USE_CLIENT_SIDE_SSL
     case SSL_HS_HELLO_REQUEST:
         /* No body message and the only one in record flight */
-        psTraceHs(">>> Client parsing HELLO_REQUEST message\n");
+        psTracePrintHsMessageParse(ssl, SSL_HS_HELLO_REQUEST);
         if (end - c != 0)
         {
             ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-            psTraceInfo("Invalid hello request message\n");
+            psTraceErrr("Invalid hello request message\n");
             return MATRIXSSL_ERROR;
         }
 #  ifdef SSL_REHANDSHAKES_ENABLED
         if (ssl->rehandshakeCount <= 0)
         {
             ssl->err = SSL_ALERT_NO_RENEGOTIATION;
-            psTraceInfo("Server re-handshaking denied\n");
+            psTraceErrr("Server re-handshaking denied\n");
             /* Reset the state to done */
             ssl->hsState = SSL_HS_DONE;
             return MATRIXSSL_ERROR;
@@ -2594,7 +2764,6 @@ SKIP_HSHEADER_PARSE:
 /******************************************************************************/
 # ifdef USE_OCSP_RESPONSE
     case SSL_HS_CERTIFICATE_STATUS:
-        psTraceHs(">>> Client parsing CERTIFICATE_STATUS message\n");
         rc = parseCertificateStatus(ssl, hsLen, &c, end);
         if (rc < 0)
         {
@@ -2608,20 +2777,19 @@ SKIP_HSHEADER_PARSE:
 
 # ifdef USE_STATELESS_SESSION_TICKETS
     case SSL_HS_NEW_SESSION_TICKET:
-
-        psTraceHs(">>> Client parsing NEW_SESSION_TICKET message\n");
+        psTracePrintHsMessageParse(ssl, SSL_HS_NEW_SESSION_TICKET);
 #  ifdef USE_EAP_FAST
         if (ssl->flags & SSL_FLAGS_EAP_FAST)
         {
             ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-            psTraceInfo("NEW_SESSION_TICKET unsupported in EAP-FAST\n");
+            psTraceErrr("NEW_SESSION_TICKET unsupported in EAP-FAST\n");
             return MATRIXSSL_ERROR;
         }
 #  endif
         if (hsLen < 6)
         {
             ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-            psTraceInfo("Invalid NewSessionTicket message\n");
+            psTraceErrr("Invalid NewSessionTicket message\n");
             return MATRIXSSL_ERROR;
         }
         ssl->sid->sessionTicketLifetimeHint = *c << 24; c++;
@@ -2635,10 +2803,10 @@ SKIP_HSHEADER_PARSE:
         if ((uint32) (end - c) < hsLen)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("Invalid NewSessionTicket message\n");
+            psTraceErrr("Invalid NewSessionTicket message\n");
             return MATRIXSSL_ERROR;
         }
-        if (ssl->sid->sessionTicketLen == 0)
+        if (ssl->sid->sessionTicket == NULL || ssl->sid->sessionTicketLen == 0)
         {
             /* First time receiving a session ticket */
             ssl->sid->sessionTicketLen = hsLen;
@@ -2646,7 +2814,7 @@ SKIP_HSHEADER_PARSE:
             if ((ssl->sid->sessionTicket = psMalloc(ssl->sid->pool,
                      ssl->sid->sessionTicketLen)) != NULL)
             {
-                memcpy(ssl->sid->sessionTicket, c, ssl->sid->sessionTicketLen);
+                Memcpy(ssl->sid->sessionTicket, c, ssl->sid->sessionTicketLen);
                 c += ssl->sid->sessionTicketLen;
             }
             else
@@ -2662,7 +2830,7 @@ SKIP_HSHEADER_PARSE:
             /* Updated (or duplicate) ticket */
             psAssert(ssl->sid->sessionTicket); /* exists from previous hs */
             if (hsLen == ssl->sid->sessionTicketLen &&
-                (memcmp(c, ssl->sid->sessionTicket, hsLen) == 0))
+                (Memcmp(c, ssl->sid->sessionTicket, hsLen) == 0))
             {
                 /* server not updating the ticket */
                 c += ssl->sid->sessionTicketLen;
@@ -2674,7 +2842,7 @@ SKIP_HSHEADER_PARSE:
                 if ((ssl->sid->sessionTicket = psMalloc(ssl->sid->pool,
                          ssl->sid->sessionTicketLen)) != NULL)
                 {
-                    memcpy(ssl->sid->sessionTicket, c,
+                    Memcpy(ssl->sid->sessionTicket, c,
                         ssl->sid->sessionTicketLen);
                     c += ssl->sid->sessionTicketLen;
                 }
@@ -2714,7 +2882,7 @@ SKIP_HSHEADER_PARSE:
 
 /******************************************************************************/
 
-# ifndef USE_ONLY_PSK_CIPHER_SUITE
+# if defined(USE_CLIENT_AUTH) && !defined(USE_ONLY_PSK_CIPHER_SUITE)
     case SSL_HS_CERTIFICATE_REQUEST:
 
         psAssert(rc == 0); /* checking to see if this is the correct default */
@@ -2772,15 +2940,16 @@ SKIP_HSHEADER_PARSE:
 #ifdef USE_DTLS
 # ifdef USE_CLIENT_SIDE_SSL
     case SSL_HS_HELLO_VERIFY_REQUEST:
-        psTraceHs(">>> Client parsing HELLO_VERIFY_REQUEST message\n");
+        psTracePrintHsMessageParse(ssl, SSL_HS_HELLO_VERIFY_REQUEST);
 /*
         Format for message is two byte version specifier, 1 byte length, and
         the cookie itself
+
  */
         if ((end - c) < 3)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("Invalid HelloVerifyRequest message\n");
+            psTraceErrr("Invalid HelloVerifyRequest message\n");
             return MATRIXSSL_ERROR;
         }
         hvreqMajVer = *c; c++;
@@ -2793,7 +2962,7 @@ SKIP_HSHEADER_PARSE:
             if ((end - c) < ssl->cookieLen)
             {
                 ssl->err = SSL_ALERT_DECODE_ERROR;
-                psTraceInfo("Invalid HelloVerifyRequest message\n");
+                psTraceErrr("Invalid HelloVerifyRequest message\n");
                 return MATRIXSSL_ERROR;
             }
 /*
@@ -2808,7 +2977,7 @@ SKIP_HSHEADER_PARSE:
                 if (memcmpct(ssl->cookie, c, ssl->cookieLen) != 0)
                 {
                     ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-                    psTraceInfo("Cookie has changed on retransmit\n");
+                    psTraceErrr("Cookie has changed on retransmit\n");
                     return MATRIXSSL_ERROR;
                 }
                 c += ssl->cookieLen;
@@ -2820,7 +2989,7 @@ SKIP_HSHEADER_PARSE:
                 {
                     return SSL_MEM_ERROR;
                 }
-                memcpy(ssl->cookie, c, ssl->cookieLen);
+                Memcpy(ssl->cookie, c, ssl->cookieLen);
                 c += ssl->cookieLen;
             }
         }
@@ -2846,10 +3015,18 @@ SKIP_HSHEADER_PARSE:
     }
 #endif /* USE_DTLS */
 
-/*
-    if we've got more data in the record, the sender has packed
-    multiple handshake messages in one record.  Parse the next one.
- */
+    /* In case fragmented message was assembled and parsed from
+       ssl->fragMessage we have to return to the original buffer here */
+    if (saved_c != NULL)
+    {
+        c = saved_c;
+        end = (unsigned char *) (inbuf + len);
+        saved_c = NULL;
+    }
+    /*
+        if we've got more data in the record, the sender has packed
+        multiple handshake messages in one record.  Parse the next one.
+     */
     if (c < end)
     {
         goto parseHandshake;
@@ -2921,4 +3098,3 @@ static int32 parseSingleCert(ssl_t *ssl, unsigned char *c, unsigned char *end,
 #endif  /* USE_CLIENT_SIDE_SSL || USE_CLIENT_AUTH */
 
 /******************************************************************************/
-

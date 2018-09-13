@@ -31,37 +31,60 @@
  *      http://www.gnu.org/copyleft/gpl.html
  */
 /******************************************************************************/
+#ifndef _POSIX_C_SOURCE
+# define _POSIX_C_SOURCE 200112L
+#endif
 
-#include <stddef.h>
-#include <time.h>
-#include <string.h>
-#include <stdio.h>
-#include <ctype.h>
+#ifndef NEED_PS_TIME_CONCRETE
+# define NEED_PS_TIME_CONCRETE
+#endif
+
+#ifndef USE_MULTITHREADING
+# define USE_MULTITHREADING
+#endif
+
+/* This example uses osdep*.h to allow porting similar to MatrixSSL's libs. */
+#include "osdep_stddef.h"
+#include "osdep_time.h"
+#include "osdep_string.h"
+#include "osdep_stdio.h"
+#include "osdep_ctype.h"
+#include "osdep_sys_socket.h"
+#include "osdep-types.h"
+
 #include "app.h"
+
+/* Command line arguments parsing: */
 #ifndef WIN32
 # define USE_GETOPT_LONG
 # ifdef USE_GETOPT_LONG
 #  include <getopt.h>
 # else
-#  include <unistd.h>
+#  include "osdep_unistd.h"
 # endif
 #else
 # include "XGetopt.h"
 #endif
+
+/* The MatrixSSL's API. */
 #include "matrixssl/matrixsslApi.h"
-/* Currently this example uses _psTrace for tracing, so osdep.h is needed: */
-#include "core/osdep.h"
+#include "core/coreApi.h"
 #include "core/psUtil.h"
+
 # include "../common/client_common.h"
+
+#  ifdef USE_TLS_1_3
+#   include "testkeys/PSK/tls13_psk.h"
+#  endif /* USE_TLS_1_3 */
 
 #ifdef USE_CLIENT_SIDE_SSL
 
+static int g_use_psk;
+
 # ifndef MATRIX_TESTING_ENVIRONMENT /* Omit the message when testing. */
-#  ifdef WIN32
-#   pragma message("DO NOT USE THESE DEFAULT KEYS IN PRODUCTION ENVIRONMENTS.")
-#  else
-#   warning "DO NOT USE THESE DEFAULT KEYS IN PRODUCTION ENVIRONMENTS."
-#  endif
+#  define WARNING_MESSAGE "DO NOT USE THESE DEFAULT KEYS IN PRODUCTION ENVIRONMENTS."
+#  define WARNING_MESSAGE_DEFAULT_KEY
+#  include "pscompilerwarning.h"
 # endif
 
 # define ALLOW_ANON_CONNECTIONS  0
@@ -81,12 +104,21 @@ static unsigned char g_httpRequestHdr[] = "GET %s HTTP/1.0\r\n"
                                           "\r\n";
 
 static const char g_strver[][8] =
-{ "SSL 3.0", "TLS 1.0", "TLS 1.1", "TLS 1.2" };
+{ "SSL 3.0", "TLS 1.0", "TLS 1.1", "TLS 1.2", "TLS 1.3" };
 
+static psList_t *g_groupList;
+static psSize_t g_num_key_shares;
+static psList_t *g_sigAlgsList;
+static psList_t *g_sigAlgsCertList;
+static psList_t *g_supportedVersionsList;
+static char g_early_data_file[256];
+static long int g_tls13_block_size;
+static long int g_min_dh_p_size;
 static unsigned char g_matrixShutdownServer[] = "MATRIX_SHUTDOWN";
 
 extern int opterr;
 static char g_ip[16];
+static char g_server_name[256];
 static char g_path[256];
 static int g_port, g_new, g_resumed, g_ciphers, g_version, g_closeServer;
 static int g_min_version, g_max_version, g_version_range_set;
@@ -95,6 +127,8 @@ static int g_max_verify_depth;
 static uint16_t g_cipher[16];
 static int g_trace;
 static int g_keepalive;
+static int g_req_ocsp_stapling;
+static int g_disable_peer_authentication;
 
 static uint32_t g_bytes_requested;
 static uint8_t g_send_closure_alert;
@@ -122,6 +156,9 @@ static SOCKET lsocketConnect(char *ip, int32 port, int32 *err);
 static void closeConn(ssl_t *ssl, SOCKET fd);
 static int32_t extensionCb(ssl_t *ssl,
                            uint16_t extType, uint8_t extLen, void *e);
+# ifdef USE_TLS_1_3
+static int32_t sendEarlyData(ssl_t *ssl);
+# endif
 
 # ifdef USE_CRL
 static int32 fetchCRL(psPool_t *pool, char *url, uint32_t urlLen,
@@ -133,7 +170,7 @@ static int32_t fetchParseAndAuthCRLfromCert(psPool_t *pool, psX509Cert_t *cert,
     example will show how to halt the handshake to go out and fetch and retry
     the connection (command line option -n must be specified for multiple
     connection attempts) */
-/* #define MIDHANDSHAKE_CRL_FETCH */
+#define MIDHANDSHAKE_CRL_FETCH
 
 #  ifndef MIDHANDSHAKE_CRL_FETCH
 /* In the example where we stop the handhsake to go fetch the CRL files, we
@@ -169,20 +206,29 @@ static int32 httpsClientConnection(sslKeys_t *keys, sslSessionId_t *sid,
     struct g_sslstats *stats)
 {
     tlsExtension_t *extension;
-    int32 rc, transferred, len, sessionFlag, extLen;
-    ssl_t *ssl;
+    int32 rc, transferred, len, extLen;
+    ssl_t *ssl = NULL;
     unsigned char *buf, *ext;
     httpConn_t cp;
     SOCKET fd;
     psTime_t t1, t2;
     sslSessOpts_t options;
+    psList_t *sigAlg;
+    psList_t *supportedVersion;
+# ifdef USE_TLS_1_3
+    psList_t *group;
+    uint16_t groups[TLS_1_3_MAX_GROUPS] = {0};
+# endif
+    uint16_t sigAlgs[TLS_MAX_SIGNATURE_ALGORITHMS] = {0};
+    int32_t supportedVersions[TLS_MAX_SUPPORTED_VERSIONS] = {0};
+    psSize_t i;
 
 # ifdef USE_ALPN
     unsigned char *alpn[MAX_PROTO_EXT];
     int32 alpnLen[MAX_PROTO_EXT];
 # endif
 
-    memset(&cp, 0x0, sizeof(httpConn_t));
+    Memset(&cp, 0x0, sizeof(httpConn_t));
     if (g_alreadyopen == 0)
     {
         fd = lsocketConnect(g_ip, g_port, &rc);
@@ -201,45 +247,126 @@ static int32 httpsClientConnection(sslKeys_t *keys, sslSessionId_t *sid,
         return PS_PLATFORM_FAIL;
     }
 
-    memset(&options, 0x0, sizeof(sslSessOpts_t));
+    Memset(&options, 0x0, sizeof(sslSessOpts_t));
 
-    if (g_version_range_set)
+# ifdef USE_OCSP_RESPONSE
+    if (g_req_ocsp_stapling)
+    {
+        options.OCSPstapling = 1;
+    }
+# endif
+
+# ifdef USE_DH
+    rc = matrixSslSessOptsSetMinDhBits(&options, g_min_dh_p_size);
+    if (rc != PS_SUCCESS)
+    {
+        return rc;
+    }
+# endif
+
+# ifdef USE_TLS_1_3
+
+    /* Determine which groups to use. */
+    if (g_groupList != 0)
+    {
+        group = g_groupList;
+        i = 0;
+        while (group)
+        {
+            groups[i] = psGetNamedGroupId((const char*)group->item);
+            group = group->next;
+            i++;
+        }
+        rc = matrixSslSessOptsSetKeyExGroups(&options,
+                groups,
+                i,
+                g_num_key_shares);
+        if (rc < 0)
+        {
+            Printf("matrixSslSessOptsSetKeyExGroups failed\n");
+            goto L_CLOSE_ERR;
+        }
+    }
+    if (g_sigAlgsCertList != 0)
+    {
+        sigAlg = g_sigAlgsCertList;
+        i = 0;
+        while (sigAlg)
+        {
+            sigAlgs[i] = psGetNamedSigAlgId((const char*)sigAlg->item);
+            sigAlg = sigAlg->next;
+            i++;
+        }
+        rc = matrixSslSessOptsSetSigAlgsCert(&options,
+                sigAlgs,
+                i);
+        if (rc < 0)
+        {
+            Printf("matrixSslSessOptsSetSigAlgsCert failed\n");
+            goto L_CLOSE_ERR;
+        }
+    }
+
+# endif /* USE_TLS_1_3 */
+    if (g_sigAlgsList != 0)
+    {
+        sigAlg = g_sigAlgsList;
+        i = 0;
+        while (sigAlg)
+        {
+            sigAlgs[i] = psGetNamedSigAlgId((const char*)sigAlg->item);
+            sigAlg = sigAlg->next;
+            i++;
+        }
+        rc = matrixSslSessOptsSetSigAlgs(&options,
+                sigAlgs,
+                i);
+        if (rc < 0)
+        {
+            Printf("matrixSslSessOptsSetSigAlgs failed\n");
+            goto L_CLOSE_ERR;
+        }
+    }
+
+    /*
+      Get version information from (in order of priority):
+      - supported versions list (e.g. --tls-supported-versions 26,3)
+      - version range option (e.g. --tls-version-range 3,4)
+      - single version option (e.g. -V26)
+    */
+    if (g_supportedVersionsList)
+    {
+        supportedVersion = g_supportedVersionsList;
+        i = 0;
+        while (supportedVersion)
+        {
+            supportedVersions[i] = atoi((char* )supportedVersion->item);
+            supportedVersion = supportedVersion->next;
+            i++;
+        }
+        rc = matrixSslSessOptsSetClientTlsVersions(&options,
+                supportedVersions,
+                i);
+        if (rc < 0)
+        {
+            Printf("matrixSslSessOptsSetClientTlsVersions failed\n");
+            goto L_CLOSE_ERR;
+        }
+
+    }
+    else if (g_version_range_set)
     {
         rc = matrixSslSessOptsSetClientTlsVersionRange(&options,
                 g_min_version,
                 g_max_version);
         if (rc < 0)
         {
-            return rc;
+            goto L_CLOSE_ERR;
         }
     }
-    else
+    else if (g_version != 0)
     {
-# ifdef SSL_FLAGS_SSLV3
-        /* Corresponds to version 3.g_version */
-        switch (g_version)
-        {
-        case 0:
-            sessionFlag = SSL_FLAGS_SSLV3;
-            break;
-        case 1:
-            sessionFlag = SSL_FLAGS_TLS_1_0;
-            break;
-        case 2:
-            sessionFlag = SSL_FLAGS_TLS_1_1;
-            break;
-        case 3:
-            sessionFlag = SSL_FLAGS_TLS_1_2;
-            break;
-        default:
-            sessionFlag = SSL_FLAGS_TLS_1_0;
-            break;
-        }
-# else
-        /* MatrixSSL <= 3.4.2 don't support setting version on request */
-        sessionFlag = 0;
-# endif
-        options.versionFlag = sessionFlag;
+        options.versionFlag = tlsMinVerToVersionFlag(g_version);
     }
 
     options.userPtr = keys;
@@ -253,20 +380,25 @@ static int32 httpsClientConnection(sslKeys_t *keys, sslSessionId_t *sid,
         options.validateCertsOpts.max_verify_depth = g_max_verify_depth;
 
     matrixSslNewHelloExtension(&extension, NULL);
-    matrixSslCreateSNIext(NULL, (unsigned char *) g_ip, (uint32) strlen(g_ip),
-        &ext, &extLen);
+    if (Strlen(g_server_name) == 0)
+    {
+        Memcpy(g_server_name, g_ip, Strlen(g_ip));
+    }
+    matrixSslCreateSNIext(NULL,
+            (unsigned char *) g_server_name, (uint32) Strlen(g_server_name),
+            &ext, &extLen);
     matrixSslLoadHelloExtension(extension, ext, extLen, EXT_SNI);
     psFree(ext, NULL);
 
 # ifdef USE_ALPN
     /* Application Layer Protocol Negotiation */
-    alpn[0] = psMalloc(NULL, strlen("http/1.0"));
-    memcpy(alpn[0], "http/1.0", strlen("http/1.0"));
-    alpnLen[0] = strlen("http/1.0");
+    alpn[0] = (unsigned char *)psMalloc(NULL, Strlen("http/1.0"));
+    Memcpy(alpn[0], "http/1.0", Strlen("http/1.0"));
+    alpnLen[0] = Strlen("http/1.0");
 
-    alpn[1] = psMalloc(NULL, strlen("http/1.1"));
-    memcpy(alpn[1], "http/1.1", strlen("http/1.1"));
-    alpnLen[1] = strlen("http/1.1");
+    alpn[1] = (unsigned char *)psMalloc(NULL, Strlen("http/1.1"));
+    Memcpy(alpn[1], "http/1.1", Strlen("http/1.1"));
+    alpnLen[1] = Strlen("http/1.1");
 
     matrixSslCreateALPNext(NULL, 2, alpn, alpnLen, &ext, &extLen);
     matrixSslLoadHelloExtension(extension, ext, extLen, EXT_ALPN);
@@ -275,27 +407,50 @@ static int32 httpsClientConnection(sslKeys_t *keys, sslSessionId_t *sid,
 # endif
 
     /* We are passing the IP address of the server as the expected name */
-    /* To skip certificate subject name tests, pass NULL instead of g_ip */
+    /* To skip certificate subject name tests, pass NULL instead of
+       g_server_name */
     if (g_disableCertNameChk == 0)
     {
         rc = matrixSslNewClientSession(&ssl, keys, sid, g_cipher, g_ciphers,
-            certCb, g_ip, extension, extensionCb, &options);
-
-
+            certCb, g_server_name, extension, extensionCb, &options);
     }
     else
     {
         rc = matrixSslNewClientSession(&ssl, keys, sid, g_cipher, g_ciphers,
             certCb, NULL, extension, extensionCb, &options);
     }
-
-    matrixSslDeleteHelloExtension(extension);
     if (rc != MATRIXSSL_REQUEST_SEND)
     {
-        _psTraceInt("New Client Session Failed: %d.  Exiting\n", rc);
-        close(fd);
-        return PS_ARG_FAIL;
+        psTraceInt("New Client Session Failed: %d.  Exiting\n", rc);
+        rc = PS_ARG_FAIL;
+        goto L_CLOSE_ERR;
     }
+
+# ifdef USE_TLS_1_3
+    /* TLS 1.3 early data sending from file. Early data must be sent right
+       after the matrixSslNewClientSession call */
+    if (Strlen(g_early_data_file) > 0 &&
+        matrixSslGetMaxEarlyData(ssl) > 0)
+    {
+        if (sendEarlyData(ssl) < 0)
+        {
+            rc = PS_FAILURE;
+            goto L_CLOSE_ERR;
+        }
+    }
+    if (g_tls13_block_size != 0)
+    {
+        rc = matrixSslSetTls13BlockPadding(ssl, g_tls13_block_size);
+        if (rc != PS_SUCCESS)
+        {
+            rc = PS_FAILURE;
+            goto L_CLOSE_ERR;
+        }
+    }
+# endif
+
+    matrixSslDeleteHelloExtension(extension);
+
 WRITE_MORE:
     while ((len = matrixSslGetOutdata(ssl, &buf)) > 0)
     {
@@ -306,7 +461,7 @@ WRITE_MORE:
         transferred = send(fd, buf, len, 0);
         if (transferred <= 0)
         {
-            printf("Error sending\n");
+            Printf("Error sending\n");
             goto L_CLOSE_ERR;
         }
         else
@@ -323,6 +478,14 @@ WRITE_MORE:
             }
             if (rc == MATRIXSSL_HANDSHAKE_COMPLETE)
             {
+                Printf("TLS handshake complete.\n");
+
+                if (USING_TLS_1_3(ssl) && sid != NULL && g_resumed > 0)
+                {
+                    /* Try to receive the server's NewSessionTicket. */
+                    goto READ_MORE;
+                }
+
                 /* If we sent the Finished SSL message, initiate the HTTP req */
                 /* (This occurs on a resumption handshake) */
                 if ((rc = httpWriteRequest(ssl)) < 0)
@@ -368,25 +531,36 @@ READ_MORE:
 # ifdef USE_EXT_CLIENT_CERT_KEY_LOADING
         if (rc == PS_PENDING && matrixSslNeedClientCert(ssl))
         {
-            _psTrace("Loading client cert and key in response to " \
+            sslIdentity_t *id, *next;
+
+            psTrace("Loading client cert and key in response to " \
                     "CertificateRequest\n");
-            if (ssl->keys->cert)
+
+            /* Clear previously set identities from the ssl->keys before
+               loading new ones.
+
+               On a typical application the 'identity' keys would not be
+               shared with initial NewClient call, and the ps-pending
+               driven/callback driven mechanisms */
+            for (id = ssl->keys->identity; id; id = next)
             {
-                psX509FreeCert(ssl->keys->cert);
-                ssl->keys->cert = NULL;
+                next = id->next;
+                if (id->cert)
+                    psX509FreeCert(id->cert);
+                psClearPubKey(&id->privKey);
+                psFree(id, ssl->keys->pool);
             }
-            if (ssl->keys->privKey.keysize > 0)
-            {
-                psClearPubKey(&ssl->keys->privKey);
-            }
+            ssl->keys->identity = NULL;
+
             if (matrixSslLoadKeys(ssl->keys,
                             g_on_demand_cert_file,
                             g_on_demand_key_file,
                             NULL, NULL, NULL) < 0)
             {
-                _psTrace("matrixSslLoadKeys failed\n");
+                psTrace("matrixSslLoadKeys failed\n");
                 exit(EXIT_FAILURE);
             }
+            matrixSslSetClientIdentity(ssl, ssl->keys);
             (void)matrixSslClientCertUpdated(ssl);
 
             /* Retry now that we have the cert and the priv key. */
@@ -394,7 +568,7 @@ READ_MORE:
                     (uint32 *) &len);
             if (rc < 0)
             {
-                _psTrace("Retry failed\n");
+                psTrace("Retry failed\n");
             }
             goto WRITE_MORE;
         }
@@ -470,6 +644,7 @@ PROCESS_MORE:
         }
         goto WRITE_MORE;
 # else
+        Printf("TLS handshake complete.\n");
         /* We got the Finished SSL message, initiate the HTTP req */
         if ((rc = httpWriteRequest(ssl)) < 0)
         {
@@ -483,22 +658,22 @@ PROCESS_MORE:
 #  ifdef TEST_KEEP_PEER_CERTS
         if (ssl->sec.cert == NULL)
         {
-            printf("Error: peer cert not kept\n");
+            Printf("Error: peer cert not kept\n");
             return MATRIXSSL_ERROR;
         }
         else
         {
-            printf("OK: peer cert still available\n");
+            Printf("OK: peer cert still available\n");
         }
         if (ssl->sec.cert->unparsedBin == NULL ||
             ssl->sec.cert->binLen <= 0)
         {
-            printf("Error: peer cert DER not kept\n");
+            Printf("Error: peer cert DER not kept\n");
             return MATRIXSSL_ERROR;
         }
         else
         {
-            printf("OK: peer cert DER still available\n");
+            Printf("OK: peer cert DER still available\n");
         }
 #  endif
         closeConn(ssl, fd);
@@ -518,7 +693,7 @@ PROCESS_MORE:
                 closeConn(ssl, fd);
                 if (cp.parsebuf)
                 {
-                    free(cp.parsebuf);
+                    Free(cp.parsebuf);
                 }
                 cp.parsebuf = NULL;
                 cp.parsebuflen = 0;
@@ -536,12 +711,22 @@ PROCESS_MORE:
             psTraceBytes("HTTP DATA", buf, len);
             if (g_print_http_response)
             {
-                char *resp_str = psMalloc(NULL, len+1);
+                char *resp_str = (char *)psMalloc(NULL, len+1);
 
-                psMem2Str(resp_str, buf, len);
-                resp_str[len] = '\0';
-                _psTraceStr("%s", resp_str);
-                free(resp_str);
+                if (resp_str != NULL)
+                {
+                    psMem2Str(resp_str, buf, len);
+                    resp_str[len] = '\0';
+                    psTraceStr("%s", resp_str);
+                    Free(resp_str);
+                }
+                else
+                {
+                    /* Memory allocation failure. Skip trace. */
+                    psTraceInt("HTTP RESPONSE: %d bytes of data.\n"
+                               "(Printing omitted due to memory allocation "
+                               "failure)\n", (int)len);
+                }
             }
         }
         rc = matrixSslProcessedData(ssl, &buf, (uint32 *) &len);
@@ -557,7 +742,7 @@ PROCESS_MORE:
                 closeConn(ssl, fd);
                 if (cp.parsebuf)
                 {
-                    free(cp.parsebuf);
+                    Free(cp.parsebuf);
                 }
                 cp.parsebuf = NULL;
                 cp.parsebuflen = 0;
@@ -589,7 +774,7 @@ PROCESS_MORE:
             closeConn(ssl, fd);
             if (cp.parsebuf)
             {
-                free(cp.parsebuf);
+                Free(cp.parsebuf);
             }
             cp.parsebuf = NULL;
             cp.parsebuflen = 0;
@@ -610,7 +795,7 @@ PROCESS_MORE:
 L_CLOSE_ERR:
     if (cp.flags != HTTPS_COMPLETE)
     {
-        _psTrace("FAIL: No HTTP Response\n");
+        psTrace("FAIL: No HTTP Response\n");
     }
     matrixSslDeleteSession(ssl);
     if (g_keepalive == 0)
@@ -619,7 +804,7 @@ L_CLOSE_ERR:
     }
     if (cp.parsebuf)
     {
-        free(cp.parsebuf);
+        Free(cp.parsebuf);
     }
     cp.parsebuf = NULL;
     cp.parsebuflen = 0;
@@ -645,7 +830,7 @@ static int32 httpWriteRequest(ssl_t *ssl)
     {
         /* A value of 0 to the 'new' connections is the key to sending the
             server a shutdown message */
-        requested = strlen((char *) g_matrixShutdownServer) + 1;
+        requested = Strlen((char *) g_matrixShutdownServer) + 1;
         if ((available = matrixSslGetWritebuf(ssl, &buf, requested)) < 0)
         {
             return PS_MEM_FAIL;
@@ -654,29 +839,29 @@ static int32 httpWriteRequest(ssl_t *ssl)
         {
             return PS_FAILURE;
         }
-        memset(buf, 0x0, requested); /* So strlen will work below */
-        strncpy((char *) buf, (char *) g_matrixShutdownServer,
-            (uint32) strlen((char *) g_matrixShutdownServer));
-        if (matrixSslEncodeWritebuf(ssl, (uint32) strlen((char *) buf)) < 0)
+        Memset(buf, 0x0, requested); /* So strlen will work below */
+        Strncpy((char *) buf, (char *) g_matrixShutdownServer,
+            (uint32) Strlen((char *) g_matrixShutdownServer));
+        if (matrixSslEncodeWritebuf(ssl, (uint32) Strlen((char *) buf)) < 0)
         {
             return PS_MEM_FAIL;
         }
         return MATRIXSSL_REQUEST_SEND;
     }
 
-    requested = strlen((char *) g_httpRequestHdr) + strlen(g_path) + strlen(g_ip) + 1;
+    requested = Strlen((char *) g_httpRequestHdr) + Strlen(g_path) + Strlen(g_server_name) + 1;
     if ((available = matrixSslGetWritebuf(ssl, &buf, requested)) < 0)
     {
         return PS_MEM_FAIL;
     }
-    requested = min(requested, available);
-    snprintf((char *) buf, requested, (char *) g_httpRequestHdr, g_path, g_ip);
+    requested = PS_MIN(requested, available);
+    Snprintf((char *) buf, requested, (char *) g_httpRequestHdr, g_path, g_server_name);
 
     if (g_trace)
     {
-        _psTraceStr("SEND: [%s]\n", (char *) buf);
+        psTraceStr("SEND: [%s]\n", (char *) buf);
     }
-    if (matrixSslEncodeWritebuf(ssl, strlen((char *) buf)) < 0)
+    if (matrixSslEncodeWritebuf(ssl, Strlen((char *) buf)) < 0)
     {
         return PS_MEM_FAIL;
     }
@@ -685,7 +870,7 @@ static int32 httpWriteRequest(ssl_t *ssl)
 
 static void usage(void)
 {
-    printf(
+    Printf(
         "\nusage: client { options }\n"
         "\n"
         "Options can be one or more of the following:\n"
@@ -713,6 +898,9 @@ static void usage(void)
         "--external-verify <useExternalVerify\n"
         "                          0 (turn it OFF, default)\n"
         "                          1 (turn it ON)\n"
+        "--groups                - (TLS 1.3 only) Set supported key exchange groups.\n"
+        "                          The argument must be a colon-separated list of TLS 1.3\n"
+        "                          NamedGroup names, e.g. --groups secp256r1:secp384r1:ffdhe2048\n"
         "-h                      - Help, print usage and exit\n"
         "--help\n"
         "-k <keyLen>             - RSA keyLen (if using client auth)\n"
@@ -725,6 +913,7 @@ static void usage(void)
         "                        - Default 1\n"
         "-m <maxVerifyDepth>     - Maximum depth for certificate verification\n"
         "--depth  <maxVerifyDepth>\n"
+        "--num-key-shares        -  (TLS 1.3 only) Number of key shares to include in ClientHello.\n"
         "-p <serverPortNum>      - Port number for SSL/TLS server\n"
         "--port <serverPortNum>\n"
         "                        - Default 4433 (HTTPS is 443)\n"
@@ -734,6 +923,7 @@ static void usage(void)
         "-s <serverIpAddress>    - IP address of server machine/interface\n"
         "--server <serverIpAddress>\n"
         "                        - Default 127.0.0.1 (localhost)\n"
+        "--server-name <name>    - The server name to send in the SNI extension\n"
         "-t                      - Enable printing of HTTP response\n"
         "--response\n"
         "-u <url path>           - URL path, eg. '/index.html'\n"
@@ -741,14 +931,27 @@ static void usage(void)
         "                          Generates an HTTPS request after TLS negotiation\n"
         "                          Mutually exclusive with '-b' flag\n"
         "-V <tlsVersion>         - SSL/TLS version to use\n"
-        "--tls <tlsVersion>\n"
-        "                        - '0' SSL 3.0\n"
-        "                        - '1' TLS 1.0\n"
-        "                        - '2' TLS 1.1\n"
-        "                        - '3' TLS 1.2 (default)\n"
+        "--tls <tlsVersion>      - Selects a single TLS version to support\n"
+        "                          '0' SSL 3.0\n"
+        "                          '1' TLS 1.0\n"
+        "                          '2' TLS 1.1\n"
+        "                          '3' TLS 1.2\n"
+        "                          '4' TLS 1.3 (default)\n"
+        "                          '22' TLS 1.3 draft 22\n"
+        "                          '23' TLS 1.3 draft 23\n"
+        "                          '24' TLS 1.3 draft 24\n"
         "--tls-version-range <minVersion>,<maxVersion>\n"
-        "                          Set TLS version range, e.g.\n"
+        "                        - Set TLS version range, e.g.\n"
         "                          2,3 for TLS 1.1 - TLS 1.2\n"
+        "                        - Note: Only one of the version parameters should be supplied\n"
+        "                          (--tls, --tls-version-range or--tls-supported-versions)\n"
+        "--tls-supported-versions <version>,<version>,...\n"
+        "                        - Lists the supported versions in priority order, e.g.\n"
+        "                          23,3,2 for TLS 1.3 draft 23, TLS 1.2 and TLS 1.1\n"
+        "                        - Priority order is used only when TLS1.3 is enabled. Otherwise\n"
+        "                          the latest version has the highest priority.\n"
+        "                        - Note: Only one of the version parameters should be supplied\n"
+        "                          (--tls, --tls-version-range or --tls-supported-versions)\n"
         "--no-cert               - Unset client certificate\n"
         "--cert <certificateFile>\n"
         "                        - Path to client certificate file\n"
@@ -759,11 +962,30 @@ static void usage(void)
         "                          rsa (for RSA keys)\n"
         "                          ec (for EC keys ECDSA signature)\n"
         "                          ecrsa (for EC keys with RSA signature)\n"
+        "--groups <groups>\n"
+        "                        - Supported groups.\n"
+        "                          For example: secp256r1:secp384r1\n"
+        "--num-key-shares <numKeyShares>\n"
+        "                        - For how many groups (listed by --groups)\n"
+        "                          key share entries are generated in ClientHello.\n"
+        "--sig-algs <sigAlgs>\n"
+        "                        - Supported signature algorithms.\n"
+        "                          For example: ecdsa_secp256r1_sha256:rsa_pss_rsae_sha256\n"
+        "--sig-algs-cert <sigAlgsCert>\n"
+        "                        - Supported signature algorithms in TLS1.3 certs.\n"
+        "                          For example: ecdsa_secp256r1_sha256:rsa_pss_rsae_sha256\n"
+        "--early-data <file>\n"
+        "                        - Send supplied file using TLS1.3 early data mechanism.\n"
+        "                        - Enable also -r or --resumed\n"
+        "                          For example: --early-data file.dat -r1\n"
+        "                        - Maximum of 16384 bytes is sent from the file.\n"
+        "--tls13-block-size\n"
+        "                        - Block size to pad TLS 1.3 records to.\n"
         "\n");
 }
 
 /* Returns number of cipher numbers found, or -1 if an error. */
-# include <ctype.h>
+# include "osdep_ctype.h"
 static int32_t parse_cipher_list(char *cipherListString,
     psCipher16_t cipher_array[], uint8_t size_of_cipher_array)
 {
@@ -774,21 +996,21 @@ static int32_t parse_cipher_list(char *cipherListString,
     numCiphers = 0;
     while (cipherListString != NULL)
     {
-        cipher = strtol(cipherListString, &endPtr, 10);
+        cipher = Strtol(cipherListString, &endPtr, 10);
         if (endPtr == cipherListString)
         {
-            printf("The remaining cipherList has no cipher numbers - '%s'\n",
+            Printf("The remaining cipherList has no cipher numbers - '%s'\n",
                 cipherListString);
             return -1;
         }
         else if (size_of_cipher_array <= numCiphers)
         {
-            printf("Too many cipher numbers supplied.  limit is %d\n",
+            Printf("Too many cipher numbers supplied.  limit is %d\n",
                 size_of_cipher_array);
             return -1;
         }
         cipher_array[numCiphers++] = cipher;
-        while (*endPtr != '\0' && !isdigit(*endPtr))
+        while (*endPtr != '\0' && !Isdigit(*endPtr))
         {
             endPtr++;
         }
@@ -808,13 +1030,13 @@ static int32 process_cmd_options(int32 argc, char **argv)
 {
     int optionChar, key_len, version, numCiphers;
     char *cipherListString;
-
+    psList_t *versionRangeList;
     /* Set some default options: */
-    memset(g_cipher, 0, sizeof(g_cipher));
-    memset(g_ip,     0, sizeof(g_ip));
-    memset(g_path,   0, sizeof(g_path));
+    Memset(g_cipher, 0, sizeof(g_cipher));
+    Memset(g_ip,     0, sizeof(g_ip));
+    Memset(g_path,   0, sizeof(g_path));
 
-    strcpy(g_ip,          "127.0.0.1");
+    Strcpy(g_ip,          "127.0.0.1");
     g_bytes_requested    = 0;
     g_send_closure_alert = 1;
     g_ciphers            = 0;
@@ -824,7 +1046,7 @@ static int32 process_cmd_options(int32 argc, char **argv)
     g_new                = 1;
     g_port               = 4433;
     g_resumed            = 0;
-    g_version            = 3;
+    g_version            = 0;
     g_keepalive          = 0;
 
     opterr = 0;
@@ -839,6 +1061,18 @@ static int32 process_cmd_options(int32 argc, char **argv)
 #define ARG_ON_DEMAND_CERT 5
 #define ARG_ON_DEMAND_KEY 6
 #define ARG_TLS_VERSION_RANGE 7
+#define ARG_GROUPS 8
+#define ARG_NUM_KEY_SHARES 9
+#define ARG_SIG_ALGS 10
+#define ARG_SIG_ALGS_CERT 11
+#define ARG_TLS_SUPPORTED_VERSIONS 12
+#define ARG_SERVER_NAME 13
+#define ARG_PSK 14
+#define ARG_EARLY_DATA 15
+#define ARG_REQ_OCSP_STAPLING 16
+#define ARG_DISABLE_PEER_AUTHENTICATION 17
+#define ARG_TLS13_BLOCK_SIZE 18
+#define ARG_MIN_DH_P_SIZE 19
 
     static struct option long_options[] =
     {
@@ -856,16 +1090,28 @@ static int32 process_cmd_options(int32 argc, char **argv)
         {"port", required_argument, NULL, 'p'},
         {"resumed", required_argument, NULL, 'r'},
         {"server", required_argument, NULL, 's'},
+        {"server-name", required_argument, NULL, ARG_SERVER_NAME},
         {"response", no_argument, NULL, 't'},
         {"url", required_argument, NULL, 'u'},
         {"tls", required_argument, NULL, 'V'},
         {"tls-version-range", required_argument, NULL, ARG_TLS_VERSION_RANGE},
+        {"tls-supported-versions", required_argument, NULL, ARG_TLS_SUPPORTED_VERSIONS},
         {"no-cert", no_argument, NULL, ARG_NO_CERT},
         {"cert", required_argument, NULL, ARG_CERT},
         {"key", required_argument, NULL, ARG_KEY},
         {"on-demand-cert", required_argument, NULL, ARG_ON_DEMAND_CERT},
         {"on-demand-key", required_argument, NULL, ARG_ON_DEMAND_KEY},
         {"keytype", required_argument, NULL, ARG_KEYTYPE},
+        {"groups", required_argument, NULL, ARG_GROUPS},
+        {"num-key-shares", required_argument, NULL, ARG_NUM_KEY_SHARES},
+        {"sig-algs", required_argument, NULL, ARG_SIG_ALGS},
+        {"sig-algs-cert", required_argument, NULL, ARG_SIG_ALGS_CERT},
+        {"psk", no_argument, NULL, ARG_PSK},
+        {"early-data", required_argument, NULL, ARG_EARLY_DATA},
+        {"tls13-block-size", required_argument, NULL, ARG_TLS13_BLOCK_SIZE},
+        {"req-ocsp-stapling", no_argument, NULL, ARG_REQ_OCSP_STAPLING},
+        {"disable-peer-authentication", no_argument, NULL, ARG_DISABLE_PEER_AUTHENTICATION},
+        {"min-dh-p-size", required_argument, NULL, ARG_MIN_DH_P_SIZE},
         {0, 0, 0, 0}
     };
 
@@ -889,11 +1135,11 @@ static int32 process_cmd_options(int32 argc, char **argv)
         case 'b':
             if (*g_path)
             {
-                printf("-b and -u options cannot both be provided\n");
+                Printf("-b and -u options cannot both be provided\n");
                 return -1;
             }
             g_bytes_requested = atoi(optarg);
-            snprintf(g_path, sizeof(g_path), "/bytes?%u", g_bytes_requested);
+            Snprintf(g_path, sizeof(g_path), "/bytes?%u", g_bytes_requested);
             break;
 
         case 'C':
@@ -917,17 +1163,16 @@ static int32 process_cmd_options(int32 argc, char **argv)
             break;
 
         case 'e':
-            printf("-e option only supported when USE_EXT_CERTIFICATE_VERIFY_SIGNING " \
+            Printf("-e option only supported when USE_EXT_CERTIFICATE_VERIFY_SIGNING " \
                 "and USE_EXT_EXAMPLE_MODULE are defined\n");
             return -1;
-            break;
 
         case 'k':
             key_len = atoi(optarg);
             if ((key_len != 1024) && (key_len != 2048)
                     && (key_len != 3072) && (key_len != 4096))
             {
-                printf("-k option must be followed by a key_len whose value "
+                Printf("-k option must be followed by a key_len whose value "
                     " must be 1024, 2048, 3072 or 4096\n");
                 return -1;
             }
@@ -959,24 +1204,26 @@ static int32 process_cmd_options(int32 argc, char **argv)
             break;
 
         case 's':
-            strncpy(g_ip, optarg, 15);
+            Strncpy(g_ip, optarg, 15);
             break;
 
         case 'u':
             if (*g_path)
             {
-                printf("-b and -u options cannot both be provided\n");
+                Printf("-b and -u options cannot both be provided\n");
                 return -1;
             }
-            strncpy(g_path, optarg, sizeof(g_path) - 1);
+            Strncpy(g_path, optarg, sizeof(g_path) - 1);
             g_bytes_requested = 0;
             break;
 
         case 'V':
+            /* Single version. */
             version = atoi(optarg);
-            if (version < 0 || version > 3)
+            if (!matrixSslTlsVersionRangeSupported(version,
+                            version))
             {
-                printf("Invalid version: %d\n", version);
+                Printf("Invalid version: %d\n", version);
                 return -1;
             }
             g_version = version;
@@ -1002,16 +1249,16 @@ static int32 process_cmd_options(int32 argc, char **argv)
             break;
 
         case ARG_KEYTYPE:
-            if (strcmp("any", optarg) == 0) {
+            if (Strcmp("any", optarg) == 0) {
                 g_clientconfig.load_key = &loadKeysFromFile;
-            } else if (strcmp("rsa", optarg) == 0) {
+            } else if (Strcmp("rsa", optarg) == 0) {
                 g_clientconfig.load_key = &loadRsaKeysFromFile;
-            } else if (strcmp("ec", optarg) == 0) {
+            } else if (Strcmp("ec", optarg) == 0) {
                 g_clientconfig.load_key = &loadECDH_ECDSAKeysFromFile;
-            } else if (strcmp("ecrsa", optarg) == 0) {
+            } else if (Strcmp("ecrsa", optarg) == 0) {
                 g_clientconfig.load_key = &loadECDHRsaKeysFromFile;
             } else {
-                printf("Invalid option: %s\n", optarg);
+                Printf("Invalid option: %s\n", optarg);
                 return -1;
             }
 
@@ -1020,22 +1267,20 @@ static int32 process_cmd_options(int32 argc, char **argv)
 
         case ARG_TLS_VERSION_RANGE:
             {
-                const char *versionRangeStr;
-
-                versionRangeStr = optarg;
-                if (strlen(versionRangeStr) != 3)
+                if (psParseList(NULL, optarg, ',', &versionRangeList) < 0)
                 {
-                    printf("Invalid version range string: %s\n",
-                            versionRangeStr);
+                    Printf("Invalid version range string: %s\n",
+                            optarg);
                     return -1;
                 }
-                g_min_version = atoi(&versionRangeStr[0]);
-                g_max_version = atoi(&versionRangeStr[2]);
+                g_min_version = atoi((char *)versionRangeList->item);
+                g_max_version = atoi((char *)versionRangeList->next->item);
+                psFreeList(versionRangeList, NULL);
                 if (!matrixSslTlsVersionRangeSupported(g_min_version,
                                 g_max_version))
                 {
-                    printf("Unsupported version range: %s\n",
-                            versionRangeStr);
+                    Printf("Unsupported version range: %s\n",
+                            optarg);
                     return -1;
                 }
                 g_version_range_set = 1;
@@ -1046,7 +1291,7 @@ static int32 process_cmd_options(int32 argc, char **argv)
 # ifdef USE_EXT_CLIENT_CERT_KEY_LOADING
             g_on_demand_cert_file = optarg;
 # else
-            printf("Please enable USE_EXT_CLIENT_CERT_KEY_LOADING " \
+            Printf("Please enable USE_EXT_CLIENT_CERT_KEY_LOADING " \
                     "in matrixsslConfig.h for --on-demand-cert\n");
 # endif
             break;
@@ -1055,9 +1300,99 @@ static int32 process_cmd_options(int32 argc, char **argv)
 # ifdef USE_EXT_CLIENT_CERT_KEY_LOADING
             g_on_demand_key_file = optarg;
 # else
-            printf("Please enable USE_EXT_CLIENT_CERT_KEY_LOADING " \
+            Printf("Please enable USE_EXT_CLIENT_CERT_KEY_LOADING " \
                     "in matrixsslConfig.h for --on-demand-key\n");
 # endif
+            break;
+
+        case ARG_GROUPS:
+            if (psParseList(NULL, optarg, ':', &g_groupList) < 0)
+            {
+                Printf("Invalid group list: %s\n", optarg);
+            }
+            break;
+
+        case ARG_NUM_KEY_SHARES:
+            g_num_key_shares = atoi(optarg);
+            if (g_num_key_shares > 10)
+            {
+                Printf("Invalid number of key shares: %hu\n", g_num_key_shares);
+            }
+            break;
+        case ARG_SIG_ALGS:
+            if (psParseList(NULL, optarg, ':', &g_sigAlgsList) < 0)
+            {
+                Printf("Invalid sig_alg list: %s\n", optarg);
+            }
+            break;
+        case ARG_SIG_ALGS_CERT:
+            if (psParseList(NULL, optarg, ':', &g_sigAlgsCertList) < 0)
+            {
+                Printf("Invalid sig_alg_cert list: %s\n", optarg);
+            }
+            break;
+       case ARG_TLS_SUPPORTED_VERSIONS:
+            if (psParseList(NULL, optarg, ',', &g_supportedVersionsList) < 0)
+            {
+                Printf("Invalid tls-supported-versions list: %s\n", optarg);
+            }
+            break;
+        case ARG_SERVER_NAME:
+            if (Strlen(optarg) > sizeof(g_server_name) - 1)
+            {
+                Printf("Server name argument too long\n");
+                exit(EXIT_FAILURE);
+            }
+            Strncpy(g_server_name, optarg, sizeof(g_server_name) - 1);
+            break;
+        case ARG_PSK:
+            g_clientconfig.loadPreSharedKeys = 1;
+            g_use_psk = 1;
+            break;
+        case ARG_EARLY_DATA:
+            Strcpy(g_early_data_file, optarg);
+            break;
+        case ARG_TLS13_BLOCK_SIZE:
+            {
+                char *end;
+
+                g_tls13_block_size = Strtol(optarg, &end, 10);
+                if (end == optarg
+                        || g_tls13_block_size < 0
+                        || g_tls13_block_size > TLS_1_3_MAX_INNER_PLAINTEXT_LEN)
+                {
+                    Printf("Invalid tls13-block-size argument\n");
+                    exit(EXIT_FAILURE);
+                }
+                Printf("Using TLS 1.3 block size %ld\n",
+                        g_tls13_block_size);
+            }
+            break;
+        case ARG_REQ_OCSP_STAPLING:
+            g_req_ocsp_stapling = 1;
+            break;
+        case ARG_DISABLE_PEER_AUTHENTICATION:
+            g_disable_peer_authentication = 1;
+            break;
+        case ARG_MIN_DH_P_SIZE:
+            {
+                char *end;
+
+                g_min_dh_p_size = Strtol(optarg, &end, 10);
+                if (end == optarg
+                        || g_min_dh_p_size <= 0)
+                {
+                    Printf("Invaling min-dh-p argument\n");
+                    exit(EXIT_FAILURE);
+                }
+                if (g_min_dh_p_size < MIN_DH_BITS)
+                {
+                    Printf("Invalid min-dh-p argument: " \
+                            "must be <= MIN_DH_BITS (= %u in this build)\n",
+                            (unsigned int)MIN_DH_BITS);
+                    exit(EXIT_FAILURE);
+                }
+            }
             break;
 #endif /* USE_GETOPT_LONG */
         }
@@ -1070,14 +1405,14 @@ static int32 process_cmd_options(int32 argc, char **argv)
 static void sslstatsPrintTime(const struct g_sslstats* stats, int conn_count)
 {
 # ifdef USE_HIGHRES_TIME
-    printf("%d usec (%d avg usec/conn SSL handshake overhead)\n",
+    Printf("%d usec (%d avg usec/conn SSL handshake overhead)\n",
         (int) stats->hstime, (int) (stats->hstime / conn_count));
-    printf("%d usec (%d avg usec/conn SSL data overhead)\n",
+    Printf("%d usec (%d avg usec/conn SSL data overhead)\n",
         (int) stats->datatime, (int) (stats->datatime / conn_count));
 # else
-    printf("%d msec (%d avg msec/conn SSL handshake overhead)\n",
+    Printf("%d msec (%d avg msec/conn SSL handshake overhead)\n",
         (int) stats->hstime, (int) (stats->hstime / conn_count));
-    printf("%d msec (%d avg msec/conn SSL data overhead)\n",
+    Printf("%d msec (%d avg msec/conn SSL data overhead)\n",
         (int) stats->datatime, (int) (stats->datatime / conn_count));
 # endif
 }
@@ -1120,13 +1455,7 @@ int32 main(int32 argc, char **argv)
 
     if ((rc = matrixSslOpen()) < 0)
     {
-        _psTrace("MatrixSSL library init failure.  Exiting\n");
-        return EXIT_FAILURE;
-    }
-
-    if (matrixSslNewKeys(&keys, NULL) < 0)
-    {
-        _psTrace("MatrixSSL library key init failure.  Exiting\n");
+        psTrace("MatrixSSL library init failure.  Exiting\n");
         return EXIT_FAILURE;
     }
 
@@ -1135,6 +1464,12 @@ int32 main(int32 argc, char **argv)
         usage();
         clientconfigFree();
         return 0;
+    }
+
+    if (matrixSslNewKeys(&keys, NULL) < 0)
+    {
+        psTrace("MatrixSSL library key init failure.  Exiting\n");
+        return EXIT_FAILURE;
     }
 
     if (g_new <= 1 && g_resumed <= 1)
@@ -1148,23 +1483,41 @@ int32 main(int32 argc, char **argv)
 
     if (g_bytes_requested == 0 && *g_path == '\0')
     {
-        printf("client %s:%d "
-            "new:%d resumed:%d keylen:%d nciphers:%d version:%s\n",
+        Printf("client %s:%d "
+            "new:%d resumed:%d keylen:%d nciphers:%d version:%d\n",
             g_ip, g_port, g_new, g_resumed, g_key_len,
-            g_ciphers, g_strver[g_version]);
+            g_ciphers, g_version);
     }
     else
     {
-        printf("client https://%s:%d%s "
-            "new:%d resumed:%d keylen:%d nciphers:%d version:%s\n",
+        Printf("client https://%s:%d%s "
+            "new:%d resumed:%d keylen:%d nciphers:%d version:%d\n",
             g_ip, g_port, g_path, g_new, g_resumed, g_key_len,
-            g_ciphers, g_strver[g_version]);
+            g_ciphers, g_version);
     }
 
     if (!clientconfigLoadKeys(keys))
     {
         return EXIT_FAILURE;
     }
+
+# ifdef USE_TLS_1_3
+    if (g_use_psk)
+    {
+        /* Load the TLS 1.3 test PSK. */
+        rc = matrixSslLoadTls13Psk(keys,
+                g_tls13_test_psk_256,
+                sizeof(g_tls13_test_psk_256),
+                g_tls13_test_psk_id,
+                sizeof(g_tls13_test_psk_id),
+                NULL);
+        if (rc < 0)
+        {
+            psTrace("Unable to load PSK keys.\n");
+            return rc;
+        }
+    }
+# endif
 
 # ifdef USE_CRL
     /* One initialization step that can be taken is to run through the CA
@@ -1173,8 +1526,8 @@ int32 main(int32 argc, char **argv)
     fetchParseAndAuthCRLfromCert(NULL, keys->CAcerts, keys->CAcerts);
 # endif
 
-    memset(&stats, 0x0, sizeof(struct g_sslstats));
-    printf("=== %d new connections ===\n", g_new);
+    Memset(&stats, 0x0, sizeof(struct g_sslstats));
+    Printf("=== %d new connections ===\n", g_new);
 
     if (g_new == 0)
     {
@@ -1205,13 +1558,13 @@ int32 main(int32 argc, char **argv)
         rc = httpsClientConnection(keys, sid, &stats);
         if (rc < 0)
         {
-            printf("F %d/%d\n", i, g_new);
+            Printf("F %d/%d\n", i, g_new);
             exit_code = EXIT_FAILURE;
             goto out;
         }
         else
         {
-            printf("N"); fflush(stdout);
+            Printf("N"); Fflush(stdout);
         }
         /* Leave the final sessionID for resumed connections */
         if (i + 1 < g_new)
@@ -1219,33 +1572,34 @@ int32 main(int32 argc, char **argv)
             matrixSslDeleteSessionId(sid);
         }
     }
-    printf("\n");
+    Printf("\n");
     if (g_bytes_requested > 0)
     {
         psAssert(g_bytes_requested * g_new == stats.rbytes);
     }
-    printf("%d bytes received\n", stats.rbytes);
+    Printf("%d bytes received\n", stats.rbytes);
     sslstatsPrintTime(&stats, g_new);
 
-    memset(&stats, 0x0, sizeof(struct g_sslstats));
-    printf("=== %d resumed connections ===\n", g_resumed);
+    Memset(&stats, 0x0, sizeof(struct g_sslstats));
+    Printf("=== %d resumed connections ===\n", g_resumed);
     for (i = 0; i < g_resumed; i++)
     {
         rc = httpsClientConnection(keys, sid, &stats);
         if (rc < 0)
         {
-            printf("f %d/%d\n", i, g_resumed);
+            Printf("f %d/%d\n", i, g_resumed);
             exit_code = EXIT_FAILURE;
             goto out;
         }
         else
         {
-            printf("R"); fflush(stdout);
+            Printf("Resumed session.\n");
+            Printf("R"); Fflush(stdout);
         }
     }
     if (g_keepalive)
     {
-        printf("Closing socket\n");
+        Printf("Closing socket\n");
         close(g_keepalive);
         g_keepalive = 0;
     }
@@ -1255,7 +1609,7 @@ int32 main(int32 argc, char **argv)
         {
             psAssert(g_bytes_requested * g_resumed == stats.rbytes);
         }
-        printf("\n%d bytes received\n", stats.rbytes);
+        Printf("\n%d bytes received\n", stats.rbytes);
         sslstatsPrintTime(&stats, g_resumed);
     }
 
@@ -1267,13 +1621,13 @@ out:
 
     clientconfigFree();
 
-    if (rc == MATRIXSSL_SUCCESS)
-    {
-        printf("TLS handshake complete.\n");
-    }
+    psFreeList(g_sigAlgsCertList, NULL);
+    psFreeList(g_sigAlgsList, NULL);
+    psFreeList(g_supportedVersionsList, NULL);
+    psFreeList(g_groupList, NULL);
 
 # ifdef WIN32
-    _psTrace("Press any key to close");
+    psTrace("Press any key to close");
     getchar();
 # endif
     return exit_code;
@@ -1334,19 +1688,19 @@ static int32_t extensionCb(ssl_t *ssl,
 
     if (extType == EXT_ALPN)
     {
-        memset(proto, 0x0, 128);
+        Memset(proto, 0x0, 128);
         /* two byte proto list len, one byte proto len, then proto */
         c += 2; /* Skip proto list len */
         len = *c; c++;
-        memcpy(proto, c, len);
-        printf("Server agreed to use %s\n", proto);
+        Memcpy(proto, c, len);
+        Printf("Server agreed to use %s\n", proto);
     }
     return PS_SUCCESS;
 }
 
 /******************************************************************************/
 /*
-    Example callback to show possiblie outcomes of certificate validation.
+    Example callback to show possible outcomes of certificate validation.
     If this callback is not registered in matrixSslNewClientSession
     the connection will be accepted or closed based on the alert value.
  */
@@ -1354,6 +1708,13 @@ static int32 certCb(ssl_t *ssl, psX509Cert_t *cert, int32 alert)
 {
 # ifndef USE_ONLY_PSK_CIPHER_SUITE
     psX509Cert_t *next;
+
+    if (g_disable_peer_authentication)
+    {
+        psTraceStr("Allowing anonymous connection for: %s.\n",
+                cert->subject.commonName);
+        return SSL_ALLOW_ANON_CONNECTION;
+    }
 
     /* An immediate SSL_ALERT_UNKNOWN_CA alert means we could not find the
         CA to authenticate the server's certificate */
@@ -1370,7 +1731,7 @@ static int32 certCb(ssl_t *ssl, psX509Cert_t *cert, int32 alert)
                         (next->authFailFlags &
                                 PS_CERT_AUTH_FAIL_VERIFY_DEPTH_FLAG))
                 {
-                    _psTrace("Maximum cert chain verify depth exceeded\n");
+                    psTrace("Maximum cert chain verify depth exceeded\n");
                     return SSL_ALERT_UNKNOWN_CA;
                 }
             }
@@ -1380,12 +1741,12 @@ static int32 certCb(ssl_t *ssl, psX509Cert_t *cert, int32 alert)
         {
             if (g_trace)
             {
-                _psTraceStr("Allowing anonymous connection for: %s.\n",
+                psTraceStr("Allowing anonymous connection for: %s.\n",
                     cert->subject.commonName);
             }
             return SSL_ALLOW_ANON_CONNECTION;
         }
-        _psTrace("ERROR: No matching CA found.  Terminating connection\n");
+        psTrace("ERROR: No matching CA found.  Terminating connection\n");
     }
 
     /*  Check for "major" authentication problems within the server certificate
@@ -1406,7 +1767,7 @@ static int32 certCb(ssl_t *ssl, psX509Cert_t *cert, int32 alert)
     {
         if (next->authStatus == PS_CERT_AUTH_FAIL_SIG)
         {
-            _psTrace("Public key signature failure in server cert chain\n");
+            psTrace("Public key signature failure in server cert chain\n");
             /* This should result in a BAD_CERTIFICATE alert */
             alert = SSL_ALERT_BAD_CERTIFICATE;
             break;
@@ -1414,7 +1775,7 @@ static int32 certCb(ssl_t *ssl, psX509Cert_t *cert, int32 alert)
         if (next->authStatus == PS_CERT_AUTH_FAIL_DN)
         {
             /* A CA file was never located to support this chain */
-            _psTrace("No CA file was found to support server's certificate\n");
+            psTrace("No CA file was found to support server's certificate\n");
             /* This should result in a SSL_ALERT_UNKNOWN_CA alert */
             alert = SSL_ALERT_UNKNOWN_CA;
             break;
@@ -1422,7 +1783,7 @@ static int32 certCb(ssl_t *ssl, psX509Cert_t *cert, int32 alert)
         if (next->authStatus == PS_CERT_AUTH_FAIL_AUTHKEY)
         {
             /* Subject and Issuer Key Id extension  */
-            _psTrace("Subject and Issuer Key Id mismatch error\n");
+            psTrace("Subject and Issuer Key Id mismatch error\n");
             /* This should be a BAD_CERTIFICATE alert */
             alert = SSL_ALERT_BAD_CERTIFICATE;
             break;
@@ -1444,23 +1805,23 @@ static int32 certCb(ssl_t *ssl, psX509Cert_t *cert, int32 alert)
      */
     if (alert == SSL_ALERT_CERTIFICATE_UNKNOWN)
     {
-        _psTraceStr("ERROR: %s not found in cert subject names\n",
+        psTraceStr("ERROR: %s not found in cert subject names\n",
             ssl->expectedName);
     }
 
     if (alert == SSL_ALERT_CERTIFICATE_EXPIRED)
     {
 #  ifdef POSIX
-        _psTrace("ERROR: A cert did not fall within the notBefore/notAfter window\n");
+        psTrace("ERROR: A cert did not fall within the notBefore/notAfter window\n");
 #  else
-        _psTrace("WARNING: Certificate date window validation not implemented\n");
+        psTrace("WARNING: Certificate date window validation not implemented\n");
         alert = 0;
 #  endif
     }
 
     if (alert == SSL_ALERT_ILLEGAL_PARAMETER)
     {
-        _psTrace("ERROR: Found correct CA but X.509 extension details are wrong\n");
+        psTrace("ERROR: Found correct CA but X.509 extension details are wrong\n");
     }
 
     /* Key usage related problems on chain */
@@ -1470,11 +1831,11 @@ static int32 certCb(ssl_t *ssl, psX509Cert_t *cert, int32 alert)
         {
             if (next->authFailFlags & PS_CERT_AUTH_FAIL_KEY_USAGE_FLAG)
             {
-                _psTrace("CA keyUsage extension doesn't allow cert signing\n");
+                psTrace("CA keyUsage extension doesn't allow cert signing\n");
             }
             if (next->authFailFlags & PS_CERT_AUTH_FAIL_EKU_FLAG)
             {
-                _psTrace("Cert extendedKeyUsage extension doesn't allow TLS\n");
+                psTrace("Cert extendedKeyUsage extension doesn't allow TLS\n");
             }
         }
     }
@@ -1483,7 +1844,7 @@ static int32 certCb(ssl_t *ssl, psX509Cert_t *cert, int32 alert)
     {
         /* Should never let a connection happen if this is set.  There was
             either a problem in the presented chain or in the final CA test */
-        _psTrace("ERROR: Problem in certificate validation.  Exiting.\n");
+        psTrace("ERROR: Problem in certificate validation.  Exiting.\n");
     }
 
 
@@ -1513,7 +1874,7 @@ RETRY_CRL_TEST_ONCE:
             switch (next->revokedStatus)
             {
             case CRL_CHECK_CRL_EXPIRED:
-                _psTrace("Have CRL but it is expired.  Fetching new one\n");
+                psTrace("Have CRL but it is expired.  Fetching new one\n");
                 /* Remove the CRL from the table */
                 expired = psCRL_GetCRLForCert(next);
                 if (expired)
@@ -1523,7 +1884,7 @@ RETRY_CRL_TEST_ONCE:
                 }
                 else
                 {
-                    _psTrace("Unexpected combo of expired but no CRL found\n");
+                    psTrace("Unexpected combo of expired but no CRL found\n");
                 }
             /* MOVING INTO CRL_CHECK_EXPECTED ON PURPOSE TO REFETCH */
             case CRL_CHECK_EXPECTED:
@@ -1536,11 +1897,11 @@ RETRY_CRL_TEST_ONCE:
                 /* Only attempt this once so we don't get stuck in a loop */
                 if (retryOnce)
                 {
-                    _psTrace("Cert was not able to be tested against a CRL\n");
+                    psTrace("Cert was not able to be tested against a CRL\n");
                     alert = SSL_ALERT_CERTIFICATE_UNKNOWN;
                     break;
                 }
-                _psTrace("Cert expects CRL.  Mid-handshake attempt being made\n");
+                psTrace("Cert expects CRL.  Mid-handshake attempt being made\n");
                 /* This fetchParseAndAuthCRLfromCert will work on "next" as a chain
                     so it is correct that the server cert will look for the first
                     instance of CHECK_EXPECTED and pass that as the start of
@@ -1552,7 +1913,7 @@ RETRY_CRL_TEST_ONCE:
                 goto RETRY_CRL_TEST_ONCE;
 #   else        /* MIDHANSHAKE_CRL_FETCH */
 
-                _psTrace("Cert expects CRL. Failing handshake to go fetch it\n");
+                psTrace("Cert expects CRL. Failing handshake to go fetch it\n");
                 /* A more typical case if CRL testing is expected to be done is
                     to halt the handshake now, go out and fetch the CRLs and
                     try the connection again */
@@ -1566,45 +1927,44 @@ RETRY_CRL_TEST_ONCE:
                     possible */
                 if (count < CRL_MAX_SERVER_CERT_CHAIN)
                 {
-                    memset(g_crlDistURLs[count], 0, CRL_MAX_URL_LEN);
+                    Memset(g_crlDistURLs[count], 0, CRL_MAX_URL_LEN);
                     psX509GetCRLdistURL(next, (char **) &url, &urlLen);
                     if (urlLen > CRL_MAX_URL_LEN)
                     {
-                        _psTraceInt("CLR URL distribution point longer than %d\n",
+                        psTraceInt("CLR URL distribution point longer than %d\n",
                             CRL_MAX_URL_LEN);
                     }
                     else
                     {
-                        memcpy(g_crlDistURLs[count], url, urlLen);
+                        Memcpy(g_crlDistURLs[count], url, urlLen);
                         count++;
                     }
                 }
                 else
                 {
-                    _psTraceInt("Server cert chain was longer than %d\n",
+                    psTraceInt("Server cert chain was longer than %d\n",
                         CRL_MAX_SERVER_CERT_CHAIN);
                 }
 
                 break;
 
 #   endif       /* MIDHANDSHAKE_CRL_FETCH */
-                break;
 
             case CRL_CHECK_NOT_EXPECTED:
-                _psTrace("Cert didn't specify a CRL distribution point\n");
+                psTrace("Cert didn't specify a CRL distribution point\n");
                 break;
             case CRL_CHECK_PASSED_AND_AUTHENTICATED:
-                _psTrace("Cert passed CRL test and CRL was authenticated\n");
+                psTrace("Cert passed CRL test and CRL was authenticated\n");
                 break;
             case CRL_CHECK_PASSED_BUT_NOT_AUTHENTICATED:
-                _psTrace("Cert passed CRL test but CRL was not authenticated\n");
+                psTrace("Cert passed CRL test but CRL was not authenticated\n");
                 break;
             case CRL_CHECK_REVOKED_AND_AUTHENTICATED:
-                _psTrace("Cert was revoked by an authenticated CRL\n");
+                psTrace("Cert was revoked by an authenticated CRL\n");
                 alert = SSL_ALERT_CERTIFICATE_REVOKED;
                 break;
             case CRL_CHECK_REVOKED_BUT_NOT_AUTHENTICATED:
-                _psTrace("Cert was revoked but the CRL wasn't authenticated\n");
+                psTrace("Cert was revoked but the CRL wasn't authenticated\n");
                 alert = SSL_ALERT_CERTIFICATE_REVOKED;
                 break;
             default:
@@ -1616,7 +1976,7 @@ RETRY_CRL_TEST_ONCE:
 
     if (g_trace && alert == 0 && cert)
     {
-        _psTraceStr("SUCCESS: Validated cert for: %s.\n", cert->subject.commonName);
+        psTraceStr("SUCCESS: Validated cert for: %s.\n", cert->subject.commonName);
     }
 
 # endif /* !USE_ONLY_PSK_CIPHER_SUITE */
@@ -1642,8 +2002,8 @@ static void fetchSavedCRL(psX509Cert_t *potentialIssuers)
          i++)
     {
         fetchParseAndAuthCRLfromUrl(NULL, g_crlDistURLs[i],
-            strlen((char *) g_crlDistURLs[i]), potentialIssuers);
-        memset(g_crlDistURLs[i], 0, CRL_MAX_URL_LEN);
+            Strlen((char *) g_crlDistURLs[i]), potentialIssuers);
+        Memset(g_crlDistURLs[i], 0, CRL_MAX_URL_LEN);
     }
 }
 
@@ -1664,13 +2024,13 @@ static int32_t fetchParseAndAuthCRLfromUrl(psPool_t *pool, unsigned char *url,
     /* url need not be freed.  It points into cert structure */
     if (fetchCRL(NULL, (char *) url, urlLen, &crlBuf, &crlBufLen) < 0)
     {
-        _psTrace("Unable to fetch CRL\n");
+        psTrace("Unable to fetch CRL\n");
         return -1;
     }
     /* Convert the CRL stream into our structure */
     if (psX509ParseCRL(pool, &crl, crlBuf, crlBufLen) < 0)
     {
-        _psTrace("Unable to parse CRL\n");
+        psTrace("Unable to parse CRL\n");
         psFree(crlBuf, pool);
         return -1;
     }
@@ -1689,7 +2049,7 @@ static int32_t fetchParseAndAuthCRLfromUrl(psPool_t *pool, unsigned char *url,
     {
         if (psX509AuthenticateCRL(ic, crl, NULL) >= 0)
         {
-            _psTrace("NOTE: Able to authenticate CRL\n");
+            psTrace("NOTE: Able to authenticate CRL\n");
             break; /* Stop looking */
         }
     }
@@ -1723,14 +2083,14 @@ static int32_t fetchParseAndAuthCRLfromCert(psPool_t *pool, psX509Cert_t *cert,
             /* url need not be freed.  It points into cert structure */
             if (fetchCRL(NULL, url, urlLen, &crlBuf, &crlBufLen) < 0)
             {
-                _psTrace("Unable to fetch CRL\n");
+                psTrace("Unable to fetch CRL\n");
                 sc = sc->next;
                 continue;
             }
             /* Convert the CRL stream into our structure */
             if (psX509ParseCRL(pool, &crl, crlBuf, crlBufLen) < 0)
             {
-                _psTrace("Unable to parse CRL\n");
+                psTrace("Unable to parse CRL\n");
                 psFree(crlBuf, pool);
                 sc = sc->next;
                 continue;
@@ -1751,7 +2111,7 @@ static int32_t fetchParseAndAuthCRLfromCert(psPool_t *pool, psX509Cert_t *cert,
             {
                 if (psX509AuthenticateCRL(ic, crl, NULL) >= 0)
                 {
-                    _psTrace("NOTE: Able to authenticate CRL\n");
+                    psTrace("NOTE: Able to authenticate CRL\n");
                     break; /* Stop looking */
                 }
             }
@@ -1771,7 +2131,7 @@ static int32_t fetchParseAndAuthCRLfromCert(psPool_t *pool, psX509Cert_t *cert,
                 {
                     if (psX509AuthenticateCRL(ic, crl, NULL) >= 0)
                     {
-                        _psTrace("NOTE: Able to authenticate CRL\n");
+                        psTrace("NOTE: Able to authenticate CRL\n");
                         break; /* Stop looking */
                     }
                 }
@@ -1784,7 +2144,7 @@ static int32_t fetchParseAndAuthCRLfromCert(psPool_t *pool, psX509Cert_t *cert,
         }
         sc = sc->next;
     }
-    _psTraceInt("CRLs loaded: %d\n", numLoaded);
+    psTraceInt("CRLs loaded: %d\n", numLoaded);
     return PS_SUCCESS;
 }
 
@@ -1804,7 +2164,7 @@ __inline static size_t ptrdiff_safe(const void *end, const void *start, size_t s
     {
         return 0;
     }
-    d = end - start;
+    d = (const unsigned char *)end - (const unsigned char *)start;
     if (d > sanity)
     {
         return sanity;
@@ -1839,7 +2199,8 @@ int32 fetchCRL(psPool_t *pool, char *url, uint32_t urlLen,
     SOCKET fd;
     struct hostent *ip;
     struct in_addr intaddr;
-    char *pageStart, *replyPtr, *ipAddr;
+    char *pageStart, *ipAddr;
+    const char *replyPtr;
     char hostAddr[HOST_ADDR_LEN], getReq[GET_REQ_LEN];
     int hostAddrLen, getReqLen, pageLen;
     ssize_t transferred;
@@ -1850,11 +2211,11 @@ int32 fetchCRL(psPool_t *pool, char *url, uint32_t urlLen,
     uint32_t crlBinLen;
 
     /* Is URI in expected URL form? */
-    if (strstr(url, "http://") == NULL)
+    if (Strstr(url, "http://") == NULL)
     {
-        if (strstr(url, "https://") == NULL)
+        if (Strstr(url, "https://") == NULL)
         {
-            _psTraceStr("fetchCRL: Unsupported CRL URI: %s\n", url);
+            psTraceStr("fetchCRL: Unsupported CRL URI: %s\n", url);
             return -1;
         }
         httpUriLen = 8;
@@ -1867,30 +2228,30 @@ int32 fetchCRL(psPool_t *pool, char *url, uint32_t urlLen,
     }
 
     /* Parsing host and page and setting up IP address and GET request */
-    if ((pageStart = strchr(url + httpUriLen, '/')) == NULL)
+    if ((pageStart = Strchr(url + httpUriLen, '/')) == NULL)
     {
-        _psTrace("fetchCRL: No host/page divider found\n");
+        psTrace("fetchCRL: No host/page divider found\n");
         return -1;
     }
     if ((hostAddrLen = (int) (pageStart - url) - httpUriLen) > HOST_ADDR_LEN)
     {
-        _psTrace("fetchCRL: HOST_ADDR_LEN needs to be increased\n");
+        psTrace("fetchCRL: HOST_ADDR_LEN needs to be increased\n");
         return -1; /* ipAddr too small to hold */
     }
 
-    memset(hostAddr, 0, HOST_ADDR_LEN);
-    memcpy(hostAddr, url + httpUriLen, hostAddrLen);
+    Memset(hostAddr, 0, HOST_ADDR_LEN);
+    Memcpy(hostAddr, url + httpUriLen, hostAddrLen);
     if ((ip = gethostbyname(hostAddr)) == NULL)
     {
-        _psTrace("fetchCRL: gethostbyname failed\n");
+        psTrace("fetchCRL: gethostbyname failed\n");
         return -1;
     }
 
-    memcpy((char *) &intaddr, (char *) ip->h_addr_list[0],
+    Memcpy((char *) &intaddr, (char *) ip->h_addr_list[0],
         (size_t) ip->h_length);
     if ((ipAddr = inet_ntoa(intaddr)) == NULL)
     {
-        _psTrace("fetchCRL: inet_ntoa failed\n");
+        psTrace("fetchCRL: inet_ntoa failed\n");
         return -1;
     }
 
@@ -1899,7 +2260,7 @@ int32 fetchCRL(psPool_t *pool, char *url, uint32_t urlLen,
                 HOST_OH_LEN + ACCEPT_OH_LEN;
     if (getReqLen > GET_REQ_LEN)
     {
-        _psTrace("fetchCRL: GET_REQ_LEN needs to be increased\n");
+        psTrace("fetchCRL: GET_REQ_LEN needs to be increased\n");
         return -1;
     }
 
@@ -1909,24 +2270,24 @@ int32 fetchCRL(psPool_t *pool, char *url, uint32_t urlLen,
     /*  Host: www.host.com */
     /*  Accept: * / * */
     /*  */
-    memset(getReq, 0, GET_REQ_LEN);
-    memcpy(getReq, crl_getHdr, GET_OH_LEN);
+    Memset(getReq, 0, GET_REQ_LEN);
+    Memcpy(getReq, crl_getHdr, GET_OH_LEN);
     offset = GET_OH_LEN;
-    memcpy(getReq + offset, pageStart, pageLen);
+    Memcpy(getReq + offset, pageStart, pageLen);
     offset += pageLen;
-    memcpy(getReq + offset, crl_httpHdr, HTTP_OH_LEN);
+    Memcpy(getReq + offset, crl_httpHdr, HTTP_OH_LEN);
     offset += HTTP_OH_LEN;
-    memcpy(getReq + offset, crl_hostHdr, HOST_OH_LEN);
+    Memcpy(getReq + offset, crl_hostHdr, HOST_OH_LEN);
     offset += HOST_OH_LEN;
-    memcpy(getReq + offset, hostAddr, hostAddrLen);
+    Memcpy(getReq + offset, hostAddr, hostAddrLen);
     offset += hostAddrLen;
-    memcpy(getReq + offset, crl_acceptHdr, ACCEPT_OH_LEN);
+    Memcpy(getReq + offset, crl_acceptHdr, ACCEPT_OH_LEN);
 
     /* Connect and send */
     fd = lsocketConnect(ipAddr, port, &err);
     if (fd == INVALID_SOCKET || err != PS_SUCCESS)
     {
-        _psTraceInt("fetchCRL: socketConnect failed: %d\n", err);
+        psTraceInt("fetchCRL: socketConnect failed: %d\n", err);
         return PS_PLATFORM_FAIL;
     }
 
@@ -1936,7 +2297,7 @@ int32 fetchCRL(psPool_t *pool, char *url, uint32_t urlLen,
     {
         if ((transferred = send(fd, getReq + offset, getReqLen, 0)) < 0)
         {
-            _psTraceInt("fetchCRL: socket send failed: %d\n", errno);
+            psTraceInt("fetchCRL: socket send failed: %d\n", errno);
             close(fd);
             return PS_PLATFORM_FAIL;
         }
@@ -1963,17 +2324,17 @@ int32 fetchCRL(psPool_t *pool, char *url, uint32_t urlLen,
         recevied in the first call */
     while ((transferred = recv(fd, crlChunk, HTTP_REPLY_CHUNK_SIZE, 0)) > 0)
     {
-        crlChunk[transferred] = 0; /* Ensure zero termination for strstr(). */
+        crlChunk[transferred] = 0; /* Ensure zero termination for Strstr(). */
         if (crlBin == NULL)
         {
             /* Still getting the details of the HTTP response */
             /* Did we get an OK response? */
             if (sawOK == 0)
             {
-                if (strstr((const char *) crlChunk, "200 OK") == NULL)
+                if (Strstr((const char *) crlChunk, "200 OK") == NULL)
                 {
                     /* First chunk. Should be plenty large enough to hold */
-                    _psTrace("fetchCRL: server reply was not '200 OK'\n");
+                    psTrace("fetchCRL: server reply was not '200 OK'\n");
                     close(fd);
                     return -1;
                 }
@@ -1982,13 +2343,13 @@ int32 fetchCRL(psPool_t *pool, char *url, uint32_t urlLen,
             /* Length parse */
             if (sawContentLength == 0)
             {
-                if ((replyPtr = strstr((const char *) crlChunk,
+                if ((replyPtr = Strstr((const char *) crlChunk,
                          "Content-Length: ")) == NULL)
                 {
 
                     /* Apparently Content-Length is not always going to be
                         there.  See if we have the end of the header instead */
-                    if ((replyPtr = strstr((const char *) crlChunk, "\r\n\r\n"))
+                    if ((replyPtr = Strstr((const char *) crlChunk, "\r\n\r\n"))
                         == NULL)
                     {
                         continue; /* saw neither. keep trying */
@@ -2019,7 +2380,7 @@ int32 fetchCRL(psPool_t *pool, char *url, uint32_t urlLen,
 
 
             /* Data begins after CRLF CRLF */
-            if ((replyPtr = strstr((const char *) crlChunk, "\r\n\r\n"))
+            if ((replyPtr = Strstr((const char *) crlChunk, "\r\n\r\n"))
                 == NULL)
             {
                 continue;
@@ -2035,7 +2396,7 @@ int32 fetchCRL(psPool_t *pool, char *url, uint32_t urlLen,
             /* Check buffer length appears acceptable */
             if (crlBinLen < 1 || crlBinLen > CRL_MAX_LENGTH)
             {
-                _psTrace("fetchCRL: Unacceptable size for CRL\n");
+                psTrace("fetchCRL: Unacceptable size for CRL\n");
                 /* Note: If this fails you may need to check CRL_MAX_LENGTH,
                    as you possibly need to allow larger CRL. */
                 close(fd);
@@ -2043,9 +2404,9 @@ int32 fetchCRL(psPool_t *pool, char *url, uint32_t urlLen,
             }
 
             /* Allocate the CRL buffer. Will be full size if sawContentLength */
-            if ((crlBin = psMalloc(pool, crlBinLen)) == NULL)
+            if ((crlBin = (unsigned char *)psMalloc(pool, crlBinLen)) == NULL)
             {
-                _psTrace("fetchCRL: Memory allocation error for CRL buffer\n");
+                psTrace("fetchCRL: Memory allocation error for CRL buffer\n");
                 close(fd);
                 return -1;
             }
@@ -2058,7 +2419,7 @@ int32 fetchCRL(psPool_t *pool, char *url, uint32_t urlLen,
                 /* Will march crlBin forward so just assign output crlBuf now */
                 *crlBuf = crlBin;
                 *crlBufLen = crlBinLen;
-                memcpy(crlBin, replyPtr, transferred);
+                Memcpy(crlBin, replyPtr, transferred);
                 crlBin += transferred;
                 psAssert((crlBin - *crlBuf) <= crlBinLen);
             }
@@ -2067,7 +2428,7 @@ int32 fetchCRL(psPool_t *pool, char *url, uint32_t urlLen,
                 grown = 1;
                 /* Keep track of index to monitor size */
                 crlBinLen = transferred;
-                memcpy(crlBin, replyPtr, transferred);
+                Memcpy(crlBin, replyPtr, transferred);
             }
         }
         else
@@ -2075,7 +2436,7 @@ int32 fetchCRL(psPool_t *pool, char *url, uint32_t urlLen,
             /* subsequent recv calls */
             if (sawContentLength)
             {
-                memcpy(crlBin, crlChunk, transferred);
+                Memcpy(crlBin, crlChunk, transferred);
                 crlBin += transferred;
                 psAssert((crlBin - *crlBuf) <= crlBinLen);
             }
@@ -2085,10 +2446,10 @@ int32 fetchCRL(psPool_t *pool, char *url, uint32_t urlLen,
                 {
                     /* not enough room.  psRealloc */
                     grown++;
-                    crlBin = psRealloc(crlBin, HTTP_REPLY_CHUNK_SIZE * grown,
-                        pool);
+                    crlBin = (unsigned char*)psRealloc(
+                            crlBin, HTTP_REPLY_CHUNK_SIZE * grown, pool);
                 }
-                memcpy(crlBin + crlBinLen, crlChunk, transferred);
+                Memcpy(crlBin + crlBinLen, crlChunk, transferred);
                 crlBinLen += transferred;
             }
         }
@@ -2123,10 +2484,10 @@ static SOCKET lsocketConnect(char *ip, int32 port, int32 *err)
     int32 rc;
 
     /* By default, this will produce a blocking socket */
-    if ((fd = socket(AF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET)
+    if ((fd = Socket(AF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET)
     {
-        perror("socket()");
-        _psTrace("Error creating socket\n");
+        perror("Socket()");
+        psTrace("Error creating socket\n");
         *err = SOCKET_ERRNO;
         return INVALID_SOCKET;
     }
@@ -2148,22 +2509,22 @@ static SOCKET lsocketConnect(char *ip, int32 port, int32 *err)
     {
         uint32 len;
         getsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rc, &len);
-        printf("SO_RCVBUF: %d\n", rc);
+        Printf("SO_RCVBUF: %d\n", rc);
     }
 # endif
 # ifdef __APPLE__ /* MAC OS X */
     rc = 1;
     setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, (void *) &rc, sizeof(rc));
 # endif
-    memset((char *) &addr, 0x0, sizeof(addr));
+    Memset((char *) &addr, 0x0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_port = htons((short) port);
     addr.sin_addr.s_addr = inet_addr(ip);
-    rc = connect(fd, (struct sockaddr *) &addr, sizeof(addr));
+    rc = Connect(fd, (struct sockaddr *) &addr, sizeof(addr));
     if (rc < 0)
     {
         close(fd);
-        perror("connect()");
+        perror("Connect()");
         *err = SOCKET_ERRNO;
     }
     else
@@ -2172,6 +2533,55 @@ static SOCKET lsocketConnect(char *ip, int32 port, int32 *err)
     }
     return fd;
 }
+
+# ifdef USE_TLS_1_3
+static int32_t sendEarlyData(ssl_t *ssl)
+{
+    FILE *fp = NULL;
+    unsigned char *earlyDataBuf;
+    int32_t earlyDataBufLen, earlyDataLen, maxEarlyData, encodedEarlyDataLen;
+
+    fp = Fopen(g_early_data_file, "r");
+    if (!fp)
+    {
+        psTrace("Failed to open early data file\n");
+        return PS_ARG_FAIL;
+    }
+    /* It is the caller's resposibility to keep track that not too much
+       early data is being sent. Data can be sent in multiple records. */
+    maxEarlyData = matrixSslGetMaxEarlyData(ssl);
+
+    /* Get writebuf for maximum early data length */
+    earlyDataBufLen = matrixSslGetWritebuf(ssl, &earlyDataBuf, maxEarlyData);
+    if (earlyDataBufLen <= 0)
+    {
+        Fclose(fp);
+        return PS_FAILURE;
+    }
+    /* Send only as many bytes as the received write buffer can fit. It might
+       be less than requested size in case the fragment size is small */
+    maxEarlyData = earlyDataBufLen;
+    earlyDataLen = Fread(earlyDataBuf, 1, maxEarlyData, fp);
+    if (earlyDataLen <= 0)
+    {
+        Fclose(fp);
+        return PS_FAILURE;
+    }
+    Fclose(fp);
+    encodedEarlyDataLen = matrixSslEncodeWritebuf(ssl, earlyDataLen);
+    if (encodedEarlyDataLen <= 0)
+    {
+        return PS_FAILURE;
+    }
+    if (matrixSslGetEarlyDataStatus(ssl) != MATRIXSSL_EARLY_DATA_SENT)
+    {
+        psTrace("Unexpected early data status. Exiting\n");
+        return PS_FAILURE;
+    }
+    return MATRIXSSL_SUCCESS;
+}
+# endif /* USE_TLS_1_3 */
+
 #else
 
 /******************************************************************************/
@@ -2180,11 +2590,10 @@ static SOCKET lsocketConnect(char *ip, int32 port, int32 *err)
  */
 int32 main(int32 argc, char **argv)
 {
-    printf("USE_CLIENT_SIDE_SSL must be enabled in matrixsslConfig.h at build" \
+    Printf("USE_CLIENT_SIDE_SSL must be enabled in matrixsslConfig.h at build" \
         " time to run this application\n");
     return EXIT_FAILURE;
 }
 #endif /* USE_CLIENT_SIDE_SSL */
 
 /******************************************************************************/
-

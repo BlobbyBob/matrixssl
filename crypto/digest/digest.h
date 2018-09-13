@@ -51,6 +51,7 @@
 # define SHA384_HASHLEN      48
 # define SHA512_HASHLEN      64
 # define MD2_HASHLEN         16
+# define MD4_HASHLEN         16
 # define MD5_HASHLEN         16
 # define MD5SHA1_HASHLEN (MD5_HASHLEN + SHA1_HASHLEN)
 

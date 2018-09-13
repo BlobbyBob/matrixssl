@@ -1,9 +1,9 @@
 #include "ps_chacha20poly1305ietf_config.h"
 #ifdef USE_MATRIX_CHACHA20_POLY1305_IETF
-# include <stdint.h>
-# include <stdlib.h>
-# include <limits.h>
-# include <string.h>
+# include "osdep_stdint.h"
+# include "osdep_stdlib.h"
+# include "osdep_limits.h"
+# include "osdep_string.h"
 
 # include "crypto_aead_chacha20poly1305.h"
 # include "crypto_onetimeauth_poly1305.h"
@@ -73,7 +73,7 @@ psCrypto_aead_chacha20poly1305_encrypt(unsigned char *c,
     int                ret;
 
     if (mlen > UINT64_MAX - crypto_aead_chacha20poly1305_ABYTES) {
-        abort(); /* LCOV_EXCL_LINE */
+        Abort(); /* LCOV_EXCL_LINE */
     }
     ret = psCrypto_aead_chacha20poly1305_encrypt_detached(c, c + mlen, NULL,
                                                           m, mlen, ad, adlen,
@@ -146,7 +146,7 @@ psCrypto_aead_chacha20poly1305_ietf_encrypt(unsigned char *c,
     int                ret;
 
     if (mlen > UINT64_MAX - crypto_aead_chacha20poly1305_ietf_ABYTES) {
-        abort(); /* LCOV_EXCL_LINE */
+        Abort(); /* LCOV_EXCL_LINE */
     }
     ret = psCrypto_aead_chacha20poly1305_ietf_encrypt_detached(c, c + mlen,
                                                                NULL, m, mlen,
@@ -203,7 +203,7 @@ psCrypto_aead_chacha20poly1305_decrypt_detached(unsigned char *m,
         return ret;
     }
     if (ret != 0) {
-        memset(m, 0, mlen);
+        Memset(m, 0, mlen);
         return -1;
     }
     psCrypto_stream_chacha20_xor_ic(m, c, mlen, npub, 1U, k);
@@ -287,7 +287,7 @@ psCrypto_aead_chacha20poly1305_ietf_decrypt_detached(unsigned char *m,
         return ret;
     }
     if (ret != 0) {
-        memset(m, 0, mlen);
+        Memset(m, 0, mlen);
         return -1;
     }
     psCrypto_stream_chacha20_ietf_xor_ic(m, c, mlen, npub, 1U, k);

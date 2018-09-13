@@ -53,12 +53,21 @@ util: all-utils
 
 CONFIG_EXTRA_DEPENDENCIES=
 
+CORE_CONFIG_DIR=core/config
+CORE_CONFIG_FILE=$(CORE_CONFIG_DIR)/coreConfig.h
+
+# ! -e $(CORE_CONFIG_FILE) ] || ! cmp -s $(1)/coreConfig.h $(CORE_CONFIG_FILE)
+define apply_core_config
+@if [ ! -e $(CORE_CONFIG_FILE) ] || ! cmp -s $(1)/coreConfig.h $(CORE_CONFIG_FILE); then cp $(1)/coreConfig.h $(CORE_CONFIG_FILE); echo cp $(1)/coreConfig.h $(CORE_CONFIG_FILE); echo WARNING: Applied new configuration also to core. You may need to recompile the core.;fi
+endef
+
+# ! -e $(CORE_CONFIG_FILE) ] || ! cmp -s $(1)/coreConfig.h $(CORE_CONFIG_FILE)
+define apply_core_config_non_exist
+@if [ ! -e $(CORE_CONFIG_FILE) ]; then cp $(1)/coreConfig.h $(CORE_CONFIG_FILE); echo cp $(1)/coreConfig.h $(CORE_CONFIG_FILE); echo WARNING: Applied new configuration also to core. You may need to recompile the core.;fi
+endef
+
 # Use default config if no config is being used.
 check-config: $(CONFIG_EXTRA_DEPENDENCIES)
-	@if [ ! -e core/coreConfig.h ];then \
-		cp configs/default/coreConfig.h core/coreConfig.h;\
-		echo NOTE: Using default configuration from configs/default/coreConfig.h.;\
-	fi
 	@if [ ! -e crypto/cryptoConfig.h ];then \
 		cp configs/default/cryptoConfig.h crypto/cryptoConfig.h;\
 		echo NOTE: Using default configuration from configs/default/cryptoConfig.h.;\
@@ -67,6 +76,7 @@ check-config: $(CONFIG_EXTRA_DEPENDENCIES)
 		cp configs/default/matrixsslConfig.h matrixssl/matrixsslConfig.h;\
 		echo NOTE: Using default configuration from configs/default/matrixsslConfig.h.;\
 	fi
+	$(call apply_core_config_non_exist,configs/default)
 
 clean-config:
 	rm -f core/coreConfig.h crypto/cryptoConfig.h matrixssl/matrixsslConfig.h
@@ -74,9 +84,9 @@ clean-config:
 # Apply any of pre-existing configurations from configs directory
 %-config: configs/% $(CONFIG_EXTRA_DEPENDENCIES)
 	@echo Using $</*Config.h.
-	cp $</coreConfig.h core/coreConfig.h
 	cp $</cryptoConfig.h crypto/cryptoConfig.h
 	cp $</matrixsslConfig.h matrixssl/matrixsslConfig.h
+	$(call apply_core_config,$<)
 
 # Set non-fips configuration (standard configuration for MatrixSSL commercial)
 # and build all libraries

@@ -43,14 +43,14 @@ extern "C" {
 # include "core/coreApi.h"
 # include "matrixssl/matrixsslApi.h"
 
-# include <errno.h>         /* Defines EWOULDBLOCK, etc. */
-# include <fcntl.h>         /* Defines FD_CLOEXEC, etc. */
-# include <stdlib.h>        /* Defines malloc, exit, etc. */
+# include "osdep_errno.h"         /* Defines EWOULDBLOCK, etc. */
+# include "osdep_fcntl.h"         /* Defines FD_CLOEXEC, etc. */
+# include "osdep_stdlib.h"        /* Defines malloc, exit, etc. */
 
 # ifdef POSIX
-#  include <netdb.h>        /* Defines AF_INET, etc. */
-#  include <unistd.h>       /* Defines close() */
-#  include <netinet/tcp.h>  /* Defines TCP_NODELAY, etc. */
+#  include "osdep_netdb.h"        /* Defines AF_INET, etc. */
+#  include "osdep_unistd.h"       /* Defines close() */
+#  include "osdep_netinet_tcp.h"  /* Defines TCP_NODELAY, etc. */
 #  include <arpa/inet.h>    /* inet_addr */
 # endif
 
@@ -108,6 +108,7 @@ typedef struct
     psTime_t time;              /* Last time there was activity */
     uint32 timeout;             /* in milliseconds*/
     uint32 flags;
+    uint32 handshakeComplete;
     unsigned char *parsebuf;    /* Partial data */
     uint32 parsebuflen;
     uint32 bytes_received;

@@ -33,10 +33,16 @@
 
 #include "../cryptoImpl.h"
 #include "pstmnt.h"
+#include "pscompilerdep.h"
+
+#ifdef __ARMCC5
+/* Inline assembly not compatible with this compiler. */
+#define PSTMNT_OMIT_ASSEMBLY_OPTIMIZATIONS
+#endif
 
 #ifdef USE_CONSTANT_TIME_MODEXP
 
-# include <assert.h>
+# include "osdep_assert.h"
 
 /* Workarounds for C99 features */
 # if __STDC_VERSION__ < 199901L
@@ -57,9 +63,9 @@
     [1 - 2 * (!(pstmnt_condition))]
 
 /* Semantics: variants according to intent. */
-# define PSTMNT_ASSERT(x) assert(x)
-# define PSTMNT_PRECONDITION(x) assert(x)
-# define PSTMNT_POSTCONDITION(x) assert(x)
+# define PSTMNT_ASSERT(x) Assert(x)
+# define PSTMNT_PRECONDITION(x) Assert(x)
+# define PSTMNT_POSTCONDITION(x) Assert(x)
 
 /* Mark expected execution paths for compiler optimizations. */
 # ifndef PSTMNT_EXPECT
@@ -73,13 +79,13 @@
 /* Rename standard C API function calls.
    (allows easy substitution with alternatives in non-standard C libraries.). */
 # ifndef PSTMNT_COPY
-#  define PSTMNT_COPY(ptr_d, ptr, sz) memcpy((ptr_d), (ptr), (sz))
+#  define PSTMNT_COPY(ptr_d, ptr, sz) Memcpy((ptr_d), (ptr), (sz))
 # endif /* PSTMNT_COPY */
 # ifndef PSTMNT_MOVE
-#  define PSTMNT_MOVE(ptr_d, ptr, sz) memmove((ptr_d), (ptr), (sz))
+#  define PSTMNT_MOVE(ptr_d, ptr, sz) Memmove((ptr_d), (ptr), (sz))
 # endif /* PSTMNT_MOVE */
 # ifndef PSTMNT_ZEROIZE
-#  define PSTMNT_ZEROIZE(ptr, sz) memset((ptr), 0, (sz))
+#  define PSTMNT_ZEROIZE(ptr, sz) Memset((ptr), 0, (sz))
 # endif /* PSTMNT_ZEROIZE */
 
 /* Basic mathematics operations - inlined or macro. */
@@ -98,6 +104,13 @@
 # define PSTMNT_UINT32 uint32_t
 # define PSTMNT_UINT64 uint64_t
 
+#if 1 // def USE_LARGE_DH_GROUPS
+/* Maximum size of integer in bits.
+   Note: Temporaries within modular multiplication can be twice this size. */
+#define PSTMNT_MAX_BITS 8192
+#else
+#define PSTMNT_MAX_BITS 4096
+#endif
 /* Determine platform and configure accordingly. */
 
 # define PSTMNT_NO_KARATSUBA
@@ -727,7 +740,7 @@ __extension__ typedef unsigned __int128 pstmntDD_word;
     }
 
 /* Use pstm_sqr_comba if compiled in and suitable size variant is available. */
-__inline static int
+static inline int
 pstmnt_square_comba(
     const uint32_t a[],
     uint32_t * restrict r,
@@ -776,7 +789,7 @@ pstmnt_square_comba(
     return 0;
 }
 
-__inline static int
+static inline int
 pstmnt_mult_comba(
     const uint32_t a[],
     const uint32_t b[],
@@ -958,7 +971,7 @@ int pstmnt_add(const uint32_t *a, const uint32_t *b, uint32_t *r, int szl)
        a, b and r are the same. */
     PSTMNT_PRECONDITION((b != r) || (a == b));
     PSTMNT_PRECONDITION(szl >= 1);
-    PSTMNT_PRECONDITION(szl <= 4096 / PSTMNT_WORD_BITS);
+    PSTMNT_PRECONDITION(szl <= PSTMNT_MAX_BITS / PSTMNT_WORD_BITS);
 
 # ifdef PSTMNT_LONG_MULADD2_FAST
     /* Use MULADD2 to add two values and carry. */
@@ -1305,7 +1318,7 @@ pstmnt_sub(
     /* OPTN: Replace pstmnt_sub implementation with more efficient */
     PSTMNT_PRECONDITION(b != r);
     PSTMNT_PRECONDITION(szl >= 1);
-    PSTMNT_PRECONDITION(szl <= 4096 / 32);
+    PSTMNT_PRECONDITION(szl <= PSTMNT_MAX_BITS / 32);
 
     while (szl > 0)
     {
@@ -1417,9 +1430,9 @@ pstmnt_square(
         return;
     }
 
-    if ((sz & 1) == 0 && sz < 4096 / 32)
+    if ((sz & 1) == 0 && sz <= PSTMNT_MAX_BITS / 32)
     {
-        pstmnt_dword a_storage[4096 / 64];
+        pstmnt_dword a_storage[PSTMNT_MAX_BITS / 64];
         if ((((unsigned long) a) & 0x7) != 0)
         {
             /* Unaligned a. */
@@ -1822,10 +1835,10 @@ pstmnt_mult_unroll2(
     PSTMNT_PRECONDITION(b != r);
 
 #   ifdef PSTMNT_USE_INT128_MULT
-    if ((sz & 1) == 0 && sz >= 4 && sz < 4096 / 32)
+    if ((sz & 1) == 0 && sz >= 4 && sz <= PSTMNT_MAX_BITS / 32)
     {
-        pstmnt_dword a_storage[4096 / 64];
-        pstmnt_dword b_storage[4096 / 64];
+        pstmnt_dword a_storage[PSTMNT_MAX_BITS / 64];
+        pstmnt_dword b_storage[PSTMNT_MAX_BITS / 64];
         if ((((unsigned long) a) & 0x7) != 0)
         {
             /* Unaligned a. */
@@ -1940,10 +1953,10 @@ pstmnt_mult(
     }
 
 #  ifdef PSTMNT_USE_INT128_MULT
-    if ((sz & 1) == 0 && sz >= 4 && sz < 4096 / 32)
+    if ((sz & 1) == 0 && sz >= 4 && sz <= PSTMNT_MAX_BITS / 32)
     {
-        pstmnt_dword a_storage[4096 / 64];
-        pstmnt_dword b_storage[4096 / 64];
+        pstmnt_dword a_storage[PSTMNT_MAX_BITS / 64];
+        pstmnt_dword b_storage[PSTMNT_MAX_BITS / 64];
         if ((((unsigned long) a) & 0x7) != 0)
         {
             /* Unaligned a. */
@@ -2105,10 +2118,10 @@ void pstmnt_montgomery_reduce(pstmnt_word * restrict temp_r,
     pstmnt_word u, a1, c;
 
 #  ifdef PSTMNT_USE_INT128_MONTGOMERY
-    if ((n & 1) == 0 && n <= 4096 / 32)
+    if ((n & 1) == 0 && n <= PSTMNT_MAX_BITS / 32)
     {
-        pstmnt_dword temp_r_storage[8192 / 64];
-        pstmnt_dword p_storage[4096 / 64];
+        pstmnt_dword temp_r_storage[(PSTMNT_MAX_BITS * 2) / 64];
+        pstmnt_dword p_storage[PSTMNT_MAX_BITS / 64];
         if ((((unsigned long) temp_r) & 0x7) != 0)
         {
             /* Unaligned temp_r, copy it to a new temporary buffer. */
@@ -2194,10 +2207,10 @@ void pstmnt_montgomery_reduce(pstmnt_word * restrict temp_r,
     pstmnt_word u, a1, c;
 
 #  ifdef PSTMNT_USE_INT128_MONTGOMERY
-    if ((n & 1) == 0 && n <= 4096 / 32)
+    if ((n & 1) == 0 && n <= PSTMNT_MAX_BITS / 32)
     {
-        pstmnt_dword temp_r_storage[8192 / 64];
-        pstmnt_dword p_storage[4096 / 64];
+        pstmnt_dword temp_r_storage[(PSTMNT_MAX_BITS * 2) / 64];
+        pstmnt_dword p_storage[PSTMNT_MAX_BITS / 64];
         if ((((unsigned long) temp_r) & 0x7) != 0)
         {
             /* Unaligned temp_r, copy it to a new temporary buffer. */
@@ -2287,10 +2300,10 @@ void pstmnt_montgomery_reduce(pstmnt_word * restrict temp_r,
     pstmnt_word t, u, a2, a1, c;
 
 #  ifdef PSTMNT_USE_INT128_MONTGOMERY
-    if ((n & 1) == 0 && n <= 4096 / 32)
+    if ((n & 1) == 0 && n <= PSTMNT_MAX_BITS / 32)
     {
-        pstmnt_dword temp_r_storage[8192 / 64];
-        pstmnt_dword p_storage[4096 / 64];
+        pstmnt_dword temp_r_storage[(PSTMNT_MAX_BITS * 2) / 64];
+        pstmnt_dword p_storage[PSTMNT_MAX_BITS / 64];
         if ((((unsigned long) temp_r) & 0x7) != 0)
         {
             /* Unaligned temp_r, copy it to a new temporary buffer. */
@@ -2468,7 +2481,7 @@ pstmnt_montgomery_input(
         NBitsArray,
         TempLarge,
         0,
-        13,     /* Up-to 4096 supported for number of bits. */
+        14,     /* Up-to 8192 supported for number of bits. */
         Prime,
         TempLarge + NWords * 2,
         pstmnt_neg_small_inv(Prime),

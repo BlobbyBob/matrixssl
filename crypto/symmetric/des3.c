@@ -1514,7 +1514,7 @@ int32_t psDes3Init(psDes3_t *des3, const unsigned char IV[DES3_IVLEN],
         return PS_ARG_FAIL;
     }
 # endif
-    memset(des3, 0x0, sizeof(psDes3_t));
+    Memset(des3, 0x0, sizeof(psDes3_t));
     /* setup cipher */
     if ((err = psDes3InitKey(key, &des3->key)) != PS_SUCCESS)
     {

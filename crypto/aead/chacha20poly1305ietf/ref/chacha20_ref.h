@@ -1,5 +1,5 @@
 
-#include <stdint.h>
+#include "osdep_stdint.h"
 
 #include "../stream_chacha20.h"
 #include "crypto_stream_chacha20.h"

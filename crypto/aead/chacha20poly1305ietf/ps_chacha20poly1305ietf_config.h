@@ -78,7 +78,9 @@
 #   define HAVE_TMMINTRIN_H 1
 #   define HAVE_SMMINTRIN_H 1
 #   define HAVE_AVXINTRIN_H 1
-#   define HAVE_AVX2INTRIN_H 1
+#   if defined USE_X86_AVX2 /* Disabled by default of lacking compiler support. */
+#    define HAVE_AVX2INTRIN_H 1
+#   endif
 #   define HAVE_WMMINTRIN_H 1
 #   define HAVE_AVX_ASM 1
 #  endif

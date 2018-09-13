@@ -75,6 +75,11 @@ extern "C" {
     at the cost of a slower TLS handshake.
  */
 
+/** TLS 1.3 ciphers */
+#  define USE_TLS_AES_128_GCM_SHA256
+#  define USE_TLS_AES_256_GCM_SHA384
+#  define USE_TLS_CHACHA20_POLY1305_SHA256
+
 /** Ephemeral ECC DH keys, ECC DSA certificates */
 #   define USE_TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA/**< @security NIST_SHOULD */
 #   define USE_TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA/**< @security NIST_MAY */
@@ -168,6 +173,17 @@ extern "C" {
 
 /******************************************************************************/
 /**
+     Legacy cipher suites.
+     These cipher suites have been deprecated, but may be occasionally required
+     for legacy compatibility. Usage of these cipher suites should be avoided
+     as these may represent small or moderate risk.
+
+     Note: The RC4 cipher suites below need to disabled according to RFC 7465.
+*/
+/* #define USE_SSL_RSA_WITH_RC4_128_SHA  *//**< @security NIST_SHALL_NOT */
+    
+/******************************************************************************/
+/**
     Ephemeral key cache support.
     If not using cache, new key exchange keys are created for each TLS session.
     If using cache, keys are generated initially, and re-used in each
@@ -183,14 +199,22 @@ extern "C" {
 /**
     Configure Support for TLS protocol versions.
     Define one of:
-        USE_TLS_1_2_AND_ABOVE
-        USE_TLS_1_1_AND_ABOVE
-        USE_TLS_1_0_AND_ABOVE
+        USE_TLS_1_2_AND_ABOVE (TLS 1.2 and 1.3)
+        USE_TLS_1_1_AND_ABOVE (TLS 1.1, 1.2 and 1.3)
+        USE_TLS_1_0_AND_ABOVE (TLS 1.0, 1.1, 1.2 and 1.3)
     @note There is no option for enabling SSL3.0 at this level
  */
 #   define USE_TLS_1_1_AND_ABOVE/**< @security default 1_1_AND_ABOVE */
 /* #define USE_TLS_1_2_AND_ABOVE  *//**< @security better than 1_1_AND_ABOVE if no backwards compatiblity concerns */
 /* #define USE_TLS_1_0_AND_ABOVE  *//**< @security no longer recommended. */
+
+/** Enable support for session resumption in TLS 1.3. */
+#   define USE_TLS_1_3_RESUMPTION
+
+/** TLS 1.3 code has not yet been footprint-optimized. For this reason,
+    it is possible to separately leave all TLS 1.3 code out of the build
+    by enabling this. */
+/* #define DISABLE_TLS_1_3 */
 
 /******************************************************************************/
 /**

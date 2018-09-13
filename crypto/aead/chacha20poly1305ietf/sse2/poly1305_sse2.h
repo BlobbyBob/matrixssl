@@ -1,7 +1,7 @@
 #ifndef poly1305_sse2_H
 #define poly1305_sse2_H
 
-#include <stddef.h>
+#include "osdep_stddef.h"
 
 #include "../onetimeauth_poly1305.h"
 #include "crypto_onetimeauth_poly1305.h"

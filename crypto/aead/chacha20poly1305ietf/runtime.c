@@ -1,9 +1,9 @@
 #include "ps_chacha20poly1305ietf_config.h"
 #ifdef USE_MATRIX_CHACHA20_POLY1305_IETF
-# include <stddef.h>
-# include <stdint.h>
+# include "osdep_stddef.h"
+# include "osdep_stdint.h"
 # ifdef HAVE_ANDROID_GETCPUFEATURES
-#  include <cpu-features.h>
+#  include ""
 # endif
 
 # include "private/common.h"

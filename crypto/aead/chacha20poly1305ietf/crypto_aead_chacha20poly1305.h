@@ -1,7 +1,7 @@
 #ifndef crypto_aead_chacha20poly1305_H
 #define crypto_aead_chacha20poly1305_H
 
-#include <stddef.h>
+#include "osdep_stddef.h"
 #include "export.h"
 
 #ifdef __cplusplus

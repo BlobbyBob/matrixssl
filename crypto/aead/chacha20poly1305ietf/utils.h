@@ -2,7 +2,7 @@
 #ifndef sodium_utils_H
 #define sodium_utils_H
 
-#include <stddef.h>
+#include "osdep_stddef.h"
 
 #include "export.h"
 

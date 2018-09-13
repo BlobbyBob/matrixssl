@@ -6,7 +6,7 @@
  *      Only modifiers of the library should be intersted in this file
  */
 /*
- *      Copyright (c) 2013-2017 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 INSIDE Secure Corporation
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -129,6 +129,16 @@ extern "C" {
 /* #define ENABLE_INSECURE_REHANDSHAKES / ** @security OFF NIST_SHALL_NOT * / */
 # endif
 
+# if defined(ENABLE_INSECURE_REHANDSHAKES) || defined(ENABLE_SECURE_REHANDSHAKES)
+#  define SSL_REHANDSHAKES_ENABLED
+# endif
+
+# if defined(REQUIRE_SECURE_REHANDSHAKES) && !defined(ENABLE_SECURE_REHANDSHAKES)
+#  define SSL_REHANDSHAKES_ENABLED
+#  define ENABLE_SECURE_REHANDSHAKES
+# endif
+
+
 /******************************************************************************/
 /**
     Beast Mode.
@@ -197,40 +207,6 @@ extern "C" {
 /* #define USE_SHARED_SESSION_CACHE / **< @note Experimental * / */
 
 /******************************************************************************/
-/**
-    - USE_TLS versions must 'stack' for compiling purposes
-        - must enable TLS if enabling TLS 1.1
-        - must enable TLS 1.1 if enabling TLS 1.2
-    - Use the DISABLE_TLS_ defines to disallow specific protocols at runtime
-        that have been enabled via USE_TLS_.
-    - There is no DISABLE_TLS_ for the latest version of the protocol.  If
-        you don't want to use that version disable the USE_TLS_ define instead
-    The USE_TLS_1_x_AND_ABOVE simplifies this configuration.
-    @security To enable SSL3.0, see below.
- */
-# define USE_TLS        /**< DO NOT DISABLE @security NIST_MAY */
-# define USE_TLS_1_1    /**< DO NOT DISABLE @security NIST_SHALL */
-# define USE_TLS_1_2    /**< DO NOT DISABLE @security NIST_SHOULD */
-# define DISABLE_SSLV3  /**< DO NOT DISABLE, undef below if required
-                           @security NIST_SHALL_NOT */
-
-# ifndef NO_TLS_1_2_TOGGLE
-#  define USE_TLS_1_2_TOGGLE /**< Allow disabling TLS 1.2 dynamically. */
-# endif
- # ifndef NO_TLS_1_0_TOGGLE
-#  define USE_TLS_1_0_TOGGLE /**< Allow disabling TLS 1.0 dynamically. */
-# endif
-   
-#  if defined USE_TLS_1_2_AND_ABOVE
-#   define DISABLE_TLS_1_1
-#   define DISABLE_TLS_1_0
-#  elif defined USE_TLS_1_1_AND_ABOVE
-#   define DISABLE_TLS_1_0
-#  elif defined USE_TLS_1_0_AND_ABOVE
-/** @security undef DISABLE_SSLV3 here if required */
-#  else
-#   error Must define USE_TLS_1_x_AND_ABOVE
-#  endif
 
 # ifdef USE_DTLS
 /******************************************************************************/
@@ -257,10 +233,6 @@ extern "C" {
 #  define USE_NATIVE_SYMMETRIC
 
 /******************************************************************************/
-/**
-    Do sanity checks on configuration.
- */
-# include "matrixsslCheck.h"
 
 /******************************************************************************/
 /*
@@ -274,47 +246,16 @@ extern "C" {
 # endif /* USE_CERT_PARSE */
 
 /******************************************************************************/
-/**
-    SSL protocol and MatrixSSL defines.
-    @see https://www.iana.org/assignments/tls-parameters/tls-parameters.xhtml
- */
-
-/*
-    Maximum SSL record size, per specification
- */
-# define     SSL_MAX_PLAINTEXT_LEN       0x4000 /* 16KB */
-# define     SSL_MAX_RECORD_LEN          SSL_MAX_PLAINTEXT_LEN + 2048
-# define     SSL_MAX_BUF_SIZE            SSL_MAX_RECORD_LEN + 0x5
-# define     SSL_MAX_DISABLED_CIPHERS    32
-/*
-    Maximum buffer sizes for static SSL array types
- */
-# define SSL_MAX_MAC_SIZE        48/* SHA384 */
-# define SSL_MAX_IV_SIZE         16
-# define SSL_MAX_BLOCK_SIZE      16
-# define SSL_MAX_SYM_KEY_SIZE    32
-
-/*
-    Negative return codes must be between -50 and -69 in the MatrixSSL module
- */
-# define     SSL_FULL            -50         /* must call sslRead before decoding */
-# define     SSL_PARTIAL         -51         /* more data reqired to parse full msg */
-# define     SSL_SEND_RESPONSE   -52         /* decode produced output data */
-# define     SSL_PROCESS_DATA    -53         /* succesfully decoded application data */
-# define     SSL_ALERT           -54         /* we've decoded an alert */
-# define     SSL_FILE_NOT_FOUND  -55         /* File not found */
-# define     SSL_MEM_ERROR       PS_MEM_FAIL /* Memory allocation failure */
-# ifdef USE_DTLS
-#  define     DTLS_MUST_FRAG      -60        /* Message must be fragmented */
-#  define     DTLS_RETRANSMIT     -61        /* Received a duplicate hs msg from peer */
-# endif /* USE_DTLS */
 
 /*
     Magic numbers for handshake header lengths
  */
 # define SSL2_HEADER_LEN             2
 # define SSL3_HEADER_LEN             5
+# define TLS_REC_HDR_LEN             5
+# define DTLS_REC_HDR_LEN            13
 # define SSL3_HANDSHAKE_HEADER_LEN   4
+# define TLS_HS_HDR_LEN              4
 # ifdef USE_DTLS
 #  define DTLS_HEADER_ADD_LEN        8
 # endif
@@ -347,43 +288,6 @@ extern "C" {
 # define SSL_OPTION_REENABLE_REHANDSHAKES    5
 
 /*
-    SSL Alert levels and descriptions
-    This implementation treats all alerts that are not related to
-    certificate validation as fatal
- */
-# define SSL_ALERT_LEVEL_WARNING             1
-# define SSL_ALERT_LEVEL_FATAL               2
-
-# define SSL_ALERT_CLOSE_NOTIFY              0
-# define SSL_ALERT_UNEXPECTED_MESSAGE        10
-# define SSL_ALERT_BAD_RECORD_MAC            20
-# define SSL_ALERT_DECRYPTION_FAILED         21/* Do not use, per RFC 5246 */
-# define SSL_ALERT_RECORD_OVERFLOW           22
-# define SSL_ALERT_DECOMPRESSION_FAILURE     30
-# define SSL_ALERT_HANDSHAKE_FAILURE         40
-# define SSL_ALERT_NO_CERTIFICATE            41
-# define SSL_ALERT_BAD_CERTIFICATE           42
-# define SSL_ALERT_UNSUPPORTED_CERTIFICATE   43
-# define SSL_ALERT_CERTIFICATE_REVOKED       44
-# define SSL_ALERT_CERTIFICATE_EXPIRED       45
-# define SSL_ALERT_CERTIFICATE_UNKNOWN       46
-# define SSL_ALERT_ILLEGAL_PARAMETER         47
-# define SSL_ALERT_UNKNOWN_CA                48
-# define SSL_ALERT_ACCESS_DENIED             49
-# define SSL_ALERT_DECODE_ERROR              50
-# define SSL_ALERT_DECRYPT_ERROR             51
-# define SSL_ALERT_PROTOCOL_VERSION          70
-# define SSL_ALERT_INSUFFICIENT_SECURITY     71
-# define SSL_ALERT_INTERNAL_ERROR            80
-# define SSL_ALERT_INAPPROPRIATE_FALLBACK    86
-# define SSL_ALERT_NO_RENEGOTIATION          100
-# define SSL_ALERT_UNSUPPORTED_EXTENSION     110
-# define SSL_ALERT_UNRECOGNIZED_NAME         112
-# define SSL_ALERT_BAD_CERTIFICATE_STATUS_RESPONSE   113
-# define SSL_ALERT_UNKNOWN_PSK_IDENTITY      115
-# define SSL_ALERT_NO_APP_PROTOCOL           120
-
-/*
     Use as return code in user validation callback to allow
     anonymous connections to proceed.
     MUST NOT OVERLAP WITH ANY OF THE ALERT CODES ABOVE
@@ -391,35 +295,71 @@ extern "C" {
 # define SSL_ALLOW_ANON_CONNECTION           254
 
 /* Internal values for ssl_t.flags  */
-# define SSL_FLAGS_SERVER        (1 << 0)
-# define SSL_FLAGS_READ_SECURE   (1 << 1)
-# define SSL_FLAGS_WRITE_SECURE  (1 << 2)
-# define SSL_FLAGS_RESUMED       (1 << 3)
-# define SSL_FLAGS_CLOSED        (1 << 4)
-# define SSL_FLAGS_NEED_ENCODE   (1 << 5)
-# define SSL_FLAGS_ERROR         (1 << 6)
-# define SSL_FLAGS_CLIENT_AUTH   (1 << 7)
-# define SSL_FLAGS_ANON_CIPHER   (1 << 8)
-# define SSL_FLAGS_FALSE_START   (1 << 9)
-# define SSL_FLAGS_SSLV3         (1 << 10)
-# define SSL_FLAGS_TLS           (1 << 11)
+# define SSL_FLAGS_SERVER        (1U << 0)
+# define SSL_FLAGS_READ_SECURE   (1U << 1)
+# define SSL_FLAGS_WRITE_SECURE  (1U << 2)
+# define SSL_FLAGS_RESUMED       (1U << 3)
+# define SSL_FLAGS_CLOSED        (1U << 4)
+# define SSL_FLAGS_NEED_ENCODE   (1U << 5)
+# define SSL_FLAGS_ERROR         (1U << 6)
+# define SSL_FLAGS_CLIENT_AUTH   (1U << 7)
+# define SSL_FLAGS_ANON_CIPHER   (1U << 8)
+# define SSL_FLAGS_FALSE_START   (1U << 9)
+# define SSL_FLAGS_SSLV3         (1U << 10)
+# define SSL_FLAGS_TLS           (1U << 11)
 # define SSL_FLAGS_TLS_1_0       SSL_FLAGS_TLS  /* For naming consistency */
-# define SSL_FLAGS_TLS_1_1       (1 << 12)
-# define SSL_FLAGS_TLS_1_2       (1 << 13)
-# define SSL_FLAGS_DTLS          (1 << 14)
-# define SSL_FLAGS_DHE_WITH_RSA  (1 << 15)
-# define SSL_FLAGS_DHE_WITH_DSA  (1 << 16)
-# define SSL_FLAGS_DHE_KEY_EXCH  (1 << 17)
-# define SSL_FLAGS_PSK_CIPHER    (1 << 18)
-# define SSL_FLAGS_ECC_CIPHER    (1 << 19)
-# define SSL_FLAGS_AEAD_W        (1 << 20)
-# define SSL_FLAGS_AEAD_R        (1 << 21)
-# define SSL_FLAGS_NONCE_W       (1 << 22)
-# define SSL_FLAGS_NONCE_R       (1 << 23)
-# define SSL_FLAGS_HTTP2         (1 << 24)
+# define SSL_FLAGS_TLS_1_1       (1U << 12)
+# define SSL_FLAGS_TLS_1_2       (1U << 13)
+# define SSL_FLAGS_DTLS          (1U << 14)
+# define SSL_FLAGS_DHE_WITH_RSA  (1U << 15)
+# define SSL_FLAGS_DHE_WITH_DSA  (1U << 16)
+# define SSL_FLAGS_DHE_KEY_EXCH  (1U << 17)
+# define SSL_FLAGS_PSK_CIPHER    (1U << 18)
+# define SSL_FLAGS_ECC_CIPHER    (1U << 19)
+# define SSL_FLAGS_AEAD_W        (1U << 20)
+# define SSL_FLAGS_AEAD_R        (1U << 21)
+# define SSL_FLAGS_NONCE_W       (1U << 22)
+# define SSL_FLAGS_NONCE_R       (1U << 23)
+# define SSL_FLAGS_HTTP2         (1U << 24)
+# define SSL_FLAGS_TLS_1_3       (1U << 25)
+# define SSL_FLAGS_TLS_1_3_DRAFT_22 (1U << 26)
+# define SSL_FLAGS_TLS_1_3_DRAFT_23 (1U << 27)
+# define SSL_FLAGS_TLS_1_3_DRAFT_24 (1U << 28)
+# define SSL_FLAGS_TLS_1_3_DRAFT_26 (1U << 29)
+# define SSL_FLAGS_TLS_1_3_DRAFT_28 (1U << 30)
+# define SSL_FLAGS_TLS_1_3_NEGOTIATED (1U << 31)
+/*
+  The following conflict with TLS 1.3 flags, but interceptor
+  and EAP_FAST are not allowed with USE_TLS_1_3.
+# ifdef TODO*/
+# define SSL_FLAGS_INTERCEPTOR   (1U << 26)
+# define SSL_FLAGS_EAP_FAST      (1U << 27)
 
-# define SSL_FLAGS_INTERCEPTOR   (1 << 30)
-# define SSL_FLAGS_EAP_FAST      (1 << 31)
+# define USING_TLS_1_2(SSL) ((SSL->flags & SSL_FLAGS_TLS_1_2) ? PS_TRUE : PS_FALSE)
+# define IS_SERVER(SSL) ((SSL->flags & SSL_FLAGS_SERVER) ? PS_TRUE : PS_FALSE)
+# define IS_CLIENT(SSL) !IS_SERVER(SSL)
+
+#  define USING_TLS_1_3(SSL) ((SSL->flags & SSL_FLAGS_TLS_1_3) ||       \
+            (SSL->flags & SSL_FLAGS_TLS_1_3_DRAFT_22) ||                \
+            (SSL->flags & SSL_FLAGS_TLS_1_3_DRAFT_23) ||                \
+            (SSL->flags & SSL_FLAGS_TLS_1_3_DRAFT_24) ||                \
+            (SSL->flags & SSL_FLAGS_TLS_1_3_DRAFT_26) ||                \
+            (SSL->flags & SSL_FLAGS_TLS_1_3_DRAFT_28)                   \
+                             ? PS_TRUE : PS_FALSE)
+#  define USING_TLS_1_3_AAD(SSL) tls13UsingAad(SSL)
+#  define USING_ONLY_TLS_1_3(SSL) (USING_TLS_1_3(SSL) && \
+            !(SSL->flags & SSL_FLAGS_TLS_1_2) &&                        \
+            !(SSL->flags & SSL_FLAGS_TLS_1_1) ? PS_TRUE : PS_FALSE)
+#  define NEGOTIATED_TLS_1_3(SSL) ((SSL->flags & SSL_FLAGS_TLS_1_3_NEGOTIATED) ? PS_TRUE : PS_FALSE)
+#  define ENCRYPTING_RECORDS(SSL) ((SSL->flags & SSL_FLAGS_WRITE_SECURE) ? PS_TRUE : PS_FALSE)
+#  define DECRYPTING_RECORDS(SSL) ((SSL->flags & SSL_FLAGS_READ_SECURE) ? PS_TRUE : PS_FALSE)
+#  define RESUMED_HANDSHAKE(SSL) isResumedHandshake(SSL)
+#  ifdef USE_CHACHA20_POLY1305_IETF_CIPHER_SUITE
+#   define DECRYPTING_WITH_CHACHA20(SSL) ((SSL->activeReadCipher != NULL && \
+                    (SSL->activeReadCipher->flags & CRYPTO_FLAGS_CHACHA)) ? PS_TRUE : PS_FALSE)
+#  else
+#   define DECRYPTING_WITH_CHACHA20(SSL) PS_TRUE
+#  endif
 
 /* Internal flags for ssl_t.hwflags */
 # define SSL_HWFLAGS_HW                  (1 << 0) /* Use HW for decode/encode */
@@ -444,7 +384,13 @@ enum PACKED
 {
     tls_v_1_0 = 1,
     tls_v_1_1 = 2,
-    tls_v_1_2 = 3
+    tls_v_1_2 = 3,
+    tls_v_1_3 = 4,
+    tls_v_1_3_draft_22 = 22,
+    tls_v_1_3_draft_23 = 23,
+    tls_v_1_3_draft_24 = 24,
+    tls_v_1_3_draft_26 = 26,
+    tls_v_1_3_draft_28 = 28
 };
 
 /*
@@ -479,7 +425,8 @@ enum PACKED
     CS_ECDHE_ECDSA,
     CS_ECDHE_RSA,
     CS_ECDH_ECDSA,
-    CS_ECDH_RSA
+    CS_ECDH_RSA,
+    CS_TLS13 /* TLS 1.3 suites only specify the symmetric and hash algs. */
 };
 
 /*
@@ -498,6 +445,8 @@ enum PACKED
 # define SSL_HS_SERVER_HELLO         (uint8_t) 2
 # define SSL_HS_HELLO_VERIFY_REQUEST (uint8_t) 3
 # define SSL_HS_NEW_SESSION_TICKET   (uint8_t) 4
+# define SSL_HS_EOED                 (uint8_t) 5
+# define SSL_HS_ENCRYPTED_EXTENSION  (uint8_t) 8
 # define SSL_HS_CERTIFICATE          (uint8_t) 11
 # define SSL_HS_SERVER_KEY_EXCHANGE  (uint8_t) 12
 # define SSL_HS_CERTIFICATE_REQUEST  (uint8_t) 13
@@ -506,10 +455,68 @@ enum PACKED
 # define SSL_HS_CLIENT_KEY_EXCHANGE  (uint8_t) 16
 # define SSL_HS_FINISHED             (uint8_t) 20
 # define SSL_HS_CERTIFICATE_STATUS   (uint8_t) 22
+
+/* TLS 1.3 states. Names are from appendix A. */
+# define SSL_HS_TLS_1_3_START         (uint8_t) 23
+# define SSL_HS_TLS_1_3_RECVD_CH      (uint8_t) 24
+# define SSL_HS_TLS_1_3_NEGOTIATED    (uint8_t) 25
+# define SSL_HS_TLS_1_3_WAIT_FLIGHT_2 (uint8_t) 26
+# define SSL_HS_TLS_1_3_WAIT_EOED     (uint8_t) 27
+# define SSL_HS_TLS_1_3_WAIT_CERT     (uint8_t) 28
+# define SSL_HS_TLS_1_3_WAIT_CV       (uint8_t) 29
+# define SSL_HS_TLS_1_3_WAIT_FINISHED (uint8_t) 30
+# define SSL_HS_TLS_1_3_SEND_NST      (uint8_t) 31
+
+/* TLS 1.3 client-specific states. */
+# define SSL_HS_TLS_1_3_WAIT_SH       (uint8_t) 32
+# define SSL_HS_TLS_1_3_WAIT_EE       (uint8_t) 33
+# define SSL_HS_TLS_1_3_WAIT_CERT_CR  (uint8_t) 34
+# define SSL_HS_TLS_1_3_SEND_FINISHED (uint8_t) 35
+
 # define SSL_HS_ALERT                (uint8_t) 252  /* ChangeCipherSuite (internal) */
 # define SSL_HS_CCC                  (uint8_t) 253  /* ChangeCipherSuite (internal) */
 # define SSL_HS_NONE                 (uint8_t) 254  /* No recorded state (internal) */
 # define SSL_HS_DONE                 (uint8_t) 255  /* Handshake complete (internal) */
+
+/*
+  Note that the numbering does not match the TLS 1.3 PskKeyExchangeMode
+  definition, where psk_ke = 0. This is because we wish to reserve 0 for
+  "none" (i.e. non-PSK mode).
+
+  For reference:
+  enum { psk_ke(0), psk_dhe_ke(1), (255) } PskKeyExchangeMode;
+*/
+typedef enum psk_key_exchange_mode
+{
+    psk_keyex_mode_none = 0,
+    psk_keyex_mode_psk_ke = 1,
+    psk_keyex_mode_psk_dhe_ke = 2
+} psk_key_exchange_mode_e;
+
+# ifdef USE_TLS_1_3
+
+/* Last 8 bytes of server_random used for TLS 1.3 downgrade protection
+   (4.1.3 in RFC 8446) */
+#define TLS13_DOWNGRADE_PROT_TLS12          "\x44\x4f\x57\x4e\x47\x52\x44\x01"
+#define TLS13_DOWNGRADE_PROT_TLS11_OR_BELOW "\x44\x4f\x57\x4e\x47\x52\x44\x00"
+
+typedef struct
+{
+    uint32_t generateEarlySecretDone : 1;
+    uint32_t deriveHandshakeTrafficSecretsDone : 1;
+    uint32_t deriveHandshakeKeysDone : 1;
+    uint32_t deriveAppTrafficSecretsDone : 1;
+    uint32_t deriveEarlyDataKeysDone : 1;
+    uint32_t deriveAppKeysDone : 1;
+    uint32_t deriveServerFinishedKeyDone : 1;
+    uint32_t deriveClientFinishedKeyDone : 1;
+    uint32_t generateRandomDone : 1;
+    uint32_t snapshotCHtoSHDone : 1;
+    uint32_t generateEcdheKeyDone : 1;
+    uint32_t generateVerifyDataDone : 1;
+    uint32_t generateCvSigDone : 1;
+} tls13_flight_state_t;
+# endif
 
 # define INIT_ENCRYPT_CIPHER     0
 # define INIT_DECRYPT_CIPHER     1
@@ -548,6 +555,7 @@ enum PACKED
     HASH_SIG_SHA256_RSA_MASK = 1 << HASH_SIG_SHA256,
     HASH_SIG_SHA384_RSA_MASK = 1 << HASH_SIG_SHA384,
     HASH_SIG_SHA512_RSA_MASK = 1 << HASH_SIG_SHA512,
+
     /* For ECDSA we set a bit in the high byte */
     HASH_SIG_SHA1_ECDSA_MASK = 0x100 << HASH_SIG_SHA1,
     HASH_SIG_SHA256_ECDSA_MASK = 0x100 << HASH_SIG_SHA256,
@@ -556,7 +564,7 @@ enum PACKED
 };
 
 /** Return a unique flag for the given HASH_SIG_ALG. */
-static __inline uint16_t HASH_SIG_MASK(uint8_t hash, uint8_t sig)
+static inline uint16_t HASH_SIG_MASK(uint8_t hash, uint8_t sig)
 {
     /* TODO - do better validation on hash and sig */
     hash = 1 << (hash & 0x7);
@@ -585,6 +593,27 @@ static __inline uint16_t HASH_SIG_MASK(uint8_t hash, uint8_t sig)
 # define TLS_1_0_MIN_VER     TLS_MIN_VER
 # define TLS_1_1_MIN_VER     2
 # define TLS_1_2_MIN_VER     3
+# define TLS_1_3_MIN_VER     4
+
+# define TLS_1_3_VER 0x0304
+# define TLS_1_3_DRAFT_MAJ_VER 0x7f /* Only used in supported_versions ext. */
+# define TLS_1_3_DRAFT_22_MIN_VER 0x16 /* Draft 22 */
+# define TLS_1_3_DRAFT_22_VER 0x7f16
+# define TLS_1_3_DRAFT_23_MIN_VER 0x17 /* Draft 23 */
+# define TLS_1_3_DRAFT_23_VER 0x7f17
+# define TLS_1_3_DRAFT_24_MIN_VER 0x18 /* Draft 24 */
+# define TLS_1_3_DRAFT_24_VER 0x7f18
+# define TLS_1_3_DRAFT_26_MIN_VER 0x1a /* Draft 26 */
+# define TLS_1_3_DRAFT_26_VER 0x7f1a
+# define TLS_1_3_DRAFT_28_MIN_VER 0x1c /* Draft 28 */
+# define TLS_1_3_DRAFT_28_VER 0x7f1c
+ /* By default, use the RFC instead of draft spec. */
+# ifndef TLS_1_3_DRAFT_MIN_VER
+#  define TLS_1_3_DRAFT_MIN_VER TLS_1_3_MIN_VER
+# endif
+# ifndef TLS_1_3_DEFAULT_DRAFT_MIN_VER
+#  define TLS_1_3_DEFAULT_DRAFT_MIN_VER TLS_1_3_MIN_VER /* Use RFC version by default*/
+# endif
 
 /* Based on settings, define the highest TLS version available */
 # if defined(USE_TLS_1_2) && !defined(DISABLE_TLS_1_2)
@@ -661,6 +690,13 @@ static __inline uint16_t HASH_SIG_MASK(uint8_t hash, uint8_t sig)
 /* Defined in https://tools.ietf.org/html/draft-ietf-tls-chacha20-poly1305 */
 #  define TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256     0xCCA8 /* 52392 */
 #  define TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256   0xCCA9 /* 52393 */
+/* TLS 1.3 ciphersuites. */
+#  define TLS_AES_128_GCM_SHA256                 0x1301 /* 4865 */
+#  define TLS_AES_256_GCM_SHA384                 0x1302 /* 4866 */
+#  define TLS_CHACHA20_POLY1305_SHA256           0x1303 /* 4867 */
+#  define TLS_AES_128_CCM_SHA_256                0x1304 /* 4868 */
+#  define TLS_AES_128_CCM_8_SHA256               0x1305 /* 4869 */
+
 
 /*
     Supported HELLO extensions
@@ -668,17 +704,30 @@ static __inline uint16_t HASH_SIG_MASK(uint8_t hash, uint8_t sig)
     @see https://www.iana.org/assignments/tls-extensiontype-values/tls-extensiontype-values.xhtml
  */
 # define EXT_SNI                              0
+# define EXT_SERVER_NAME                      0 /* SNI renamed in TLS 1.3 */
 # define EXT_MAX_FRAGMENT_LEN                 1
 # define EXT_TRUSTED_CA_KEYS                  3
 # define EXT_TRUNCATED_HMAC                   4
 # define EXT_STATUS_REQUEST                   5 /* OCSP */
 # define EXT_ELLIPTIC_CURVE                  10 /* Client-send only */
+# define EXT_SUPPORTED_GROUPS                10 /* ELLIPTIC_CURVE renamed in 1.3 */
 # define EXT_ELLIPTIC_POINTS                 11
 # define EXT_SIGNATURE_ALGORITHMS            13
 # define EXT_ALPN                            16
 # define EXT_SIGNED_CERTIFICATE_TIMESTAMP    18
 # define EXT_EXTENDED_MASTER_SECRET          23
 # define EXT_SESSION_TICKET                  35
+# define EXT_KEY_SHARE_PRE_DRAFT_23          40 /* Up to 1.3 draft 22 */
+# define EXT_PRE_SHARED_KEY                  41
+# define EXT_EARLY_DATA                      42
+# define EXT_SUPPORTED_VERSIONS              43
+# define EXT_COOKIE                          44
+# define EXT_PSK_KEY_EXCHANGE_MODES          45
+# define EXT_CERTIFICATE_AUTHORITIES         47
+# define EXT_OID_FILTERS                     48
+# define EXT_POST_HANDSHAKE_AUTH             49
+# define EXT_SIGNATURE_ALGORITHMS_CERT       50
+# define EXT_KEY_SHARE                       51 /* Since 1.3 draft 23. */
 # define EXT_RENEGOTIATION_INFO              0xFF01
 
 /* How large the ALPN extension arrary is.  Number of protos client can talk */
@@ -714,16 +763,6 @@ static __inline uint16_t HASH_SIG_MASK(uint8_t hash, uint8_t sig)
 # define     SSL_HS_MASTER_SIZE      48
 # define     SSL_MAX_SESSION_ID_SIZE 32
 
-/*
-    TLS implementations supporting these ciphersuites MUST support
-    arbitrary PSK identities up to 128 octets in length, and arbitrary
-    PSKs up to 64 octets in length.  Supporting longer identities and
-    keys is RECOMMENDED.
- */
-# define SSL_PSK_MAX_KEY_SIZE    64  /* Must be < 256 due to 'idLen' */
-# define SSL_PSK_MAX_ID_SIZE     128 /* Must be < 256 due to 'idLen' */
-# define SSL_PSK_MAX_HINT_SIZE   32  /* ServerKeyExchange hint is non-standard */
-
 # ifdef USE_DTLS
 #  define MAX_FRAGMENTS   16
 #  define PS_MIN_PMTU     256
@@ -734,110 +773,7 @@ typedef struct
     int32 fragLen;
     char *hsHeader;
 } dtlsFragHdr_t;
-
-#  include "../core/psLog.h"
-#  ifdef PS_LOGF_COMMON
-#   define psTraceDtls(x) PS_LOGF_COMMON(Log_Trace, PS_DTLS, PS_LOGF_FMT, \
-                                         PS_LOGF_FILELINE, "%s", x)
-#   define psTraceIntDtls(x, i) PS_LOGF_COMMON(Log_Trace, PS_DTLS,      \
-                                               PS_LOGF_FMT,             \
-                                               PS_LOGF_FILELINE, x, i)
-#   define psTraceStrDtls(x, s) PS_LOGF_COMMON(Log_Trace, PS_DTLS,      \
-                                               PS_LOGF_FMT,             \
-                                               PS_LOGF_FILELINE, x, s)
-#   define psTracePtrDtls(x, p) PS_LOGF_COMMON(Log_Trace, PS_DTLS,      \
-                                               PS_LOGF_FMT,             \
-                                               PS_LOGF_FILELINE, x, p)
-#   define psTracefDtls(x, ...) PS_LOGF_COMMON(Log_Trace, PS_DTLS,      \
-                                               PS_LOGF_FMT,             \
-                                               PS_LOGF_FILELINE, x, __VA_ARGS__)
-#  else
-#   ifndef USE_DTLS_DEBUG_TRACE
-#    define psTraceDtls(x)
-#    define psTraceIntDtls(x, y)
-#    define psTraceStrDtls(x, y)
-#   else
-#    define psTraceDtls(x) _psTrace(x)
-#    define psTraceIntDtls(x, y) _psTraceInt(x, y)
-#    define psTraceStrDtls(x, y) _psTraceStr(x, y)
-#   endif /* USE_DTLS_DEBUG_TRACE */
-#  endif /* PS_LOGF_COMMON */
-
-# endif  /* USE_DTLS */
-
-# ifdef PS_LOGF_COMMON
-#  define psTraceHs(x) PS_LOGF_COMMON(Log_Trace, PS_MATRIXSSL_HS, PS_LOGF_FMT, \
-                                      PS_LOGF_FILELINE, "%s", x)
-#  define psTraceStrHs(x, s) PS_LOGF_COMMON(Log_Trace, PS_MATRIXSSL_HS, \
-                                            PS_LOGF_FMT,                \
-                                            PS_LOGF_FILELINE, x, s)
-# else
-#  ifndef USE_SSL_HANDSHAKE_MSG_TRACE
-#   define psTraceHs(x)
-#   define psTraceStrHs(x, y)
-#  else
-#   define psTraceHs(x) _psTrace(x)
-#   define psTraceStrHs(x, y) _psTraceStr(x, y)
-#  endif /* USE_SSL_HANDSHAKE_MSG_TRACE */
-# endif /* PS_LOGF_COMMON */
-
-# ifdef PS_LOGF_COMMON
-#  define psTraceInfo(x) PS_LOGF_COMMON(Log_Info, PS_MATRIXSSL, PS_LOGF_FMT, \
-                                        PS_LOGF_FILELINE, "%s", x)
-#  define psTraceIntInfo(x, i) PS_LOGF_COMMON(Log_Info, PS_MATRIXSSL, \
-                                              PS_LOGF_FMT,              \
-                                              PS_LOGF_FILELINE, x, i)
-#  define psTraceStrInfo(x, s) PS_LOGF_COMMON(Log_Info, PS_MATRIXSSL, \
-                                              PS_LOGF_FMT,              \
-                                              PS_LOGF_FILELINE, x, s)
-# else
-#  ifndef USE_SSL_INFORMATIONAL_TRACE
-#   define psTraceInfo(x)
-#   define psTraceStrInfo(x, y)
-#   define psTraceIntInfo(x, y)
-#  else
-#   define psTraceInfo(x) _psTrace(x)
-#   define psTraceStrInfo(x, y) _psTraceStr(x, y)
-#   define psTraceIntInfo(x, y) _psTraceInt(x, y)
-#  endif /* USE_SSL_INFORMATIONAL_TRACE */
-# endif /* PS_LOGF_COMMON */
-
-# ifdef USE_SSL_INFORMATIONAL_TRACE
-void psPrintSigAlgs(uint16_t sigAlgs, const char *where);
-void psPrintProtocolVersion(const char *where,
-        unsigned char majVer,
-        unsigned char minVer,
-        psBool_t addNewline);
-#  define psTracePrintSigAlgs(sigAlgs, where) \
-    psPrintSigAlgs(sigAlgs, where)
-#  define psTracePrintProtocolVersion(where, majVer, minVer, addNewline) \
-    psPrintProtocolVersion(where, majVer, minVer, addNewline)
-# else
-#  define psTracePrintSigAlgs(sigAlgs, where)
-#  define psTracePrintProtocolVersion(where, majVer, minVer, addNewline)
-# endif /* USE_SSL_INFORMATIONAL_TRACE */
-
-# if defined(USE_SERVER_SIDE_SSL) || defined(USE_CLIENT_AUTH)
-psBool_t weSupportSigAlg(int32_t sigAlg,
-        int32_t pubKeyAlgorithm);
-psBool_t peerSupportsSigAlg(int32_t sigAlg,
-        uint16_t peerSigAlgs);
-psBool_t canUseSigAlg(int32_t sigAlg,
-        int32_t pubKeyAlgorithm,
-        uint16_t peerSigAlgs);
-int32_t upgradeSigAlg(int32_t sigAlg, int32_t pubKeyAlgorithm);
-int32_t chooseSigAlgInt(int32_t certSigAlg,
-        psSize_t keySize,
-        int32_t pubKeyAlgorithm,
-        uint16_t peerSigAlgs);
-int32_t chooseSigAlg(psX509Cert_t *cert,
-        psPubKey_t *privKey,
-        uint16_t peerSigAlgs);
-int32_t getSignatureAndHashAlgorithmEncoding(uint16_t sigAlgOid,
-        unsigned char *b1,
-        unsigned char *b2,
-        uint16_t *hashSize);
-# endif
+# endif /* USE_DTLS */
 
 /******************************************************************************/
 
@@ -875,7 +811,7 @@ typedef enum
 typedef struct
 {
     expectedNameType_t nameType; /* Type of expectedName. */
-    uint32_t flags; /* General flags for controling the validation
+    uint64_t flags; /* General flags for controling the validation
                        prodecure. The allowed flags have the
                        VCERTS_FLAG_ prefix. */
     uint32_t mFlags; /* Flags for controlling how expectedName should
@@ -957,9 +893,44 @@ typedef struct psPsk
 } psPsk_t;
 # endif /* USE_PSK_CIPHER_SUITE */
 
-typedef int32_t (*pskCb_t)(struct ssl *ssl,
-                           const unsigned char pskId[SSL_PSK_MAX_ID_SIZE], uint8_t pskIdLen,
-                           unsigned char *psk[SSL_PSK_MAX_KEY_SIZE], uint8_t *pskLen);
+# ifdef USE_TLS_1_3
+/* TLS 1.3 session parameters associated with a PSK. */
+struct psTls13SessionParams
+{
+    unsigned char *sni;
+    psSize_t sniLen;
+    unsigned char *alpn;
+    psSize_t alpnLen;
+    unsigned char majVer;
+    unsigned char minVer;
+    uint16_t cipherId;
+    psTime_t timestamp;
+    uint32_t ticketAgeAdd;
+    uint32_t ticketLifetime;
+    uint32_t maxEarlyData;
+};
+
+#  define TLS_1_3_TICKET_LIFETIME 360 /* Seconds */
+/* The time window in which server's and client's calculated
+   ticket ages must be in order for the early data to be
+   accepted. TLS1.3 spec chapter 8 suggests that in the
+   Internet applications this should be around 10 seconds
+   but in applications where the round trip time (RTT) is more
+   predicatble it could be less */
+#  define TLS_1_3_EARLY_DATA_TICKET_AGE_WINDOW 10000 /* Milliseconds */
+
+struct psTls13Psk
+{
+    unsigned char *pskKey;
+    psSize_t pskLen;
+    unsigned char *pskId;
+    psSize_t pskIdLen;
+    psBool_t isResumptionPsk;
+    psTls13SessionParams_t *params;
+    struct psTls13Psk *next;
+};
+
+# endif /* USE_TLS_1_3 */
 
 # if defined(USE_SERVER_SIDE_SSL) && defined(USE_STATELESS_SESSION_TICKETS)
 typedef int32 (*sslSessTicketCb_t)(void *keys, unsigned char[16], short);
@@ -1003,16 +974,46 @@ typedef struct
 } ephemeralKeyCache_t;
 # endif /* defined(USE_ECC) || defined(REQUIRE_DH_PARAMS) */
 
-typedef struct
+
+#ifdef USE_IDENTITY_CERTIFICATES
+/* Public key mechanism based identity for the TLS party.
+
+   Each client may have zero, or more identifying keypairs to choose from. If
+   the server requires client authentication, the keypair whose certificate
+   was issued by one of the accepted issuers (from the CERTIFICATE_REQUEST
+   payload) is used. In case of multiple matches, the key pair added first
+   will take precedence.
+
+   If none of the keys match, again, the first added key pair is used.
+
+   See function 'matrixSslNewSession' for initiating client connection.
+   See function o
+ */
+typedef struct sslIdentity
 {
-    psPool_t *pool;
-# if defined(USE_SERVER_SIDE_SSL) || defined(USE_CLIENT_AUTH)
-    /* TODO - verify that the public part of the privKey is equal to the pubkey */
-    /* in the cert */
+    /* Keypair and corresponding certificate (chain) for this identity. */
     psPubKey_t privKey;
     psX509Cert_t *cert;
-# endif /* USE_SERVER_SIDE_SSL || USE_CLIENT_AUTH */
+
+    /* Next identity for the party. */
+    struct sslIdentity *next;
+} sslIdentity_t;
+#endif /* USE_IDENTITY_CERTIFICATES */
+
+struct sslKeys
+{
+    psPool_t *pool;
+# ifdef USE_IDENTITY_CERTIFICATES
+    /* The known public key based identities for the party. One of these gets
+       select as pkIdentityChosen based on locally, and remotely supported
+       algorithms, and reveived certificate request payloads. */
+    sslIdentity_t *identity;
+# endif
+
 # if defined(USE_CLIENT_SIDE_SSL) || defined(USE_CLIENT_AUTH)
+    /* For a client this is the set of trust anchors used to authenticate the
+       server, and for the server side this is set of trusted client
+       certificate issuers. */
     psX509Cert_t *CAcerts;
 # endif /* USE_CLIENT_SIDE_SSL || USE_CLIENT_AUTH */
 # ifdef REQUIRE_DH_PARAMS
@@ -1020,6 +1021,9 @@ typedef struct
 # endif /* REQUIRE_DH_PARAMS */
 # ifdef USE_PSK_CIPHER_SUITE
     psPsk_t *pskKeys;
+# ifdef USE_TLS_1_3
+    psTls13Psk_t *tls13PskKeys;
+# endif
 # endif /* USE_PSK_CIPHER_SUITE */
 # if defined(USE_SERVER_SIDE_SSL) && defined(USE_STATELESS_SESSION_TICKETS)
     psSessionTicketKeys_t *sessTickets;
@@ -1034,11 +1038,11 @@ typedef struct
 # if defined(USE_ECC) || defined(REQUIRE_DH_PARAMS)
     ephemeralKeyCache_t cache;
 # endif
-} sslKeys_t;
+};
 
 /******************************************************************************/
 /* Type to pass optional features to NewSession calls */
-typedef struct
+struct sslSessOpts
 {
     short ticketResumption;     /* Client: 1 to use.  Server N/A */
     short maxFragLen;           /* Client: 512 etc..  Server: -1 to disable */
@@ -1057,16 +1061,15 @@ typedef struct
                                                        CertificateVerify externally. */
 # endif /* USE_EXT_CERTIFICATE_VERIFY_SIGNING */
     int32 versionFlag;                              /* The SSL_FLAGS_TLS_ version (+ DTLS flag here) */
-#ifdef USE_CLIENT_SIDE_SSL
-    uint8_t clientRejectVersionDowngrade;             /* Send SSL_ALERT_PROTOCOL_VERSION if server proposes
-                                                         a lower version than what the client sent in the
-                                                         ClientHello. Effectively, this ensures that only
-                                                         the version in versionFlag can be negotiated. */
-#endif /* USE_CLIENT_SIDE_SSL */
-    psBool_t disableTls1_0;
-#ifdef USE_SERVER_SIDE_SSL
-    psBool_t serverDisableTls1_2;
-#endif /* USE_SERVER_SIDE_SSL */
+    int32_t supportedVersions[TLS_MAX_SUPPORTED_VERSIONS]; /* Priority list of supported protocol versions*/
+    psSize_t supportedVersionsLen;
+# ifdef USE_TLS_1_3
+    uint16_t tls13SupportedSigAlgsCert[TLS_MAX_SIGNATURE_ALGORITHMS];
+    psSize_t tls13SupportedSigAlgsCertLen;
+    psSize_t tls13SessionMaxEarlyData;            /* For server this defines what is the max early
+                                                       data value for the new session tickets. Not used
+                                                       for clients. */
+# endif
     void *userPtr;                                  /* Initial value of ssl->userPtr during NewSession */
     void *memAllocPtr;                              /* Will be passed to psOpenPool for each call
                                                        related to this session */
@@ -1077,26 +1080,22 @@ typedef struct
     matrixValidateCertsOptions_t validateCertsOpts; /* Certificate validation
                                                        options. */
     void *userDataPtr; /* Initial value of ssl->userDataPtr during NewSession. */
-} sslSessOpts_t;
-
-typedef struct
-{
-    unsigned short keyType;
-    unsigned short hashAlg;
-    unsigned short curveFlags;
-    unsigned short dhParamsRequired;
-    char *serverName;
-} sslPubkeyId_t;
-
-typedef sslKeys_t *(*pubkeyCb_t)(struct ssl *ssl, const sslPubkeyId_t *keyId);
-typedef int32_t (*sslExtCb_t)(struct ssl *ssl, uint16_t extType, uint8_t extLen,
-                              void *e);
-typedef int32_t (*sslCertCb_t)(struct ssl *ssl, psX509Cert_t *cert, int32_t alert);
-
-# ifdef USE_OCSP_RESPONSE
-typedef int32_t (*ocspCb_t)(struct ssl *ssl, psOcspResponse_t *response,
-                            psX509Cert_t *cert, int32_t status);
-# endif /* USE_OCSP_RESPONSE */
+    uint16_t tls13SupportedGroups[TLS_1_3_MAX_GROUPS];
+    psSize_t tls13SupportedGroupsLen;
+    psSize_t tls13NumClientHelloKeyShares;
+    uint16_t supportedSigAlgs[TLS_MAX_SIGNATURE_ALGORITHMS];
+    psSize_t supportedSigAlgsLen;
+    psSizeL_t tls13PadLen;
+    psSizeL_t tls13BlockSize;
+    psBool_t tls13CiphersuitesEnabledClient;
+    /* Minimum DH modulus size the client is willing to accept
+       from the server in ServerKeyExchange. This setting
+       affects client-side handshake behaviour only. Server-side
+       DH parameters are determined during key loading.
+       The global compile-time setting MIN_DH_BITS is the minimum
+       size of DH parameters MatrixSSL is allowed to load. */
+    psSize_t minDhBits;
+};
 
 /******************************************************************************/
 /*
@@ -1131,6 +1130,72 @@ typedef struct
     psSize_t premasterSize;
 
     unsigned char keyBlock[SSL_MAX_KEY_BLOCK_SIZE];     /* Storage for 'ptr' */
+
+# ifdef USE_TLS_1_3
+    unsigned char tls13EarlySecret[MAX_TLS_1_3_HASH_SIZE];
+    unsigned char tls13ExtBinderSecret[MAX_TLS_1_3_HASH_SIZE];
+    unsigned char tls13EarlyTrafficSecretClient[MAX_TLS_1_3_HASH_SIZE];
+    unsigned char tls13HandshakeSecret[MAX_TLS_1_3_HASH_SIZE];
+    unsigned char tls13HsTrafficSecretClient[MAX_TLS_1_3_HASH_SIZE];
+    unsigned char tls13HsTrafficSecretServer[MAX_TLS_1_3_HASH_SIZE];
+    unsigned char tls13MasterSecret[MAX_TLS_1_3_HASH_SIZE];
+    unsigned char tls13AppTrafficSecretClient[MAX_TLS_1_3_HASH_SIZE];
+    unsigned char tls13AppTrafficSecretServer[MAX_TLS_1_3_HASH_SIZE];
+    unsigned char tls13ResumptionMasterSecret[MAX_TLS_1_3_HASH_SIZE];
+
+    unsigned char tls13HsWriteKey[SSL_MAX_SYM_KEY_SIZE];
+    unsigned char tls13HsWriteIv[SSL_MAX_IV_SIZE];
+    unsigned char tls13HsReadKey[SSL_MAX_SYM_KEY_SIZE];
+    unsigned char tls13HsReadIv[SSL_MAX_IV_SIZE];
+    unsigned char tls13EarlyDataKey[SSL_MAX_SYM_KEY_SIZE];
+    unsigned char tls13EarlyDataIv[SSL_MAX_IV_SIZE];
+    unsigned char tls13AppWriteKey[SSL_MAX_SYM_KEY_SIZE];
+    unsigned char tls13AppWriteIv[SSL_MAX_IV_SIZE];
+    unsigned char tls13AppReadKey[SSL_MAX_SYM_KEY_SIZE];
+    unsigned char tls13AppReadIv[SSL_MAX_IV_SIZE];
+
+    unsigned char tls13WriteKey[SSL_MAX_SYM_KEY_SIZE];
+    unsigned char tls13WriteIv[SSL_MAX_IV_SIZE];
+    unsigned char tls13ReadKey[SSL_MAX_SYM_KEY_SIZE];
+    unsigned char tls13ReadIv[SSL_MAX_IV_SIZE];
+
+    unsigned char tls13TrHashSnapshot[MAX_TLS_1_3_HASH_SIZE];
+    unsigned char tls13TrHashSnapshotCH[MAX_TLS_1_3_HASH_SIZE];
+    unsigned char tls13TrHashSnapshotCHSha384[MAX_TLS_1_3_HASH_SIZE];
+    unsigned char tls13TrHashSnapshotCH1[MAX_TLS_1_3_HASH_SIZE];
+    unsigned char tls13TrHashSnapshotCHtoSH[MAX_TLS_1_3_HASH_SIZE];
+    unsigned char tls13TrHashSnapshotCHWithoutBinders[MAX_TLS_1_3_HASH_SIZE];
+    unsigned char tls13ExtBinderKey[MAX_TLS_1_3_HASH_SIZE];
+    unsigned char tls13FinishedKey[MAX_TLS_1_3_HASH_SIZE];
+    unsigned char tls13VerifyData[MAX_TLS_1_3_HASH_SIZE];
+
+    unsigned char *tls13CvSig;
+    psSize_t tls13CvSigLen;
+    uint16_t tls13CvSigAlg;
+    uint16_t tls13PeerCvSigAlg;
+
+    unsigned char *tls13CookieFromServer;
+    psSize_t tls13CookieFromServerLen;
+    psBool_t tls13ClientCookieOk;
+
+    short tls13ExtendedMasterSecretOpt;
+
+    psTls13Psk_t *tls13SessionPskList;
+    psTls13Psk_t *tls13ChosenPsk;
+    uint16_t tls13SelectedIdentityIndex;
+    psBool_t tls13UsingPsk;
+    psSize_t tls13BindersLen;
+    const unsigned char *tls13CHStart;
+    psSizeL_t tls13CHLen;
+    psk_key_exchange_mode_e tls13ClientPskModes[2];
+    psSize_t tls13ClientPskModesLen;
+    psk_key_exchange_mode_e tls13ChosenPskMode;
+
+    tls13_flight_state_t tls13KsState;
+    psSha256_t tls13msgHashSha256;
+    psSha384_t tls13msgHashSha384;
+# endif /* USE_TLS_1_3 */
+
 # ifdef USE_NATIVE_TLS_ALGS
     unsigned char *wMACptr;
     unsigned char *rMACptr;
@@ -1154,11 +1219,17 @@ typedef struct
     unsigned char seq[8];
     unsigned char remSeq[8];
 
+# ifdef USE_SERVER_SIDE_SSL
     pskCb_t pskCb;
+    pubkeyCb_t pubkeyCb;
+# endif
 
 # ifndef USE_ONLY_PSK_CIPHER_SUITE
-    pubkeyCb_t pubkeyCb;
+    sslKeySelectInfo_t keySelect;
+    sslIdentityCb_t identityCb;
 #  if defined(USE_CLIENT_SIDE_SSL) || defined(USE_CLIENT_AUTH)
+    /* Client side identity callback, and a pointer to client side
+       identity key selectors for external certificate/key loading */
     psX509Cert_t *cert;
     sslCertCb_t validateCert;
 #  endif /* USE_CLIENT_SIDE_SSL || USE_CLIENT_AUTH */
@@ -1221,6 +1292,10 @@ typedef struct
     psEccKey_t *eccKeyPriv;           /* local key */
     psEccKey_t *eccKeyPub;            /* remote key */
     psPool_t *eccDhKeyPool;           /* handshake-scope pool for clients */
+    unsigned char *x25519KeyPub;
+#  ifdef USE_TLS_1_3
+    psPubKey_t *tls13KeyAgreeKeys[TLS_1_3_MAX_GROUPS];
+#  endif
 # endif
 
     int32 anon;
@@ -1265,7 +1340,7 @@ enum sessionTicketState_e
 # endif
 
 /* Used by user code to store cached session info after the ssl_t is closed */
-typedef struct
+struct sslSessionId
 {
     psPool_t *pool;
     unsigned char id[SSL_MAX_SESSION_ID_SIZE];
@@ -1277,7 +1352,10 @@ typedef struct
     psSize_t sessionTicketLen;          /* Max 32767 */
     uint32 sessionTicketLifetimeHint;
 # endif
-} sslSessionId_t;
+# ifdef USE_TLS_1_3
+    psTls13Psk_t *psk;
+# endif
+};
 
 /* Used internally by the session cache table to store session parameters */
 typedef struct
@@ -1332,17 +1410,23 @@ typedef struct
 typedef struct nextMsgInFlight
 {
     unsigned char *start;
+# ifdef USE_TLS_1_3
+    unsigned char *recStart;
+    psBool_t alreadyHashed;
+# endif
     unsigned char *seqDelay;
     int32 len;
     int32 type;
     int32 messageSize;
     int32 padLen;
     int32 hsMsg;
+    psSize_t fragId; /* How manyeth fragment is this for hsMsg (0 - n) */
 # ifdef USE_DTLS
     int32 fragCount;
 # endif
     struct nextMsgInFlight *next;
 } flightEncode_t;
+
 
 struct ssl
 {
@@ -1350,8 +1434,10 @@ struct ssl
 
     sslSec_t sec;                   /* Security structure */
 
-    sslKeys_t *keys;                /* SSL public and private keys */
-
+    sslKeys_t *keys;                /* SSL public and private - keys confiured. */
+# ifdef USE_IDENTITY_CERTIFICATES
+    sslIdentity_t *chosenIdentity;  /* Keys chosen for authentication */
+# endif
     pkaAfter_t pkaAfter[2];         /* Cli-side cli-auth = two PKA in flight */
 # ifdef USE_EXT_CERTIFICATE_VERIFY_SIGNING
     uint8_t extCvSigOpInUse;
@@ -1364,7 +1450,22 @@ struct ssl
     unsigned char *extCvOrigFlightEnd;
 # endif /* USE_EXT_CERTIFICATE_VERIFY_SIGNING */
 # ifdef USE_EXT_CLIENT_CERT_KEY_LOADING
+/*
+  Note: these flags, stored in ssl->extClientCertKeyStateFlags,
+  define the state of the "external client cert loading
+  feature". These are mutually exclusive, except
+  for GOT_CERTIFICATE_REQUEST and GOT_SERVER_HELLO_DONE.
+  This is because we try to prepare for the case where
+  these HS messages are decoded in different calls to
+  matrixSslReceivedData.
+*/
+#define EXT_CLIENT_CERT_KEY_STATE_INIT 0
+#define EXT_CLIENT_CERT_KEY_STATE_GOT_CERTIFICATE_REQUEST 1
+#define EXT_CLIENT_CERT_KEY_STATE_GOT_SERVER_HELLO_DONE 2
+#define EXT_CLIENT_CERT_KEY_STATE_WAIT_FOR_CERT_KEY_UPDATE 4
+#define EXT_CLIENT_CERT_KEY_STATE_GOT_CERT_KEY_UPDATE 8
     uint32_t extClientCertKeyStateFlags; /* Flags: EXT_CLIENT_CERT_KEY_* */
+
 # endif /* USE_EXT_CLIENT_CERT_KEY_LOADING */
     flightEncode_t *flightEncode;
     unsigned char *delayHsHash;
@@ -1382,10 +1483,12 @@ struct ssl
     char *expectedName;               /* Clients: The expected cert subject name
                                               passed to NewClient Session
                                          Servers: Holds SNI value */
+    tlsExtension_t *userExt; /* User provided extensions from session options.
+                                Stored here for reuse in renegotiations and in
+                                responses to TLS 1.3 HRRs. */
 # ifdef USE_SERVER_SIDE_SSL
     uint16 disabledCiphers[SSL_MAX_DISABLED_CIPHERS];
-    void (*sni_cb)(void *ssl, char *hostname, int32 hostnameLen,
-                   sslKeys_t **newKeys);
+    sniCb_t sni_cb;
 #  ifdef USE_ALPN
     void (*srv_alpn_cb)(void *ssl, short protoCount,
         char *proto[MAX_PROTO_EXT],
@@ -1393,21 +1496,14 @@ struct ssl
     char *alpn;              /* proto user has agreed to use */
     int32 alpnLen;
 #  endif /* USE_ALPN */
-# ifdef USE_TLS_1_2_TOGGLE
-    psBool_t disable_tls_1_2; /* Allow to disable TLS 1.2 dynamically.
-                                 (Servers only). */
-#  endif /* USE_TLS_1_2_TOGGLE */
 # endif /* USE_SERVER_SIDE_SSL */
-
-#  ifdef USE_TLS_1_0_TOGGLE
-    psBool_t disable_tls_1_0; /* Allow to disable TLS 1.0 dynamically. */
-#  endif /* USE_TLS_1_0_TOGGLE */
-
 # ifdef USE_CLIENT_SIDE_SSL
     /* Just to handle corner case of app data tacked on HELLO_REQUEST */
     int32 anonBk;
     int32 flagsBk;
     uint32 bFlagsBk;
+
+    sslExtCb_t extCb;
 # endif /* USE_CLIENT_SIDE_SSL */
 
 # if defined(USE_HARDWARE_CRYPTO_RECORD) || defined (USE_HARDWARE_CRYPTO_PKA) || defined(USE_EXT_CERTIFICATE_VERIFY_SIGNING)
@@ -1427,8 +1523,16 @@ struct ssl
     uint32 fragIndex;           /* How much data has been written to msg */
     uint32 fragTotal;           /* Total length of fragmented message */
 
-    /* Pointer to the negotiated cipher information */
+    /* Pointer to the negotiated ciphersuite. Note that this cipher
+       may not have been activated yet. */
     const sslCipherSpec_t *cipher;
+
+    /* Pointer to the currently active read and write ciphers.
+       Currently only used with ChaCha20 suites. */
+# ifdef USE_CHACHA20_POLY1305_IETF_CIPHER_SUITE
+    const sslCipherSpec_t *activeReadCipher;
+    const sslCipherSpec_t *activeWriteCipher;
+# endif
 
     /*  Symmetric cipher callbacks
 
@@ -1468,10 +1572,57 @@ struct ssl
     uint8_t reqMinVer;
     uint8_t majVer;
     uint8_t minVer;
-#ifdef USE_CLIENT_SIDE_SSL
-    uint8_t clientRejectVersionDowngrade;
-#endif /* USE_CLIENT_SIDE_SSL */
+
+    uint16_t supportedVersions[TLS_MAX_SUPPORTED_VERSIONS];
+    psSize_t supportedVersionsLen;
+
+#ifdef USE_TLS_1_3
+    /* The supported versions array is the client's supported
+     * versions list. It is either set through the API (when MatrixSSL is
+     * client) or filled when ClientHello is received (when MatrixSSL is
+     * server) */
+    uint8_t tls13NegotiatedMinorVer;
+    psBool_t tls13IncorrectDheKeyShare;
+    uint16_t tls13PeerSupportedVersions[TLS_MAX_SUPPORTED_VERSIONS];
+    psSize_t tls13PeerSupportedVersionsLen;
+    psBool_t gotTls13CiphersuiteInCH; /* Does CH contain any 1.3 suites? */
+    uint16_t tls13SupportedSigAlgsCert[TLS_MAX_SIGNATURE_ALGORITHMS];
+    psSize_t tls13SupportedSigAlgsCertLen;
+    uint16_t tls13SupportedGroups[TLS_1_3_MAX_GROUPS];
+    psSize_t tls13SupportedGroupsLen;
+    uint16_t tls13PeerSupportedGroups[TLS_1_3_MAX_GROUPS];
+    psSize_t tls13PeerSupportedGroupsLen;
+    uint16_t tls13PeerKeyShareGroups[TLS_1_3_MAX_GROUPS];
+    psSize_t tls13PeerKeyShareGroupsLen;
+    psSize_t tls13NumClientHelloKeyShares;
+    uint16_t tls13NegotiatedGroup;
+    uint16_t tls13HelloRetryRequestGroup;
+    psSizeL_t tls13NextMsgRequiredLen;
+     /* Client's enabled cipher suites from the API */
+    psCipher16_t *tls13ClientCipherSuites;
+    uint8_t tls13ClientCipherSuitesLen;
+    psBool_t tls13CiphersuitesEnabledClient;
+    unsigned char *tls13CertRequestContext;
+    psSize_t tls13CertRequestContextLen;
+    psBool_t tls13GotCertificateRequest;
+    psBool_t tls13SentEmptyCertificate;
+    psBool_t tls13ClientEarlyDataEnabled;
+    psBool_t tls13ServerEarlyDataEnabled;
+    psSize_t tls13SessionMaxEarlyData;
+    psSize_t tls13ReceivedEarlyDataLen;
+    uint32_t tls13EarlyDataStatus;
+    psSizeL_t tls13PadLen;
+    psSizeL_t tls13BlockSize;
+#endif
+    /* This is shared between all TLS versions. */
+    uint16_t supportedSigAlgs[TLS_MAX_SIGNATURE_ALGORITHMS];
+    psSize_t supportedSigAlgsLen;
     uint8_t outRecType;
+    psSize_t outRecLen;
+
+# ifdef USE_DH
+    psSize_t minDhBits;
+# endif
 
 # ifdef ENABLE_SECURE_REHANDSHAKES
     unsigned char myVerifyData[SHA384_HASH_SIZE];   /*SSLv3 max*/
@@ -1486,7 +1637,6 @@ struct ssl
     int32 rehandshakeBytes;           /* Make this an internal define of 10MB */
 # endif /* SSL_REHANDSHAKES_ENABLED */
 
-    sslExtCb_t extCb;
 # ifdef USE_ECC
     struct
     {
@@ -1496,9 +1646,7 @@ struct ssl
 # endif
 # ifdef USE_TLS_1_2
     uint16_t hashSigAlg;
-#  if defined(USE_CLIENT_AUTH) && defined(USE_CLIENT_SIDE_SSL)
     uint16_t serverSigAlgs;
-#  endif /* USE_CLIENT_AUTH && USE_CLIENT_SIDE_SSL */
 # endif /* USE_TLS_1_2 */
 
 # ifdef USE_DTLS
@@ -1587,6 +1735,14 @@ struct ssl
         uint32 deny_truncated_hmac : 1;
         uint32 deny_max_fragment_len : 1;
         uint32 deny_session_ticket : 1;
+        /* Whether the server received this extension. */
+        uint32 got_key_share : 1;
+        uint32 got_supported_versions : 1;
+        uint32 got_pre_shared_key : 1;
+        uint32 got_psk_key_exchange_modes : 1;
+        uint32 got_cookie : 1;
+        uint32 got_early_data : 1;
+        uint32 got_elliptic_points : 1;
 # endif
         /* Set if the extension was negotiated successfully */
         uint32 sni : 1;
@@ -1622,6 +1778,16 @@ struct ssl
 
 typedef struct ssl ssl_t;
 
+# ifdef USE_TLS_1_3
+/** SHA-256 of "HelloRetryRequest": */
+static const unsigned char sha256OfHelloRetryRequest[] =
+{
+  0xcf, 0x21, 0xad, 0x74, 0xe5, 0x9a, 0x61, 0x11, 0xbe, 0x1d, 0x8c, 0x02,
+  0x1e, 0x65, 0xb8, 0x91, 0xc2, 0xa2, 0x11, 0x16, 0x7a, 0xbb, 0x8c, 0x5e,
+  0x07, 0x9e, 0x09, 0xe2, 0xc8, 0xa8, 0x33, 0x9c
+};
+
+#endif /* USE_TLS_1_3 */
 /******************************************************************************/
 /*
     Former public APIS in 1.x and 2.x. Now deprecated in 3.x
@@ -1654,7 +1820,11 @@ extern int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
                                           sslSessOpts_t *options);
 
 # ifdef USE_CLIENT_SIDE_SSL
-extern int32    matrixSslGetSessionId(ssl_t *ssl, sslSessionId_t *sessionId);
+extern int32 matrixSslGetSessionId(ssl_t *ssl, sslSessionId_t *sessionId);
+extern void psCopyHelloExtension(tlsExtension_t *destination,
+        const tlsExtension_t *source);
+extern void psAddUserExtToSession(ssl_t *ssl,
+        const tlsExtension_t *ext);
 # endif /* USE_CLIENT_SIDE_SSL */
 
 # ifdef USE_SSL_INFORMATIONAL_TRACE
@@ -1669,6 +1839,71 @@ PSPUBLIC void matrixSslAddRehandshakeCredits(ssl_t *ssl, int32 credits);
 # ifdef USE_ZLIB_COMPRESSION
 PSPUBLIC int32 matrixSslIsSessionCompressionOn(ssl_t *ssl);
 # endif
+
+# ifdef USE_TLS_1_3
+static inline
+psBool_t tls13UsingAad(ssl_t *ssl)
+{
+    /* AAD is used from draft 26 onwards. */
+    if (ssl->tls13NegotiatedMinorVer == TLS_1_3_MIN_VER ||
+            ssl->tls13NegotiatedMinorVer >= TLS_1_3_DRAFT_26_MIN_VER)
+    {
+        return PS_TRUE;
+    }
+
+    /* If negotiated version is 0, we may be trying to encrypt early
+       data using a PSK-derived key. The PSK may not necessarily
+       have associated version information and even if it did, we
+       do not store the draft version. So, when using using a PSK,
+       we shall assume draft 26 if we are support it. Yes, this
+       is an ugly kludge, but whole draft version mess should
+       disappear once the final RFC has been approved and taken into
+       use. */
+    if (ssl->tls13NegotiatedMinorVer == 0 &&
+            ((ssl->flags & SSL_FLAGS_TLS_1_3) ||
+                    (ssl->flags & SSL_FLAGS_TLS_1_3_DRAFT_26) ||
+                    (ssl->flags & SSL_FLAGS_TLS_1_3_DRAFT_28)))
+    {
+        return PS_TRUE;
+    }
+
+    return PS_FALSE;
+}
+
+static inline
+psBool_t tls13IsResumedHandshake(ssl_t *ssl)
+{
+    if (ssl->sec.tls13UsingPsk &&
+            ssl->sec.tls13ChosenPsk &&
+            ssl->sec.tls13ChosenPsk->isResumptionPsk)
+    {
+        return PS_TRUE;
+    }
+    else
+    {
+        return PS_FALSE;
+    }
+}
+# endif /* USE_TLS_1_3 */
+
+static inline
+psBool_t isResumedHandshake(ssl_t *ssl)
+{
+# ifdef USE_TLS_1_3
+    if (NEGOTIATED_TLS_1_3(ssl))
+    {
+        return tls13IsResumedHandshake(ssl);
+    }
+# endif
+    if (ssl->flags & SSL_FLAGS_RESUMED)
+    {
+        return PS_TRUE;
+    }
+    else
+    {
+        return PS_FALSE;
+    }
+}
 
 /******************************************************************************/
 /*
@@ -1699,6 +1934,9 @@ extern int32 parseClientHelloExtensions(ssl_t *ssl, unsigned char **cp,
                                         unsigned short len);
 extern int32 parseClientKeyExchange(ssl_t *ssl, int32 hsLen, unsigned char **cp,
                                     unsigned char *end);
+extern int32 checkClientHelloVersion(ssl_t *ssl,
+            unsigned char *serverHighestMinor);
+extern int32 checkSupportedVersions(ssl_t *ssl);
 #  ifndef USE_ONLY_PSK_CIPHER_SUITE
 #   ifdef USE_CLIENT_AUTH
 extern int32 parseCertificateVerify(ssl_t * ssl,
@@ -1719,6 +1957,12 @@ extern int32 parseServerHelloDone(ssl_t *ssl, int32 hsLen, unsigned char **cp,
 extern int32 parseServerKeyExchange(ssl_t * ssl,
                                     unsigned char hsMsgHash[SHA512_HASH_SIZE],
                                     unsigned char **cp, unsigned char *end);
+
+extern int32_t checkServerHelloVersion(ssl_t *ssl);
+# ifdef USE_TLS_1_3
+extern int32_t performTls13DowngradeCheck(ssl_t *ssl);
+# endif
+
 #  ifdef USE_OCSP_RESPONSE
 extern int32 parseCertificateStatus(ssl_t *ssl, int32 hsLen, unsigned char **cp,
                                     unsigned char *end);
@@ -1755,6 +1999,360 @@ extern int32 sslActivateWriteCipher(ssl_t *ssl);
 extern int32_t sslUpdateHSHash(ssl_t *ssl, const unsigned char *in, psSize_t len);
 extern int32 sslInitHSHash(ssl_t *ssl);
 extern int32 sslSnapshotHSHash(ssl_t *ssl, unsigned char *out, int32 senderFlag);
+extern int32_t findFromUint16Array(const uint16_t *a,
+        psSize_t aLen,
+        const uint16_t b);
+extern psBool_t anyTls13VersionSupported(ssl_t *ssl);
+extern psBool_t anyNonTls13VersionSupported(ssl_t *ssl);
+extern psBool_t tlsVersionSupported(ssl_t *ssl, const uint8_t minVersion);
+extern psBool_t peerOnlySupportsTls13(ssl_t *ssl);
+extern psBool_t weOnlySupportTls13(ssl_t *ssl);
+extern int32 tlsMinVerToVersionFlag(int32_t minVer);
+extern uint16_t tlsMinVerToOfficialVer(int32_t minVer);
+
+# ifdef USE_CERT_PARSE
+#  if defined(USE_TLS_1_3) || (defined(MATRIX_USE_FILE_SYSTEM) && defined(USE_PKCS12))
+extern void matrixSslReorderCertChain(psX509Cert_t *a_cert);
+#  endif
+# endif
+
+# ifdef USE_TLS_1_3
+/* Parsing. */
+extern int32 matrixSslDecodeTls13(ssl_t *ssl,
+        unsigned char **in,
+        uint32 *len,
+        uint32 size,
+        uint32 *remaining,
+        uint32 *requiredLen,
+        int32 *error,
+        unsigned char *alertLevel,
+        unsigned char *alertDescription);
+extern int32_t tls13ParseEncryptedExtensions(ssl_t *ssl,
+        psParseBuf_t *pb);
+extern int32_t tls13ParseServerHelloExtensions(ssl_t *ssl,
+        psParseBuf_t *pb);
+extern int32_t tls13ParsePreSharedKey(ssl_t *ssl,
+        psParseBuf_t *pb);
+extern int32_t tls13ParsePskKeyExchangeModes(ssl_t *ssl,
+        psParseBuf_t *pb);
+extern int32_t tls13ParseCookie(ssl_t *ssl,
+        psParseBuf_t *pb);
+extern int32_t tls13ParseSignatureAlgorithms(ssl_t *ssl,
+        const unsigned char **c,
+        psSize_t len,
+        psBool_t isCert);
+extern psSize_t tls13ParseSupportedVersions(ssl_t *ssl,
+        const unsigned char **c,
+        psSize_t len);
+extern psBool_t tls13ExtensionAllowedInMessage(ssl_t *ssl,
+        uint16_t extType,
+        unsigned char hsMsgType);
+extern int32_t tls13ParseEarlyData(ssl_t *ssl,
+        psParseBuf_t *pb,
+        uint32_t *maxEarlyData);
+extern int32_t tls13ParseStatusRequest(ssl_t *ssl,
+        psParseBuf_t *extBuf);
+extern int32_t tls13ParseExtensions(ssl_t *ssl,
+        psParseBuf_t *pb,
+        unsigned char hsMsgType);
+
+/* Encoding. */
+extern int32 tls13WriteClientHello(ssl_t *ssl,
+        sslBuf_t *out,
+        const psCipher16_t cipherSpec[],
+        uint8_t cipherSpecLen,
+        uint32 *requiredLen,
+        tlsExtension_t *userExt,
+        sslSessOpts_t *options);
+extern int32 tls13WriteServerHelloExtensions(ssl_t *ssl,
+        psDynBuf_t *extBuf,
+        psBool_t isHelloRetryRequest);
+extern int32_t tls13WriteClientHelloExtensions(ssl_t *ssl,
+        psDynBuf_t *extBuf,
+        tlsExtension_t *userExt,
+        sslSessOpts_t *options);
+extern int32_t tls13WriteHsRecordHeader(ssl_t *ssl,
+        uint8_t protocol,
+        uint8_t handshakeMessageType,
+        unsigned char *data,
+        psSize_t dataLen,
+        psSize_t padLen,
+        psBool_t toBeEncrypted,
+        unsigned char **c,
+        const unsigned char *end,
+        unsigned char **encryptStart,
+        unsigned char **encryptEnd);
+extern psSizeL_t tls13GetPadLen(ssl_t *ssl,
+        psSizeL_t len);
+extern int32_t tls13EncodeAppData(ssl_t *ssl,
+        unsigned char *buf,
+        uint32_t size,
+        unsigned char *ptBuf,
+        uint32_t *len);
+extern psSizeL_t tls13GetPaddedLength(ssl_t *ssl,
+        psSizeL_t len);
+extern int32_t tls13EncodeAlert(ssl_t *ssl,
+        unsigned char type,
+        sslBuf_t *out,
+        uint32_t *requiredLen);
+extern psSizeL_t tls13EstimateNextFlightSize(ssl_t *ssl);
+extern int32_t tls13WriteEarlyData(ssl_t *ssl,
+        psDynBuf_t *extBuf,
+        const uint32_t maxEarlyData);
+extern int32_t tls13WriteSigAlgs(ssl_t *ssl,
+        psDynBuf_t *extBuf,
+        const uint16_t sigAlgs[],
+        const psSize_t sigAlgsLen,
+        const uint8_t extensionType);
+extern int32_t tls13WriteCertificateAuthorities(ssl_t *ssl,
+        psDynBuf_t *extBuf);
+extern psRes_t tls13ParseCertificateAuthorities(ssl_t *ssl,
+       const unsigned char **start, psSizeL_t len);
+
+extern int32_t tls13WriteOCSPStatusRequest(ssl_t *ssl,
+        psDynBuf_t *extBuf);
+
+/* Transcript-Hash. */
+extern int32_t tls13TranscriptHashInit(ssl_t *ssl);
+extern int32_t tls13TranscriptHashReinit(ssl_t *ssl);
+extern int32_t tls13TranscriptHashUpdate(ssl_t *ssl,
+        const unsigned char *in,
+        psSize_t len);
+extern int32_t tls13TranscriptHashFinish(ssl_t *ssl,
+        unsigned char *out);
+extern int32_t tls13TranscriptHashSnapshot(ssl_t *ssl,
+        unsigned char *out);
+
+/* Signatures. */
+extern psBool_t tls13IsRsaSigAlg(uint16_t alg);
+extern psBool_t tls13IsEcdsaSigAlg(uint16_t alg);
+extern psBool_t tls13IsInsecureSigAlg(uint16_t alg);
+extern psBool_t tls13RequiresPreHash(uint16_t alg);
+extern uint16_t tls13ChooseSigAlg(ssl_t *ssl,
+        const uint16_t *peerSigAlgs,
+        psSize_t peerSigAlgsLen);
+extern int32_t tls13Sign(psPool_t *pool,
+        psPubKey_t *privKey,
+        uint16_t sigAlg,
+        const unsigned char trHash[MAX_TLS_1_3_HASH_SIZE],
+        psSize_t trHashLen,
+        const char *contextString,
+        psSize_t contextStringLen,
+        unsigned char **out,
+        psSize_t *outLen);
+extern int32_t tls13Verify(psPool_t *pool,
+        psPubKey_t *pubKey,
+        uint16_t sigAlg,
+        unsigned char *signature,
+        psSize_t signatureLen,
+        const unsigned char trHash[MAX_TLS_1_3_HASH_SIZE],
+        psSize_t trHashLen,
+        const char *contextString,
+        psSize_t contextStringLen);
+
+/* Key schedule. */
+extern int32_t tls13DeriveSecret(ssl_t *ssl,
+        int32_t hmacAlg,
+        const unsigned char *inSecret,
+        psSize_t inSecretLen,
+        const char *label,
+        psSize_t labelLen,
+        const unsigned char *trHash,
+        psSize_t trHashLen,
+        unsigned char outSecret[MAX_TLS_1_3_HASH_SIZE]);
+extern int32_t tls13GenerateEarlySecret(ssl_t *ssl,
+        psTls13Psk_t *psk);
+extern int32_t tls13DeriveEarlySecrets(ssl_t *ssl,
+        psTls13Psk_t *psk);
+extern int32_t tls13DeriveEarlyDataSecret(ssl_t *ssl,
+        psTls13Psk_t *psk);
+extern int32_t tls13DeriveEarlyDataKeys(ssl_t *ssl);
+extern int32_t tls13ActivateEarlyDataWriteKeys(ssl_t *ssl);
+extern int32_t tls13ActivateEarlyDataReadKeys(ssl_t *ssl);
+extern int32_t tls13DeriveBinderKey(ssl_t *ssl,
+        int32_t hmacAlg,
+        unsigned char *binderSecret,
+        psSize_t binderSecretLen,
+        unsigned char *binderKeyOut,
+        psSize_t *binderKeyOutLen);
+extern int32_t tls13DeriveHandshakeTrafficSecrets(ssl_t *ssl);
+extern int32_t tls13DeriveHandshakeKeys(ssl_t *ssl);
+extern int32_t tls13DeriveFinishedKey(ssl_t *ssl,
+        psBool_t wantServerKey);
+extern int32_t tls13ActivateHsWriteKeys(ssl_t *ssl);
+extern int32_t tls13ActivateHsReadKeys(ssl_t *ssl);
+extern int32_t tls13DeriveAppTrafficSecrets(ssl_t *ssl);
+extern int32_t tls13DeriveAppKeys(ssl_t *ssl);
+extern int32_t tls13DeriveResumptionMasterSecret(ssl_t *ssl);
+extern int32_t tls13ActivateAppWriteKeys(ssl_t *ssl);
+extern int32_t tls13ActivateAppReadKeys(ssl_t *ssl);
+extern int32_t tls13TranscriptHashSnapshotAlg(ssl_t *ssl,
+        int32_t alg,
+        unsigned char *out);
+
+/* Cipher suites. */
+extern int32_t tls13GetCipherHmacAlg(ssl_t *ssl);
+extern psResSize_t tls13GetCipherHashSize(ssl_t *ssl);
+extern int32_t tls13CipherIdToHmacAlg(uint32_t cipherId);
+extern psBool_t isTls13Ciphersuite(uint16_t suite);
+
+/* PSK. */
+extern int32_t tls13FindSessionPsk(ssl_t *ssl,
+        const unsigned char *id,
+        psSize_t idLen,
+        psTls13Psk_t **pskOut);
+extern psTls13Psk_t *tls13NewPsk(const unsigned char *key,
+        psSize_t keyLen,
+        const unsigned char *id,
+        psSize_t idLen,
+        psBool_t isResumptionPsk,
+        const psTls13SessionParams_t *params);
+extern int32_t matrixSslTls13PskGetKey(ssl_t *ssl,
+        const unsigned char *id,
+        psSize_t idLen,
+        unsigned char **key,
+        psSize_t *keyLen,
+        psTls13SessionParams_t **params);
+extern int32_t matrixSslLoadTls13Psk(sslKeys_t *keys,
+        const unsigned char *key,
+        psSize_t keyLen,
+        const unsigned char *id,
+        psSize_t idLen,
+        const psTls13SessionParams_t *params);
+extern int32_t tls13LoadSessionPsks(ssl_t *ssl);
+extern int32_t tls13AddSessionPsk(ssl_t *ssl,
+        const unsigned char *key,
+        psSize_t keyLen,
+        const unsigned char *id,
+        psSize_t idLen,
+        psBool_t isResumptionPsk,
+        const psTls13SessionParams_t *params);
+extern int32_t tls13FillInPskBinders(ssl_t *ssl,
+        unsigned char *bindersStart);
+extern int32_t tls13GetPskHmacAlg(psTls13Psk_t *psk);
+extern psSize_t tls13GetPskHashLen(psTls13Psk_t *psk);
+extern void tls13FreePsk(psTls13Psk_t *psk,
+        psPool_t *pool);
+
+/* Resumption. */
+extern int32_t tls13DeriveResumptionPsk(ssl_t *ssl,
+        int32_t hmacAlg,
+        unsigned char *nonce,
+        psSize_t nonceLen,
+        unsigned char *pskOut,
+        psSize_t pskOutLen);
+extern int32_t tls13ExportState(ssl_t *ssl,
+        psTls13Psk_t *psk,
+        unsigned char **out,
+        psSizeL_t *outLen);
+extern int32_t tls13ImportState(ssl_t *ssl,
+        const unsigned char *in,
+        psSizeL_t inLen,
+        psTls13Psk_t **pskOut);
+extern int32_t tls13NewTicket(ssl_t *ssl,
+        int32_t hmacAlg,
+        uint32_t lifetime,
+        uint32_t ageAdd,
+        unsigned char *nonce,
+        psSize_t nonceLen,
+        unsigned char **ticketOut,
+        psSizeL_t *ticketOutLen);
+# if defined(USE_SERVER_SIDE_SSL) && defined(USE_STATELESS_SESSION_TICKETS)
+extern int32_t tls13DecryptTicket(ssl_t *ssl,
+        psSessionTicketKeys_t *key,
+        const unsigned char *ticket,
+        psSizeL_t ticketLen,
+        psTls13Psk_t **pskOut);
+# endif
+extern int32_t tls13StorePsk(ssl_t *ssl,
+        const unsigned char *psk,
+        psSize_t pskLen,
+        const unsigned char *pskId,
+        psSize_t pskIdLen,
+        psBool_t isResumptionPsk,
+        const psTls13SessionParams_t *params);
+extern int32_t tls13ValidateSessionParams(ssl_t *ssl,
+        psTls13SessionParams_t *params);
+
+/* Negotiation. */
+extern int32_t tls13TryNegotiateParams(ssl_t *ssl,
+        const sslCipherSpec_t *spec,
+        sslIdentity_t *givenKey);
+extern uint16_t tls13NegotiateGroup(ssl_t *ssl,
+        uint16_t *peerList,
+        psSize_t peerListLen);
+extern int32_t tls13ServerChooseHelloRetryRequestGroup(ssl_t *ssl,
+        uint16_t *chosenGroup);
+extern psBool_t tls13WeSupportGroup(ssl_t *ssl,
+        uint16_t namedGroup);
+extern psBool_t tls13PeerSupportsGroup(ssl_t *ssl,
+        uint16_t namedGroup);
+extern uint16_t tls13GetNextBestGroup(ssl_t *ssl,
+        uint16_t alreadyTriedGroup);
+extern int32_t tls13AddPeerSupportedGroup(ssl_t *ssl,
+        uint16_t namedGroup);
+extern int32_t tls13AddPeerKeyShareGroup(ssl_t *ssl,
+        uint16_t namedGroup);
+extern int32_t tls13IntersectionPrioritySelect(const uint16_t *a,
+        psSize_t aLen,
+        const uint16_t *b,
+        psSize_t bLen,
+        const uint16_t *f,
+        psSize_t fLen,
+        uint16_t *selectedElement);
+extern void tls13ClearHsState(ssl_t *ssl);
+
+/* Authentication. */
+extern int32_t tls13ValidateCertChain(ssl_t *ssl);
+extern int32_t tls13HandleUserCertCbResult(ssl_t *ssl, int32 cbRc);
+
+/* Key agreement. */
+extern int32_t tls13ImportPublicValue(ssl_t *ssl,
+        const unsigned char *keyExchangeData,
+        psSize_t keyExchangeDataLen,
+        uint16_t namedGroup);
+extern int32_t tls13ExportPublicValue(ssl_t *ssl,
+        uint16_t namedGroup,
+        psPubKey_t *key,
+        unsigned char **out,
+        psSize_t *outLen);
+# ifdef USE_ECC
+extern int32_t tls13GenerateEcdheKey(ssl_t *ssl,
+        psEccKey_t *key,
+        uint16_t namedGroup);
+# endif
+extern int32_t tls13GenerateEphemeralKeys(ssl_t *ssl);
+extern psPubKey_t *tls13GetGroupKey(ssl_t *ssl,
+        uint16_t namedGroup);
+extern int32_t tls13GenSharedSecret(ssl_t *ssl,
+        unsigned char **out,
+        psSize_t *outLen);
+
+/* Record encryption. */
+extern int32 csAesGcmInitTls13(sslSec_t *sec,
+        int32 type,
+        uint32 keysize);
+extern int32 csAesGcmEncryptTls13(void *ssl,
+        unsigned char *pt,
+        unsigned char *ct,
+        uint32 ptLen);
+extern int32 csAesGcmDecryptTls13(void *ssl,
+        unsigned char *ct,
+        unsigned char *pt,
+        uint32 len);
+extern int32 csChacha20Poly1305IetfEncryptTls13(void *ssl,
+        unsigned char *pt,
+        unsigned char *ct,
+        uint32 len);
+extern int32 csChacha20Poly1305IetfDecryptTls13(void *ssl,
+        unsigned char *ct,
+        unsigned char *pt,
+        uint32 len);
+
+/* Misc. */
+extern void tls13ClearPeerSupportedGroupList(ssl_t *ssl);
+
+# endif /* USE_TLS_1_3 */
 extern int32 sslWritePad(unsigned char *p, unsigned char padLen);
 extern int32 sslCreateKeys(ssl_t *ssl);
 extern void sslResetContext(ssl_t *ssl);
@@ -1769,6 +2367,7 @@ extern int32 matrixResumeSession(ssl_t *ssl);
 extern int32 matrixClearSession(ssl_t *ssl, int32 remove);
 extern int32 matrixUpdateSession(ssl_t *ssl);
 extern int32 matrixServerSetKeysSNI(ssl_t *ssl, char *host, int32 hostLen);
+extern sslKeys_t *matrixServerGetKeysSNI(ssl_t *ssl, char *host, int32 hostLen);
 
 #  ifdef USE_STATELESS_SESSION_TICKETS
 extern int32 matrixSessionTicketLen(void);
@@ -1804,14 +2403,17 @@ extern int32 dtlsEncryptFragRecord(ssl_t *ssl, flightEncode_t *msg,
 /*
     cipherSuite.c
  */
-extern int32 chooseCipherSuite(ssl_t *ssl, unsigned char *listStart,
-                               int32 listLen);
+extern psRes_t chooseCipherSuite(ssl_t *ssl, unsigned char *listStart,
+        int32 listLen);
 extern const sslCipherSpec_t *sslGetDefinedCipherSpec(uint16_t id);
 extern const sslCipherSpec_t *sslGetCipherSpec(const ssl_t *ssl, uint16_t id);
 extern int32_t sslGetCipherSpecListLen(const ssl_t *ssl);
 extern int32_t sslGetCipherSpecList(ssl_t *ssl, unsigned char *c, int32 len,
                                     int32 addScsv);
-extern int32_t haveKeyMaterial(const ssl_t *ssl, int32 cipherType, short reallyTest);
+extern int32_t haveKeyMaterial(const ssl_t *ssl,
+                               const sslCipherSpec_t *cipher,
+                               short reallyTest);
+extern psBool_t isAlpnSuite(const sslCipherSpec_t *suite);
 # ifdef USE_CLIENT_SIDE_SSL
 int32 csCheckCertAgainstCipherSuite(int32 sigAlg, int32 cipherType);
 # endif
@@ -1955,7 +2557,11 @@ extern int32_t matrixPskGetHint(ssl_t * ssl,
 # endif /* USE_PSK_CIPHER_SUITE */
 
 # ifdef USE_ECC
+extern int32 psTestUserEc(int32 ecFlags, const sslKeys_t *keys);
 extern int32 psTestUserEcID(int32 id, int32 ecFlags);
+#  ifdef USE_TLS_1_3
+extern int32 psTestUserEcIDTls13(int32 id, int32 ecFlags);
+#  endif
 extern int32 curveIdToFlag(int32 id);
 # endif
 
@@ -1994,19 +2600,346 @@ extern int32_t tprf(const unsigned char *key, psSize_t keyLen,
 extern void matrixsslUpdateStat(ssl_t *ssl, int32_t type, int32_t value);
 # else
 #  ifdef __GNUC__
-static __inline
+static inline
 void matrixsslUpdateStat(ssl_t *ssl __attribute__((__unused__)),
     int32_t type __attribute__((__unused__)),
     int32_t value __attribute__((__unused__)))
 {
 }
 #  else
-static __inline
+static inline
 void matrixsslUpdateStat(ssl_t *ssl, int32_t type, int32_t value)
 {
 }
 #  endif
 # endif /* USE_MATRIXSSL_STATS */
+
+/** TLS-level debug print functions.
+
+    To save footprint, the functions should only be called via the
+    psTrace* macros. For more information, see the comments
+    in tlsTrace.c.
+
+    Compile-time configuration:
+
+    USE_SSL_HANDSHAKE_MSG_TRACE
+    - Enables psTraceErrr
+    - Enables "server/client creating/parsing extension/hs msg"
+
+    USE_SSL_INFORMATIONAL_TRACE
+    - Enables psTraceInfo
+    - Enables psTracePrint* functions for printing more complex
+      elements such as cipher lists, etc.
+*/
+
+/**  Pre-defined indent levels to use with psTracePrint*, etc. */
+#  define INDENT_CONN_ESTABLISHED 0
+#  define INDENT_NEGOTIATED_PARAM 0
+#  define INDENT_HS_MSG 5
+#  define INDENT_EXTENSION 6
+
+/** Simple message logging macros.
+    psTraceErrr - Error messages relating to errors that result in alerts.
+    psTraceInfo - Informational messages and warnings.
+*/
+# ifdef USE_DTLS
+#   ifndef USE_DTLS_DEBUG_TRACE
+#    define psTraceDtls(x)
+#    define psTraceIntDtls(x, y)
+#    define psTraceStrDtls(x, y)
+#   else
+#    include "osdep.h"
+#    define psTraceDtls(x) tlsTrace(x)
+#    define psTraceIntDtls(x, y) tlsTraceInt(x, y)
+#    define psTraceStrDtls(x, y) tlsTraceStr(x, y)
+#   endif /* USE_DTLS_DEBUG_TRACE */
+# endif  /* USE_DTLS */
+
+#  ifndef USE_SSL_HANDSHAKE_MSG_TRACE
+#   define psTraceErrr(x) /* Same macro name length as psTraceInfo. */
+#   define psTraceError(x)
+#   define psTraceErrrIndent(x, y)
+#  else
+#   define psTraceErrr(x) tlsTraceError(__FILE__, __LINE__, x)
+#   define psTraceError(x) tlsTraceError(__FILE__, __LINE__, x)
+#   define psTraceErrorIndent(x, y) tlsTraceErrorIndent(x, __FILE__, __LINE__, y)
+#  endif
+
+#  ifndef USE_SSL_INFORMATIONAL_TRACE
+#   define psTraceInfo(x)
+#   define psTraceStrInfo(x, y)
+#   define psTraceIntInfo(x, y)
+#  else
+#   include "osdep.h"
+#   define psTraceInfo(x) tlsTrace(x)
+#   define psTraceStrInfo(x, y) tlsTraceStr(x, y)
+#   define psTraceIntInfo(x, y) tlsTraceInt(x, y)
+#  endif /* USE_SSL_INFORMATIONAL_TRACE */
+
+# ifdef USE_SSL_HANDSHAKE_MSG_TRACE
+void tlsTrace(const char *str);
+void tlsTraceInt(const char *str, int32_t value);
+void tlsTraceStr(const char *str, const char *str2);
+void tlsTraceIndent(psSize_t indentLevel, const char *str);
+void tlsTraceErrorIndent(psSize_t indentLevel,
+        const char *srcFile,
+        int srcLine,
+        const char *errorMsg);
+void tlsTraceError(const char *srcFile,
+        int srcLine,
+        const char *errorMsg);
+void psPrintHsMsgType(int32_t type, psBool_t addNewline);
+void psPrintAlertEncodeInfo(ssl_t *ssl, unsigned char alertType);
+void psPrintAlertReceiveInfo(ssl_t *ssl, unsigned char alertType);
+void psPrintHsMessageCreate(ssl_t *ssl, unsigned char hsMsgType);
+void psPrintHsMessageParse(ssl_t *ssl, unsigned char hsMsgType);
+void psPrintChangeCipherSpecParse(ssl_t *ssl);
+void psPrintChangeCipherSpecCreate(ssl_t *ssl);
+void psPrintExtensionParse(ssl_t *ssl, uint16_t extType);
+void psPrintExtensionCreate(ssl_t *ssl, uint16_t extType);
+#  define psTraceIndent(indentLevel, str) \
+    tlsTraceIndent(indentLevel, str)
+#  define psTracePrintHsMsgType(type, addNewline) \
+    psPrintHsMsgType(type, addNewline)
+#  define psTracePrintAlertEncodeInfo(ssl, alertType) \
+    psPrintAlertEncodeInfo(ssl, alertType)
+#  define psTracePrintAlertReceiveInfo(ssl, alertType) \
+    psPrintAlertReceiveInfo(ssl, alertType)
+#  define psTracePrintHsMessageCreate(ssl, hsMsgType) \
+    psPrintHsMessageCreate(ssl, hsMsgType)
+#  define psTracePrintHsMessageParse(ssl, hsMsgType) \
+    psPrintHsMessageParse(ssl, hsMsgType)
+#  define psTracePrintChangeCipherSpecParse(ssl) \
+    psPrintChangeCipherSpecParse(ssl)
+#  define psTracePrintChangeCipherSpecCreate(ssl) \
+    psPrintChangeCipherSpecCreate(ssl)
+#  define psTracePrintExtensionParse(ssl, extType) \
+    psPrintExtensionParse(ssl, extType)
+#  define psTracePrintExtensionCreate(ssl, extType) \
+    psPrintExtensionCreate(ssl, extType)
+#  define psTracePrintExtensionType(ssl, type, addNewline) \
+    psPrintExtensionType(ssl, type, addNewline)
+# else  /* No USE_SSL_HANDSHAKE_MSG_TRACE --> no code */
+#  define tlsTraceIndent(indentLevel, str)
+#  define psTraceIndent(indentLevel, str)
+#  define psTracePrintHsMsgType(type, addNewline)
+#  define psTracePrintAlertEncodeInfo(ssl, alertType)
+#  define psTracePrintAlertReceiveInfo(ssl, alertType)
+#  define psTracePrintHsMessageCreate(ssl, hsMsgType)
+#  define psTracePrintHsMessageParse(ssl, hsMsgType)
+#  define psTracePrintChangeCipherSpecParse(ssl)
+#  define psTracePrintChangeCipherSpecCreate(ssl)
+#  define psTracePrintExtensionParse(ssl, extType)
+#  define psTracePrintExtensionCreate(ssl, extType)
+#  define psTracePrintExtensionType(ssl, type, addNewline)
+# endif /* USE_SSL_HANDSHAKE_MSG_TRACE */
+
+# ifdef USE_SSL_INFORMATIONAL_TRACE
+void psPrintHex(psSize_t indentLevel,
+        const char *where,
+        unsigned char *bytes,
+        psSizeL_t numBytes,
+        psBool_t addNewline);
+void psPrintCiphersuiteName(psSize_t indentLevel,
+        const char *where,
+        uint16_t cipherId,
+        psBool_t addNewline);
+void psPrintEncodedCipherList(psSize_t indentLevel,
+        const char *where,
+        const unsigned char *cipherList,
+        psSize_t cipherListLen,
+        psBool_t addNewline);
+void psPrintCipherList(psSize_t indentLevel,
+        const char *where,
+        const psCipher16_t *cipherList,
+        psSize_t numCiphers,
+        psBool_t addNewline);
+void psPrintSigAlgs(psSize_t indentLevel,
+        const char *where,
+        uint16_t sigAlgs,
+        psBool_t addNewline);
+void psPrintTls13SigAlg(psSize_t indentLevel,
+        const char *where,
+        uint16_t alg,
+        psBool_t addNewline);
+void psPrintTls13SigAlgList(psSize_t indentLevel,
+        const char *where,
+        uint16_t *algs,
+        psSize_t numAlgs,
+        psBool_t addNewline);
+void psPrintProtocolVersion(psSize_t indentLevel,
+        const char *where,
+        unsigned char majVer,
+        unsigned char minVer,
+        psBool_t addNewline);
+void psPrintNegotiatedProtocolVersion(psSize_t indentLevel,
+        const char *where,
+        ssl_t *ssl,
+        psBool_t addNewline);
+void psPrintVersionsList(psSize_t indentLevel,
+        const char *where,
+        uint16_t *list,
+        psSize_t listLen,
+        psBool_t addNewline);
+void psPrintVersionsList32(psSize_t indentLevel,
+        const char *where,
+        int32_t *list,
+        psSize_t listLen,
+        psBool_t addNewline);
+void psPrintSupportedVersionsList(psSize_t indentLevel,
+        const char *where,
+        ssl_t *ssl,
+        psBool_t peer,
+        psBool_t addNewline);
+void psPrintTls13NamedGroup(psSize_t indentLevel,
+        const char *where,
+        uint16_t namedGroup,
+        psBool_t addNewline);
+void psPrintTls13NamedGroupList(psSize_t indentLevel,
+        const char *where,
+        const unsigned char *list,
+        psSize_t listLen,
+        ssl_t *ssl,
+        psBool_t addNewline);
+void psPrintServerName(psSize_t indentLevel,
+        const char *where,
+        const char *serverName,
+        psBool_t addNewline);
+void psPrintTlsKeys(const char *where,
+        ssl_t *ssl,
+        psBool_t addNewline);
+void psPrintSslFlags(uint32_t flags);
+void psPrintCurrentFlight(ssl_t *ssl);
+void psPrintExtensionType(ssl_t *ssl,
+        uint16_t extType,
+        psBool_t addNewline);
+void psPrintRecordType(unsigned char type,
+        psBool_t isInnerType,
+        psBool_t addNewline);
+void psPrintRecordHeader(sslRec_t *rec, psBool_t addNewline);
+void psPrintHandshakeHeader(unsigned char type,
+        uint32_t len,
+        psBool_t addNewline);
+void psPrintHsState(uint8_t type, psBool_t addNewline);
+void psPrintCertSubject(psSize_t indentLevel,
+        ssl_t *ssl,
+        psX509Cert_t *cert,
+        psSize_t indexInChain);
+void psPrintPskKeyExchangeMode(psSize_t indentLevel,
+        const char *where,
+        psk_key_exchange_mode_e mode,
+        psBool_t addNewLine);
+void psPrintTranscriptHashUpdate(ssl_t *ssl,
+        unsigned char *in,
+        psSizeL_t inLen,
+        int32_t hashAlg);
+#  define psTracePrintHex(indentLevel, where, bytes, numBytes, addNewline) \
+    psPrintHex(indentLevel, where, bytes, numBytes, addNewline)
+#  define psTracePrintCiphersuiteName(indentLevel, where, cipher, addNewline) \
+    psPrintCiphersuiteName(indentLevel, where, cipher, addNewline)
+#  define psTracePrintEncodedCipherList(indentLevel, where, cipherList, cipherListLen, addNewline) \
+    psPrintEncodedCipherList(indentLevel, where, cipherList, cipherListLen, addNewline)
+#  define psTracePrintCipherList(indentLevel, where, cipherList, numCiphers, addNewline) \
+    psPrintCipherList(indentLevel, where, cipherList, numCiphers, addNewline)
+#  define psTracePrintSigAlgs(indentLevel, sigAlgs, where, addNewline) \
+    psPrintSigAlgs(indentLevel, sigAlgs, where, addNewline)
+#  define psTracePrintPubKeyTypeAndSize(ssl, key) \
+    psPrintPubKeyTypeAndSize(ssl, key)
+#  define psTracePrintTls13SigAlg(indentLevel, where, alg, addNewline)   \
+    psPrintTls13SigAlg(indentLevel, where, alg, addNewline)
+#  define psTracePrintTls13SigAlgList(indentLevel, where, algs, numAlgs, addNewline) \
+    psPrintTls13SigAlgList(indentLevel, where, algs, numAlgs, addNewline)
+#  define psTracePrintProtocolVersion(indentLevel, where, majVer, minVer, addNewline) \
+    psPrintProtocolVersion(indentLevel, where, majVer, minVer, addNewline)
+#  define psTracePrintNegotiatedProtocolVersion(indentLevel, where, ssl, addNewline) \
+    psPrintNegotiatedProtocolVersion(indentLevel, where, ssl, addNewline)
+#  define psTracePrintVersionsList(indentLevel, where, list, listLen, addNewline) \
+    psPrintVersionsList(indentLevel, where, list, listLen, addNewline)
+#  define psTracePrintVersionsList32(indentLevel, where, list, listLen, addNewline) \
+    psPrintVersionsList32(indentLevel, where, list, listLen, addNewline)
+#  define psTracePrintSupportedVersionsList(indentLevel, where, ssl, peer, addNewline) \
+    psPrintSupportedVersionsList(indentLevel, where, ssl, peer, addNewline)
+#  define psTracePrintTls13NamedGroup(indentLevel, where, curveId, addNewline) \
+    psPrintTls13NamedGroup(indentLevel, where, curveId, addNewline)
+#  define psTracePrintTls13NamedGroupList(indentLevel, where, list, listLen, ssl, addNewline) \
+    psPrintTls13NamedGroupList(indentLevel, where, list, listLen, ssl, addNewline)
+#  define psTracePrintServerName(indentLevel, where, serverName, addNewline) \
+    psPrintServerName(indentLevel, where, serverName, addNewline)
+#  define psTracePrintTlsKeys(where, ssl, addNewline) \
+    psPrintTlsKeys(where, ssl, addNewline)
+#  define psTracePrintSslFlags(ssl) \
+    psPrintSslFlags(ssl)
+#  define psTracePrintRecordType(type, isInnerType, addNewline)  \
+    psPrintRecordType(type, isInnerType, addNewline)
+#  define psTracePrintCurrentFlight(ssl) \
+    psPrintCurrentFlight(ssl)
+#  define psTracePrintRecordHeader(rec, addNewline)     \
+    psPrintRecordHeader(rec, addNewline)
+#  define psTracePrintHandshakeHeader(type, len, addNewline) \
+    psPrintHandshakeHeader(type, len, addNewline)
+#  define psTracePrintHsState(state, addNewline)           \
+    psPrintHsState(state, addNewline)
+#  define psTracePrintCertSubject(indentLevel, ssl, cert, indexInChain)  \
+    psPrintCertSubject(indentLevel, ssl, cert, indexInChain)
+#  define psTracePrintPskKeyExchangeMode(indentLevel, where, mode, addNewLine) \
+    psPrintPskKeyExchangeMode(indentLevel, where, mode, addNewLine)
+#  define psTracePrintTranscriptHashUpdate(ssl, in, inLen, hashAlg) \
+    psPrintTranscriptHashUpdate(ssl, in, inLen, hashAlg)
+# else /* Do not produce code without USE_SSL_INFORMATIONAL_TRACE. */
+#  define psTracePrintHex(indentLevel, where, bytes, numBytes, addNewline)
+#  define psTracePrintCiphersuiteName(indentLevel, where, cipher, addNewline)
+#  define psTracePrintEncodedCipherList(indentLevel, where, cipherList, cipherListLen, addNewline)
+#  define psTracePrintCipherList(indentLevel, where, cipherList, numCiphers, addNewline)
+#  define psTracePrintSigAlgs(indentlevel, sigAlgs, where, addNewLine)
+#  define psTracePrintPubKeyTypeAndSize(ssl, key)
+#  define psTracePrintTls13SigAlg(indentLevel, where, sigAlg, addNewline)
+#  define psTracePrintTls13SigAlgList(indentLevel, where, algs, numAlg, addNewline)
+#  define psTracePrintProtocolVersion(indentLevel, where, majVer, minVer, addNewline)
+#  define psTracePrintNegotiatedProtocolVersion(indentLevel, where, ssl, addNewline)
+#  define psTracePrintVersionsList(indentLevel, where, list, listLen, addNewline)
+#  define psTracePrintVersionsList32(indentLevel, where, list, listLen, addNewline)
+#  define psTracePrintSupportedVersionsList(indentLevel, where, ssl, peer, addNewline)
+#  define psTracePrintTls13NamedGroup(indentLevel, where, curveId, addNewline)
+#  define psTracePrintTls13NamedGroupList(indentLevel, where, list, listLen, ssl, addNewline)
+#  define psTracePrintServerName(indentLevel, where, serverName, addNewline)
+#  define psTracePrintTlsKeys(where, ssl, addNewline)
+#  define psTracePrintSslFlags(ssl)
+#  define psTracePrintRecordType(type, isInnerType, addNewline)
+#  define psTracePrintCurrentFlight(ssl)
+#  define psTracePrintRecordHeader(rec, addNewline)
+#  define psTracePrintHandshakeHeader(type, len, addNewline)
+#  define psTracePrintHsState(state, addNewline)
+#  define psTracePrintCertSubject(indentLevel, ssl, cert, indexInChain)
+#  define psTracePrintPskKeyExchangeMode(indentLevel, where, mode, addNewLine)
+#  define psTracePrintTranscriptHashUpdate(ssl, in, inLen, hashAlg)
+# endif /* USE_SSL_INFORMATIONAL_TRACE */
+
+# if defined(USE_SERVER_SIDE_SSL) || defined(USE_CLIENT_AUTH)
+psBool_t weSupportSigAlg(int32_t sigAlg,
+        int32_t pubKeyAlgorithm);
+psBool_t peerSupportsSigAlg(int32_t sigAlg,
+        uint16_t peerSigAlgs);
+psBool_t canUseSigAlg(int32_t sigAlg,
+        int32_t pubKeyAlgorithm,
+        uint16_t peerSigAlgs);
+int32_t upgradeSigAlg(int32_t sigAlg, int32_t pubKeyAlgorithm);
+int32_t chooseSigAlgInt(int32_t certSigAlg,
+        psSize_t keySize,
+        int32_t pubKeyAlgorithm,
+        uint16_t peerSigAlgs);
+int32_t chooseSigAlg(psX509Cert_t *cert,
+        psPubKey_t *privKey,
+        uint16_t peerSigAlgs);
+int32_t getSignatureAndHashAlgorithmEncoding(uint16_t sigAlgOid,
+        unsigned char *b1,
+        unsigned char *b2,
+        uint16_t *hashSize);
+# endif
+
+# ifdef USE_CLIENT_SIDE_SSL
+int32_t matrixSslChooseClientKeys(ssl_t *ssl, sslKeySelectInfo_t *keySelect);
+# endif
+
 
 # ifdef __cplusplus
 }
@@ -2015,4 +2948,3 @@ void matrixsslUpdateStat(ssl_t *ssl, int32_t type, int32_t value)
 #endif /* _h_MATRIXSSLLIB */
 
 /******************************************************************************/
-

@@ -5,7 +5,7 @@
  *      SSL/TLS handshake message parsing
  */
 /*
- *      Copyright (c) 2013-2017 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 INSIDE Secure Corporation
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -49,11 +49,12 @@
 int32 parseClientHello(ssl_t *ssl, unsigned char **cp, unsigned char *end)
 {
     unsigned char *suiteStart, *suiteEnd;
-    unsigned char compareMin, compareMaj, compLen, serverHighestMinor;
+    unsigned char compLen, serverHighestMinor;
     uint32 suiteLen;
     uint32 resumptionOnTrack, cipher = 0;
     int32 rc, i;
     unsigned char *c;
+    int32 versionCheckResult;
 
 #  ifdef USE_ECC_CIPHER_SUITE
     const psEccCurve_t *curve;
@@ -64,8 +65,9 @@ int32 parseClientHello(ssl_t *ssl, unsigned char **cp, unsigned char *end)
 
     c = *cp;
 
+    psTracePrintHsMessageParse(ssl, SSL_HS_CLIENT_HELLO);
+
     /* First two bytes are the highest supported major and minor SSL versions */
-    psTraceHs(">>> Server parsing CLIENT_HELLO\n");
 
 # ifdef USE_MATRIXSSL_STATS
     matrixsslUpdateStat(ssl, CH_RECV_STAT, 1);
@@ -73,192 +75,29 @@ int32 parseClientHello(ssl_t *ssl, unsigned char **cp, unsigned char *end)
     if (end - c < 2)
     {
         ssl->err = SSL_ALERT_DECODE_ERROR;
-        psTraceInfo("Invalid ssl header version length\n");
+        psTraceErrr("Invalid ssl header version length\n");
         return MATRIXSSL_ERROR;
     }
 
     ssl->reqMajVer = *c; c++;
     ssl->reqMinVer = *c; c++;
 
-    psTracePrintProtocolVersion("Parsed ClientHello.client_version",
+    psTracePrintProtocolVersion(INDENT_HS_MSG,
+            "client_version",
             ssl->reqMajVer, ssl->reqMinVer, 1);
 
-# ifndef USE_SSL_PROTOCOL_VERSIONS_OTHER_THAN_3
-    /* RFC 5246 Suggests to accept all RSA minor versions, but only
-       major version 0x03 (SSLv3, TLS 1.0, TLS 1.1, TLS 1.2, TLS 1.3 etc) */
-    if (ssl->reqMajVer != 0x03
-#  ifdef USE_DTLS
-        && ssl->reqMajVer != DTLS_MAJ_VER
-#  endif /* USE_DTLS */
-        )
-    {
-        /* Consider invalid major version protocol version error. */
-        ssl->err = SSL_ALERT_PROTOCOL_VERSION;
-        psTraceInfo("Won't support client's SSL major version\n");
-        return MATRIXSSL_ERROR;
-    }
-# endif /* USE_SSL_PROTOCOL_VERSIONS_OTHER_THAN_3 */
+    /*
+      Check whether we can support ClientHello.client_version.
+      Even if we can't, do not issue protocol_version alert yet.
+      This is because the TLS 1.3 draft spec stipulates that
+      if the client sends the supported_versions extension,
+      ClientHello.client_version must be ignored.
 
-    /*  Client should always be sending highest supported protocol.  Server
-        will reply with a match or a lower version if enabled (or forced). */
-    if (ssl->majVer != 0)
-    {
-        /* If our forced server version is a later protocol than their
-            request, we have to exit */
-        if (ssl->reqMinVer < ssl->minVer)
-        {
-            ssl->err = SSL_ALERT_PROTOCOL_VERSION;
-            psTraceInfo("Won't support client's SSL version\n");
-            return MATRIXSSL_ERROR;
-        }
-# ifdef USE_DTLS
-        if (ssl->flags & SSL_FLAGS_DTLS)
-        {
-            /* DTLS specfication somehow assigned minimum version of DTLS 1.0
-                as 255 so there was nowhere to go but down in DTLS 1.1 so
-                that is 253 and requires the opposite test from above */
-            if (ssl->reqMinVer > ssl->minVer)
-            {
-                ssl->err = SSL_ALERT_PROTOCOL_VERSION;
-                psTraceInfo("Won't support client's DTLS version\n");
-                return MATRIXSSL_ERROR;
-            }
-        }
-# endif
-        /* Otherwise we just set our forced version to act like it was
-            what the client wanted in order to move through the standard
-            negotiation. */
-        compareMin = ssl->minVer;
-        compareMaj = ssl->majVer;
-        /* Set the highest version to the version explicitly set */
-        serverHighestMinor = ssl->minVer;
-    }
-    else
-    {
-        compareMin = ssl->reqMinVer;
-        compareMaj = ssl->reqMajVer;
-        /* If no explicit version was set for the server, use the highest supported */
-        serverHighestMinor = TLS_HIGHEST_MINOR;
-    }
-
-    if (compareMaj >= SSL3_MAJ_VER)
-    {
-        ssl->majVer = compareMaj;
-# ifdef USE_TLS
-        if (compareMin >= TLS_MIN_VER)
-        {
-#  ifndef DISABLE_TLS_1_0
-            /* Allow TLS 1.0, unless specifically disabled. */
-            if (!ssl->disable_tls_1_0)
-            {
-                ssl->minVer = TLS_MIN_VER;
-                ssl->flags |= SSL_FLAGS_TLS;
-            }
-#  endif
-#  ifdef USE_TLS_1_1 /* TLS_1_1 */
-            if (compareMin >= TLS_1_1_MIN_VER)
-            {
-#   ifndef DISABLE_TLS_1_1
-                ssl->minVer = TLS_1_1_MIN_VER;
-                ssl->flags |= SSL_FLAGS_TLS_1_1 | SSL_FLAGS_TLS;
-#   endif
-            }
-#   ifdef USE_TLS_1_2
-#    ifdef USE_TLS_1_2_TOGGLE
-            /* Prefer TLS 1.2, unless specifically disabled. */
-            if (!ssl->disable_tls_1_2)
-            {
-#    endif /* USE_TLS_1_2_TOGGLE */
-                if (compareMin == TLS_1_2_MIN_VER)
-                {
-                    ssl->minVer = TLS_1_2_MIN_VER;
-                    ssl->flags |= SSL_FLAGS_TLS_1_2 | SSL_FLAGS_TLS_1_1 | SSL_FLAGS_TLS;
-                }
-#    ifdef USE_TLS_1_2_TOGGLE
-            }
-#    endif /* USE_TLS_1_2_TOGGLE */
-#    ifdef USE_DTLS
-            if (ssl->flags & SSL_FLAGS_DTLS)
-            {
-                if (compareMin == DTLS_1_2_MIN_VER)
-                {
-                    ssl->minVer = DTLS_1_2_MIN_VER;
-                }
-            }
-#    endif
-#   endif /* USE_TLS_1_2 */
-#  endif  /* USE_TLS_1_1 */
-            if (ssl->minVer == 0)
-            {
-                /* TLS versions are disabled.  Go SSLv3 if available. */
-#  ifdef DISABLE_SSLV3
-                ssl->err = SSL_ALERT_PROTOCOL_VERSION;
-                psTraceInfo("Can't support client's SSL version\n");
-                return MATRIXSSL_ERROR;
-#  else
-                ssl->minVer = SSL3_MIN_VER;
-#  endif
-            }
-        }
-        else if (compareMin == 0)
-        {
-#  ifdef DISABLE_SSLV3
-            ssl->err = SSL_ALERT_PROTOCOL_VERSION;
-            psTraceInfo("Client wanted to talk SSLv3 but it's disabled\n");
-            return MATRIXSSL_ERROR;
-#  else
-            ssl->minVer = SSL3_MIN_VER;
-#  endif    /* DISABLE_SSLV3 */
-        }
-#  ifdef USE_DTLS
-        if (ssl->flags & SSL_FLAGS_DTLS)
-        {
-            if (compareMin < DTLS_1_2_MIN_VER)
-            {
-                ssl->err = SSL_ALERT_PROTOCOL_VERSION;
-                psTraceInfo("Error: incorrect DTLS required version\n");
-                return MATRIXSSL_ERROR;
-            }
-            ssl->minVer = DTLS_MIN_VER;
-#   ifdef USE_TLS_1_2
-#    ifdef USE_TLS_1_2_TOGGLE
-            /* Prefer TLS 1.2, unless specifically disabled. */
-            if (!ssl->disable_tls_1_2)
-            {
-#    endif /* USE_TLS_1_2_TOGGLE */
-                if (compareMin == DTLS_1_2_MIN_VER)
-                {
-                    ssl->flags |= SSL_FLAGS_TLS_1_2 | SSL_FLAGS_TLS_1_1 | SSL_FLAGS_TLS;
-                    ssl->minVer = DTLS_1_2_MIN_VER;
-                }
-#    ifdef USE_TLS_1_2_TOGGLE
-            }
-#    endif /* USE_TLS_1_2_TOGGLE */
-#    ifdef USE_DTLS
-            if (ssl->flags & SSL_FLAGS_DTLS)
-            {
-                if (compareMin == DTLS_1_2_MIN_VER)
-                {
-                    ssl->minVer = DTLS_1_2_MIN_VER;
-                }
-            }
-#    endif /* USE_DTLS */
-#   endif  /* USE_TLS_1_2 */
-
-        }
-#  endif /* USE_DTLS */
-# else
-        ssl->minVer = SSL3_MIN_VER;
-
-# endif /* USE_TLS */
-
-    }
-    else
-    {
-        ssl->err = SSL_ALERT_PROTOCOL_VERSION;
-        psTraceIntInfo("Unsupported ssl version: %d\n", compareMaj);
-        return MATRIXSSL_ERROR;
-    }
+      So we store the check result and use it only if
+      no supported_versions extension is found.
+    */
+    versionCheckResult = checkClientHelloVersion(ssl,
+            &serverHighestMinor);
 
     if (ssl->rec.majVer > SSL2_MAJ_VER)
     {
@@ -271,8 +110,14 @@ int32 parseClientHello(ssl_t *ssl, unsigned char **cp, unsigned char *end)
                 (int32) (end - c));
             return MATRIXSSL_ERROR;
         }
-        memcpy(ssl->sec.clientRandom, c, SSL_HS_RANDOM_SIZE);
+        Memcpy(ssl->sec.clientRandom, c, SSL_HS_RANDOM_SIZE);
         c += SSL_HS_RANDOM_SIZE;
+        psTracePrintHex(INDENT_HS_MSG,
+                "client_random",
+                ssl->sec.clientRandom,
+                SSL_HS_RANDOM_SIZE,
+                PS_TRUE);
+
         ssl->sessionIdLen = *c; c++; /* length verified with + 1 above */
         /*      If a session length was specified, the client is asking to
             resume a previously established session to speed up the handshake */
@@ -287,7 +132,7 @@ int32 parseClientHello(ssl_t *ssl, unsigned char **cp, unsigned char *end)
 # endif
                 return MATRIXSSL_ERROR;
             }
-            memcpy(ssl->sessionId, c, ssl->sessionIdLen);
+            Memcpy(ssl->sessionId, c, ssl->sessionIdLen);
             c += ssl->sessionIdLen;
         }
         else
@@ -296,6 +141,11 @@ int32 parseClientHello(ssl_t *ssl, unsigned char **cp, unsigned char *end)
                It may be re-enabled if a client session ticket extension is recvd */
             ssl->flags &= ~SSL_FLAGS_RESUMED;
         }
+        psTracePrintHex(INDENT_HS_MSG,
+                "session_id",
+                ssl->sec.clientRandom,
+                SSL_HS_RANDOM_SIZE,
+                PS_TRUE);
 # ifdef USE_DTLS
         /*      If DTLS is enabled, make sure we received a valid cookie in the
             CLIENT_HELLO message. */
@@ -306,7 +156,7 @@ int32 parseClientHello(ssl_t *ssl, unsigned char **cp, unsigned char *end)
             if (end - c < 1)
             {
                 ssl->err = SSL_ALERT_DECODE_ERROR;
-                psTraceInfo("Cookie length not provided\n");
+                psTraceErrr("Cookie length not provided\n");
                 return MATRIXSSL_ERROR;
             }
             /** Calculate what we expect the cookie should be by hashing the
@@ -325,7 +175,7 @@ int32 parseClientHello(ssl_t *ssl, unsigned char **cp, unsigned char *end)
             if (dtlsComputeCookie(ssl, c - cookie_len, cookie_len) < 0)
             {
                 ssl->err = SSL_ALERT_INTERNAL_ERROR;
-                psTraceInfo("Invalid cookie length\n");
+                psTraceErrr("Invalid cookie length\n");
                 return MATRIXSSL_ERROR;
             }
             cookie_len = *c++;
@@ -334,14 +184,14 @@ int32 parseClientHello(ssl_t *ssl, unsigned char **cp, unsigned char *end)
                 if (end - c < cookie_len || cookie_len != DTLS_COOKIE_SIZE)
                 {
                     ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-                    psTraceInfo("Invalid cookie length\n");
+                    psTraceErrr("Invalid cookie length\n");
                     return MATRIXSSL_ERROR;
                 }
                 if (memcmpct(c, ssl->srvCookie, DTLS_COOKIE_SIZE) != 0)
                 {
                     /* Cookie mismatch. Error to avoid possible DOS */
                     ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-                    psTraceInfo("Cookie mismatch\n");
+                    psTraceErrr("Cookie mismatch\n");
                     return MATRIXSSL_ERROR;
                 }
                 c += DTLS_COOKIE_SIZE;
@@ -376,7 +226,7 @@ int32 parseClientHello(ssl_t *ssl, unsigned char **cp, unsigned char *end)
         if (end - c < 2)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("Invalid cipher suite list length\n");
+            psTraceErrr("Invalid cipher suite list length\n");
             return MATRIXSSL_ERROR;
         }
         suiteLen = *c << 8; c++;
@@ -397,7 +247,7 @@ int32 parseClientHello(ssl_t *ssl, unsigned char **cp, unsigned char *end)
         if (end - c < suiteLen)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("Malformed clientHello message\n");
+            psTraceErrr("Malformed clientHello message\n");
             return MATRIXSSL_ERROR;
         }
         /* We do not choose a ciphersuite yet, as the cipher we choose
@@ -412,6 +262,10 @@ int32 parseClientHello(ssl_t *ssl, unsigned char **cp, unsigned char *end)
             more like an extension that can be "hidden" for pre-TLS1.0
             implementations. */
         suiteEnd = c + suiteLen;
+        psTracePrintEncodedCipherList(INDENT_HS_MSG,
+                "cipher_suites",
+                c, suiteLen,
+                PS_FALSE);
         while (c < suiteEnd)
         {
             cipher = *c << 8; c++;
@@ -425,17 +279,23 @@ int32 parseClientHello(ssl_t *ssl, unsigned char **cp, unsigned char *end)
                 }
             }
 # endif
+# ifdef USE_TLS_1_3
+            if (isTls13Ciphersuite(cipher))
+            {
+                ssl->gotTls13CiphersuiteInCH = PS_TRUE;
+            }
+# endif /* USE_TLS_1_3 */
             /** If TLS_FALLBACK_SCSV appears in ClientHello.cipher_suites and the
                highest protocol version supported by the server is higher than
                the version indicated in ClientHello.client_version, the server
                MUST respond with a fatal inappropriate_fallback alert.
-               @see https://tools.ietf.org/html/rfc7507#section-3 */
+               @see https://tools.ietf.org/html/rfc7507#section-3.*/
             if (cipher == TLS_FALLBACK_SCSV)
             {
                 if (ssl->reqMinVer < serverHighestMinor)
                 {
                     ssl->err = SSL_ALERT_INAPPROPRIATE_FALLBACK;
-                    psTraceInfo("Inappropriate version fallback\n");
+                    psTraceErrr("Inappropriate version fallback\n");
                     return MATRIXSSL_ERROR;
                 }
             }
@@ -445,14 +305,14 @@ int32 parseClientHello(ssl_t *ssl, unsigned char **cp, unsigned char *end)
         if (end - c < 1)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("Invalid compression header length\n");
+            psTraceErrr("Invalid compression header length\n");
             return MATRIXSSL_ERROR;
         }
         compLen = *c++;
         if ((uint32) (end - c) < compLen)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("Invalid compression header length\n");
+            psTraceErrr("Invalid compression header length\n");
             return MATRIXSSL_ERROR;
         }
         /* Per TLS RFCs proposing null compression is MUST. Check the other end
@@ -468,7 +328,7 @@ int32 parseClientHello(ssl_t *ssl, unsigned char **cp, unsigned char *end)
         {
             /* Note, also catches compLen == 0 */
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("No compression.null proposed\n");
+            psTraceErrr("No compression.null proposed\n");
             return MATRIXSSL_ERROR;
         }
 # ifdef USE_ZLIB_COMPRESSION
@@ -487,7 +347,7 @@ int32 parseClientHello(ssl_t *ssl, unsigned char **cp, unsigned char *end)
                     ssl->inflate.next_in = NULL;
                     if (inflateInit(&ssl->inflate) != Z_OK)
                     {
-                        psTraceInfo("inflateInit fail.  No compression\n");
+                        psTraceErrr("inflateInit fail.  No compression\n");
                     }
                     else
                     {
@@ -497,7 +357,7 @@ int32 parseClientHello(ssl_t *ssl, unsigned char **cp, unsigned char *end)
                         if (deflateInit(&ssl->deflate,
                                 Z_DEFAULT_COMPRESSION) != Z_OK)
                         {
-                            psTraceInfo("deflateInit fail.  No compression\n");
+                            psTraceErrr("deflateInit fail.  No compression\n");
                             inflateEnd(&ssl->inflate);
                         }
                         else
@@ -537,7 +397,7 @@ int32 parseClientHello(ssl_t *ssl, unsigned char **cp, unsigned char *end)
         if (end - c < 6)
         {
             ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-            psTraceInfo("Can't parse hello message\n");
+            psTraceErrr("Can't parse hello message\n");
             return MATRIXSSL_ERROR;
         }
         suiteLen = *c << 8; c++;
@@ -545,7 +405,7 @@ int32 parseClientHello(ssl_t *ssl, unsigned char **cp, unsigned char *end)
         if (suiteLen == 0 || suiteLen % 3 != 0)
         {
             ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-            psTraceInfo("Can't parse hello message\n");
+            psTraceErrr("Can't parse hello message\n");
             return MATRIXSSL_ERROR;
         }
         ssl->sessionIdLen = *c << 8; c++;
@@ -554,7 +414,7 @@ int32 parseClientHello(ssl_t *ssl, unsigned char **cp, unsigned char *end)
         if (ssl->sessionIdLen != 0)
         {
             ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-            psTraceInfo("Bad resumption request\n");
+            psTraceErrr("Bad resumption request\n");
             return MATRIXSSL_ERROR;
         }
         challengeLen = *c << 8; c++;
@@ -565,7 +425,7 @@ int32 parseClientHello(ssl_t *ssl, unsigned char **cp, unsigned char *end)
         if (challengeLen < 16 || challengeLen > 32)
 #endif
         {
-            psTraceInfo("Bad challenge length\n");
+            psTraceErrr("Bad challenge length\n");
             ssl->err = SSL_ALERT_DECODE_ERROR;
             return MATRIXSSL_ERROR;
         }
@@ -575,7 +435,7 @@ int32 parseClientHello(ssl_t *ssl, unsigned char **cp, unsigned char *end)
             challengeLen)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("Malformed SSLv2 clientHello\n");
+            psTraceErrr("Malformed SSLv2 clientHello\n");
             return MATRIXSSL_ERROR;
         }
         /* Parse the cipher suite list similar to the SSLv3 method, except
@@ -584,38 +444,86 @@ int32 parseClientHello(ssl_t *ssl, unsigned char **cp, unsigned char *end)
             We don't support session resumption from V2 handshakes, so don't
             need to worry about matching resumed cipher suite. */
         suiteStart = c;
-        while (c < (suiteStart + suiteLen))
-        {
-            cipher = *c << 16; c++;
-            cipher += *c << 8; c++;
-            cipher += *c; c++;
-            /* NOT CHOOSING SUITE HERE ANY LONGER*/
-        }
+
         /*      We don't allow session IDs for v2 ClientHellos */
         if (ssl->sessionIdLen > 0)
         {
             ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-            psTraceInfo("SSLv2 sessions not allowed\n");
+            psTraceErrr("SSLv2 sessions not allowed\n");
             return MATRIXSSL_ERROR;
         }
         /*      The client random (between 16 and 32 bytes) fills the least
             significant bytes in the (always) 32 byte SSLv3 client random */
-        memset(ssl->sec.clientRandom, 0x0, SSL_HS_RANDOM_SIZE);
-        memcpy(ssl->sec.clientRandom + (SSL_HS_RANDOM_SIZE - challengeLen),
+        Memset(ssl->sec.clientRandom, 0x0, SSL_HS_RANDOM_SIZE);
+        Memcpy(ssl->sec.clientRandom + (SSL_HS_RANDOM_SIZE - challengeLen),
             c, challengeLen);
         c += challengeLen;
 # else
         ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-        psTraceInfo("SSLV2 CLIENT_HELLO not supported.\n");
+        psTraceErrr("SSLV2 CLIENT_HELLO not supported.\n");
         return MATRIXSSL_ERROR;
 # endif
     }
+
+#ifdef USE_TLS_1_3
+    /*
+      Check supported_versions even if we have been configured at run-time
+      not to support TLS 1.3. This allows us to negotiate an earlier version
+      with clients that do DO support 1.3.
+
+      TLS 1.3 spec, 4.2.1:
+      "If this extension is present in the ClientHello, servers MUST
+      NOT use the ClientHello.legacy_version value for version
+      negotiation and MUST use only the “supported_versions” extension
+      to determine client preferences. Servers MUST only select a
+      version of TLS present in that extension and MUST ignore any
+      unknown versions that are present in that extension. Note that
+      this mechanism makes it possible to negotiate a version prior to
+      TLS 1.2 if one side supports a sparse range."
+    */
+    if (ssl->extFlags.got_supported_versions == 1)
+    {
+        int32_t rc;
+
+        if (versionCheckResult < 0)
+        {
+            if (ssl->err == SSL_ALERT_PROTOCOL_VERSION)
+            {
+                ssl->err = SSL_ALERT_NONE;
+            }
+            psTraceInfo("ClientHello.client_version check failed, but " \
+                    "supported_versions overrides\n");
+        }
+        rc = checkSupportedVersions(ssl);
+        if (rc < 0)
+        {
+            psTraceErrr("Can't support client's SSL version\n");
+            return rc;
+        }
+    }
+    else
+#endif /* USE_TLS_1_3 */
+    {
+        /* Client did not send supported_versions.
+           Use the result of the legacy_version-based negotiation. */
+        if (versionCheckResult < 0)
+        {
+            /* If no supported_versions extensions was present, and the
+               ClientHello.client_version check failed, send the alert now. */
+            psTraceErrr("Can't support client's SSL version\n");
+            return versionCheckResult;
+        }
+    }
+
+    /* Protocol version has now been successfully negotiated. */
+    psTracePrintNegotiatedProtocolVersion(INDENT_HS_MSG,
+            "Chosen protocol version", ssl, PS_TRUE);
 
     /*  ClientHello should be the only one in the record. */
     if (c != end)
     {
         ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-        psTraceInfo("Invalid final client hello length\n");
+        psTraceErrr("Invalid final client hello length\n");
         return MATRIXSSL_ERROR;
     }
 
@@ -650,39 +558,47 @@ int32 parseClientHello(ssl_t *ssl, unsigned char **cp, unsigned char *end)
         else
         {
             ssl->flags &= ~SSL_FLAGS_RESUMED;
-# ifdef USE_STATELESS_SESSION_TICKETS
-            /* Client MAY generate and include a  Session ID in the
-                TLS ClientHello.  If the server accepts the ticket
-                and the Session ID is not empty, then it MUST respond
-                with the same Session ID present in the ClientHello. Check
-                if client is even using the mechanism though */
-            if (ssl->sid)
+            if (!NEGOTIATED_TLS_1_3(ssl))
             {
-                if (ssl->sid->sessionTicketState == SESS_TICKET_STATE_INIT)
+# ifdef USE_STATELESS_SESSION_TICKETS
+                /*
+                  Client MAY generate and include a  Session ID in the
+                  TLS ClientHello.  If the server accepts the ticket
+                  and the Session ID is not empty, then it MUST respond
+                  with the same Session ID present in the ClientHello. Check
+                  if client is even using the mechanism though.
+
+                  In TLS 1.3, the server MUST echo the client's Session ID
+                  back, but otherwise ignore it. Make sure we don't clear it.
+                */
+                if (ssl->sid)
                 {
-                    memset(ssl->sessionId, 0, SSL_MAX_SESSION_ID_SIZE);
-                    ssl->sessionIdLen = 0;
+                    if (ssl->sid->sessionTicketState == SESS_TICKET_STATE_INIT)
+                    {
+                        Memset(ssl->sessionId, 0, SSL_MAX_SESSION_ID_SIZE);
+                        ssl->sessionIdLen = 0;
+                    }
+                    else
+                    {
+                        /* This flag means we received a session we can't resume
+                           but we have to send it back if we also get a ticket
+                           later that we like */
+                        ssl->extFlags.session_id = 1;
+                    }
                 }
                 else
                 {
-                    /* This flag means we received a session we can't resume
-                        but we have to send it back if we also get a ticket
-                        later that we like */
-                    ssl->extFlags.session_id = 1;
+                    Memset(ssl->sessionId, 0, SSL_MAX_SESSION_ID_SIZE);
+                    ssl->sessionIdLen = 0;
                 }
-            }
-            else
-            {
-                memset(ssl->sessionId, 0, SSL_MAX_SESSION_ID_SIZE);
-                ssl->sessionIdLen = 0;
-            }
 # else
-            memset(ssl->sessionId, 0, SSL_MAX_SESSION_ID_SIZE);
-            ssl->sessionIdLen = 0;
+                Memset(ssl->sessionId, 0, SSL_MAX_SESSION_ID_SIZE);
+                ssl->sessionIdLen = 0;
 #  ifdef USE_MATRIXSSL_STATS
-            matrixsslUpdateStat(ssl, FAILED_RESUMPTIONS_STAT, 1);
+                matrixsslUpdateStat(ssl, FAILED_RESUMPTIONS_STAT, 1);
 #  endif
 # endif
+            } /* !NEGOTIATED_TLS_1_3(ssl) */
         }
     }
 
@@ -709,7 +625,7 @@ SKIP_STANDARD_RESUMPTION:
             else
             {
                 ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
-                psTraceInfo("SSLV2 not supported.\n");
+                psTraceErrr("SSLV2 not supported.\n");
                 return MATRIXSSL_ERROR;
             }
             if (cipher == ssl->cipher->ident)
@@ -734,7 +650,7 @@ SKIP_STANDARD_RESUMPTION:
             end result will be assignment of ssl->cipher */
         if (chooseCipherSuite(ssl, suiteStart, suiteLen) < 0)
         {
-            psTraceInfo("Server could not support any client cipher suites\n");
+            psTraceErrr("Server could not support any client cipher suites\n");
             ssl->cipher = sslGetCipherSpec(ssl, SSL_NULL_WITH_NULL_NULL);
             if (ssl->err != SSL_ALERT_UNRECOGNIZED_NAME)
             {
@@ -744,7 +660,7 @@ SKIP_STANDARD_RESUMPTION:
         }
         if (ssl->cipher->ident == 0)
         {
-            psTraceInfo("Client attempting SSL_NULL_WITH_NULL_NULL conn\n");
+            psTraceErrr("Client attempting SSL_NULL_WITH_NULL_NULL conn\n");
             ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
             return MATRIXSSL_ERROR;
         }
@@ -768,14 +684,15 @@ SKIP_STANDARD_RESUMPTION:
         {
 
 #  ifdef USE_ECC_CIPHER_SUITE
-            if (ssl->flags & SSL_FLAGS_ECC_CIPHER)
+            if (ssl->flags & SSL_FLAGS_ECC_CIPHER &&
+                    !NEGOTIATED_TLS_1_3(ssl))
             {
                 /* If ecCurveId is zero and we received the extension, then
                     we really couldn't match and can't continue. */
                 if (ssl->ecInfo.ecCurveId == 0 &&
                     (ssl->ecInfo.ecFlags & IS_RECVD_EXT))
                 {
-                    psTraceInfo("Did not share any EC curves with client\n");
+                    psTraceErrr("Did not share any EC curves with client\n");
                     /* Don't see any particular alert for this case */
                     ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
                     return MATRIXSSL_ERROR;
@@ -801,7 +718,7 @@ SKIP_STANDARD_RESUMPTION:
 
 #   endif
                     psEccDeleteKey(&ssl->sec.eccKeyPriv);
-                    psTraceInfo("GenEphemeralEcc failed\n");
+                    psTraceErrr("GenEphemeralEcc failed\n");
                     ssl->err = SSL_ALERT_INTERNAL_ERROR;
                     return rc;
                 }
@@ -817,13 +734,12 @@ SKIP_STANDARD_RESUMPTION:
             {
                 return MATRIXSSL_ERROR;
             }
-            if ((rc = psDhGenKeyInts(ssl->hsPool, ssl->keys->dhParams.size,
-                     &ssl->keys->dhParams.p, &ssl->keys->dhParams.g,
+            if ((rc = psDhGenKeyParams(ssl->hsPool, &ssl->keys->dhParams,
                      ssl->sec.dhKeyPriv, pkiData)) < 0)
             {
                 psFree(ssl->sec.dhKeyPriv, ssl->hsPool);
                 ssl->sec.dhKeyPriv = NULL;
-                psTraceInfo("Error generating DH keys\n");
+                psTraceErrr("Error generating DH keys\n");
                 ssl->err = SSL_ALERT_INTERNAL_ERROR;
                 return MATRIXSSL_ERROR;
             }
@@ -834,10 +750,29 @@ SKIP_STANDARD_RESUMPTION:
         }
 # endif  /* USE_DHE_CIPHER_SUITE */
 
-        ssl->hsState = SSL_HS_CLIENT_KEY_EXCHANGE;
+        if (USING_TLS_1_3(ssl))
+        {
+            ssl->hsState = SSL_HS_TLS_1_3_RECVD_CH;
+# ifdef USE_TLS_1_3
+            if (ssl->tls13IncorrectDheKeyShare &&
+                    !ssl->sec.tls13ClientCookieOk)
+            {
+                psTraceErrr("Client failed to respond to HRR with a cookie\n");
+                ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
+                return MATRIXSSL_ERROR;
+            }
+#  endif
+        }
+        else
+        {
+            ssl->hsState = SSL_HS_CLIENT_KEY_EXCHANGE;
+        }
 # ifdef USE_CLIENT_AUTH
-        /*      Next state in client authentication case is to receive the cert */
-        if (ssl->flags & SSL_FLAGS_CLIENT_AUTH)
+        /* Next state in client authentication case is to receive the cert */
+        /* This is for 1.2 and earlier. For 1.3 the client authentication is
+           handled elsewhere */
+        if (!USING_TLS_1_3(ssl) &&
+             ssl->flags & SSL_FLAGS_CLIENT_AUTH)
         {
 #  ifdef USE_ANON_DH_CIPHER_SUITE
             /* However, what if the server has called for client auth and
@@ -884,12 +819,14 @@ int32 parseClientKeyExchange(ssl_t *ssl, int32 hsLen, unsigned char **cp,
     psPool_t *ckepkiPool = NULL;
 # endif
 # ifdef USE_PSK_CIPHER_SUITE
-    uint8_t pskLen;
+    uint8_t pskLen = 0;
     unsigned char *pskKey = NULL;
 # endif
     void *pkiData = ssl->userPtr;
 
     c = *cp;
+
+    psTracePrintHsMessageParse(ssl, SSL_HS_CLIENT_KEY_EXCHANGE);
 
     /*  RSA: This message contains the premaster secret encrypted with the
         server's public key (from the Certificate).  The premaster
@@ -897,11 +834,10 @@ int32 parseClientKeyExchange(ssl_t *ssl, int32 hsLen, unsigned char **cp,
         than that because the 48 bytes are padded before encryption
         according to PKCS#1v1.5.  After encryption, we should have the
         correct length. */
-    psTraceHs(">>> Server parsing CLIENT_KEY_EXCHANGE\n");
     if ((int32) (end - c) < hsLen)
     {
         ssl->err = SSL_ALERT_DECODE_ERROR;
-        psTraceInfo("Invalid ClientKeyExchange length 1\n");
+        psTraceErrr("Invalid ClientKeyExchange length 1\n");
         return MATRIXSSL_ERROR;
     }
 
@@ -913,7 +849,7 @@ int32 parseClientKeyExchange(ssl_t *ssl, int32 hsLen, unsigned char **cp,
         if (end - c < 2)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("Invalid ClientKeyExchange length 2\n");
+            psTraceErrr("Invalid ClientKeyExchange length 2\n");
             return MATRIXSSL_ERROR;
         }
 #  ifdef USE_ECC_CIPHER_SUITE
@@ -932,7 +868,7 @@ int32 parseClientKeyExchange(ssl_t *ssl, int32 hsLen, unsigned char **cp,
         if ((int32) (end - c) < pubKeyLen)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("Invalid ClientKeyExchange length 3\n");
+            psTraceErrr("Invalid ClientKeyExchange length 3\n");
             return MATRIXSSL_ERROR;
         }
     }
@@ -955,7 +891,7 @@ int32 parseClientKeyExchange(ssl_t *ssl, int32 hsLen, unsigned char **cp,
             if (end - c < 2)
             {
                 ssl->err = SSL_ALERT_DECODE_ERROR;
-                psTraceInfo("Invalid ClientKeyExchange length 4\n");
+                psTraceErrr("Invalid ClientKeyExchange length 4\n");
                 return MATRIXSSL_ERROR;
             }
             pubKeyLen = *c << 8; c++;
@@ -963,7 +899,7 @@ int32 parseClientKeyExchange(ssl_t *ssl, int32 hsLen, unsigned char **cp,
             if ((int32) (end - c) < pubKeyLen)
             {
                 ssl->err = SSL_ALERT_DECODE_ERROR;
-                psTraceInfo("Invalid ClientKeyExchange length 5\n");
+                psTraceErrr("Invalid ClientKeyExchange length 5\n");
                 return MATRIXSSL_ERROR;
             }
 #  ifdef USE_ECC_CIPHER_SUITE
@@ -982,23 +918,14 @@ int32 parseClientKeyExchange(ssl_t *ssl, int32 hsLen, unsigned char **cp,
             if ((uint32) (end - c) < pubKeyLen)
             {
                 ssl->err = SSL_ALERT_DECODE_ERROR;
-                psTraceInfo("Invalid ClientKeyExchange PSK length\n");
+                psTraceErrr("Invalid ClientKeyExchange PSK length\n");
                 return MATRIXSSL_ERROR;
             }
 
-            /* If there are PSKs loaded, look at those.  Otherwise see if
-                there is a callback. */
-            if (ssl->keys && ssl->keys->pskKeys)
+            rc = matrixSslPskGetKey(ssl, c, pubKeyLen, &pskKey, &pskLen);
+            if (pskKey == NULL || rc < 0)
             {
-                matrixSslPskGetKey(ssl, c, pubKeyLen, &pskKey, &pskLen);
-            }
-            else if (ssl->sec.pskCb)
-            {
-                (ssl->sec.pskCb)(ssl, c, pubKeyLen, &pskKey, &pskLen);
-            }
-            if (pskKey == NULL)
-            {
-                psTraceInfo("Server doesn't not have matching pre-shared key\n");
+                psTraceErrr("Server doesn't not have matching pre-shared key\n");
                 ssl->err = SSL_ALERT_UNKNOWN_PSK_IDENTITY;
                 return MATRIXSSL_ERROR;
             }
@@ -1009,7 +936,7 @@ int32 parseClientKeyExchange(ssl_t *ssl, int32 hsLen, unsigned char **cp,
             if ((uint32) (end - c) < pubKeyLen)
             {
                 ssl->err = SSL_ALERT_DECODE_ERROR;
-                psTraceInfo("Invalid ClientKeyExchange length\n");
+                psTraceErrr("Invalid ClientKeyExchange length\n");
                 return MATRIXSSL_ERROR;
             }
         }
@@ -1120,7 +1047,12 @@ int32 parseClientKeyExchange(ssl_t *ssl, int32 hsLen, unsigned char **cp,
 /*
                 Need to prepend a psSize_t length to the premaster key.
  */
-            memmove(&ssl->sec.premaster[2], ssl->sec.premaster,
+            if (pskKey == NULL)
+            {
+                ssl->err = SSL_ALERT_INTERNAL_ERROR;
+                return MATRIXSSL_ERROR;
+            }
+            Memmove(&ssl->sec.premaster[2], ssl->sec.premaster,
                 ssl->sec.premasterSize);
             ssl->sec.premaster[0] = (ssl->sec.premasterSize & 0xFF00) >> 8;
             ssl->sec.premaster[1] = (ssl->sec.premasterSize & 0xFF);
@@ -1129,7 +1061,7 @@ int32 parseClientKeyExchange(ssl_t *ssl, int32 hsLen, unsigned char **cp,
  */
             ssl->sec.premaster[ssl->sec.premasterSize + 2] = 0;
             ssl->sec.premaster[ssl->sec.premasterSize + 3] = (pskLen & 0xFF);
-            memcpy(&ssl->sec.premaster[ssl->sec.premasterSize + 4], pskKey,
+            Memcpy(&ssl->sec.premaster[ssl->sec.premasterSize + 4], pskKey,
                 pskLen);
 /*
                 Lastly, adjust the premasterSize
@@ -1156,26 +1088,10 @@ int32 parseClientKeyExchange(ssl_t *ssl, int32 hsLen, unsigned char **cp,
             pubKeyLen = *c << 8; c++;
             pubKeyLen += *c; c++;
         }
-        /* If there are PSKs loaded, look at those.  Otherwise see if
-           there is a callback. */
-        if (ssl->keys && ssl->keys->pskKeys)
+        rc = matrixSslPskGetKey(ssl, c, pubKeyLen, &pskKey, &pskLen);
+        if (rc < 0 || pskKey == NULL)
         {
-            matrixSslPskGetKey(ssl, c, pubKeyLen, &pskKey,
-                &pskLen);
-        }
-        else if (ssl->sec.pskCb)
-        {
-            if ((ssl->sec.pskCb)(ssl, c, pubKeyLen, &pskKey, &pskLen)
-                < 0)
-            {
-                psTraceInfo("User couldn't find pre-shared key\n");
-                ssl->err = SSL_ALERT_UNKNOWN_PSK_IDENTITY;
-                return MATRIXSSL_ERROR;
-            }
-        }
-        if (pskKey == NULL)
-        {
-            psTraceInfo("Server doesn't have matching pre-shared key\n");
+            psTraceErrr("Server doesn't have matching pre-shared key\n");
             ssl->err = SSL_ALERT_UNKNOWN_PSK_IDENTITY;
             return MATRIXSSL_ERROR;
         }
@@ -1186,13 +1102,13 @@ int32 parseClientKeyExchange(ssl_t *ssl, int32 hsLen, unsigned char **cp,
         {
             return SSL_MEM_ERROR;
         }
-        memset(ssl->sec.premaster, 0, ssl->sec.premasterSize);
+        Memset(ssl->sec.premaster, 0, ssl->sec.premasterSize);
         ssl->sec.premaster[0] = 0;
         ssl->sec.premaster[1] = (pskLen & 0xFF);
         /* memset to 0 handled middle portion */
         ssl->sec.premaster[2 + pskLen] = 0;
         ssl->sec.premaster[3 + pskLen] = (pskLen & 0xFF);
-        memcpy(&ssl->sec.premaster[4 + pskLen], pskKey, pskLen);
+        Memcpy(&ssl->sec.premaster[4 + pskLen], pskKey, pskLen);
     }
     else
     {
@@ -1201,6 +1117,7 @@ int32 parseClientKeyExchange(ssl_t *ssl, int32 hsLen, unsigned char **cp,
     if (ssl->cipher->type == CS_ECDH_ECDSA ||
         ssl->cipher->type == CS_ECDH_RSA)
     {
+        psEccKey_t *ecc = &ssl->chosenIdentity->privKey.key.ecc;
         if (ssl->majVer == SSL3_MAJ_VER &&
             ssl->minVer == SSL3_MIN_VER)
         {
@@ -1214,14 +1131,12 @@ int32 parseClientKeyExchange(ssl_t *ssl, int32 hsLen, unsigned char **cp,
             ssl->err = SSL_ALERT_INTERNAL_ERROR;
             return MATRIXSSL_ERROR;
         }
-        if (psEccNewKey(ssl->hsPool, &ssl->sec.eccKeyPub,
-                ssl->keys->privKey.key.ecc.curve) < 0)
+        if (psEccNewKey(ssl->hsPool, &ssl->sec.eccKeyPub, ecc->curve) < 0)
         {
             return SSL_MEM_ERROR;
         }
-        if (psEccX963ImportKey(ssl->hsPool, c, pubKeyLen,
-                ssl->sec.eccKeyPub, ssl->keys->privKey.key.ecc.curve)
-            < 0)
+        if (psEccX963ImportKey(ssl->hsPool,
+                               c, pubKeyLen, ssl->sec.eccKeyPub, ecc->curve) < 0)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
             return MATRIXSSL_ERROR;
@@ -1235,8 +1150,7 @@ int32 parseClientKeyExchange(ssl_t *ssl, int32 hsLen, unsigned char **cp,
             parse was attempted */
         /* c += pubKeyLen; */
 
-        ssl->sec.premasterSize =
-            ssl->keys->privKey.key.ecc.curve->size;
+        ssl->sec.premasterSize = ecc->curve->size;
         ssl->sec.premaster = psMalloc(ssl->hsPool,
             ssl->sec.premasterSize);
         if (ssl->sec.premaster == NULL)
@@ -1244,7 +1158,7 @@ int32 parseClientKeyExchange(ssl_t *ssl, int32 hsLen, unsigned char **cp,
             return SSL_MEM_ERROR;
         }
         if ((rc = psEccGenSharedSecret(ssl->hsPool,
-                 &ssl->keys->privKey.key.ecc, ssl->sec.eccKeyPub,
+                 ecc, ssl->sec.eccKeyPub,
                  ssl->sec.premaster, &ssl->sec.premasterSize,
                  pkiData)) < 0)
         {
@@ -1289,9 +1203,13 @@ int32 parseClientKeyExchange(ssl_t *ssl, int32 hsLen, unsigned char **cp,
                 must be taken to avoid leaking the information to an attacker
                 (through, e.g., timing, log files, or other channels.)"
  */
-    rc = psRsaDecryptPriv(ckepkiPool, &ssl->keys->privKey.key.rsa, c,
+#  ifdef USE_IDENTITY_CERTIFICATES
+    rc = psRsaDecryptPriv(ckepkiPool, &ssl->chosenIdentity->privKey.key.rsa, c,
         pubKeyLen, ssl->sec.premaster, ssl->sec.premasterSize,
         pkiData);
+#  else
+    rc = PS_FAILURE;
+#  endif
     /* Step 1 of Bleichenbacher attack mitigation. We do it here
        after the RSA op, but regardless of the result of the op. */
     if (psGetPrngLocked(R, sizeof(R), ssl->userPtr) < 0)
@@ -1325,19 +1243,19 @@ int32 parseClientKeyExchange(ssl_t *ssl, int32 hsLen, unsigned char **cp,
     ssl->sec.premaster[1] = ssl->reqMinVer;
     if (rc < 0)
     {
-        memcpy(ssl->sec.premaster + 2, R, sizeof(R));
+        Memcpy(ssl->sec.premaster + 2, R, sizeof(R));
     }
     else
     {
         /* Not necessary, but keep timing similar */
-        memcpy(R, ssl->sec.premaster + 2, sizeof(R));
+        Memcpy(R, ssl->sec.premaster + 2, sizeof(R));
     }
 
     /* R may contain sensitive data, eg. premaster */
     memzero_s(R, sizeof(R));
 
 # else /* RSA is the 'default' so if that didn't get hit there is a problem */
-    psTraceInfo("There is no handler for ClientKeyExchange parse. ERROR\n");
+    psTraceErrr("There is no handler for ClientKeyExchange parse. ERROR\n");
     return MATRIXSSL_ERROR;
 # endif /* USE_RSA_CIPHER_SUITE */
 # ifdef USE_ECC_CIPHER_SUITE
@@ -1444,10 +1362,11 @@ int32 parseCertificateVerify(ssl_t *ssl,
     psPool_t *cvpkiPool = NULL;
     void *pkiData = ssl->userPtr;
 
+    psTracePrintHsMessageParse(ssl, SSL_HS_CERTIFICATE_VERIFY);
+
     c = *cp;
     rc = 0;
     PS_VARIABLE_SET_BUT_UNUSED(rc); /* Note: Only used ifdef USE_ECC. */
-    psTraceHs(">>> Server parsing CERTIFICATE_VERIFY message\n");
 
 #   ifdef USE_TLS_1_2
     if (ssl->flags & SSL_FLAGS_TLS_1_2)
@@ -1457,19 +1376,20 @@ int32 parseCertificateVerify(ssl_t *ssl,
         if ((uint32) (end - c) < 2)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("Invalid Certificate Verify message\n");
+            psTraceErrr("Invalid Certificate Verify message\n");
             return MATRIXSSL_ERROR;
         }
         hashSigAlg = HASH_SIG_MASK(c[0], c[1]);
 
+# ifdef USE_SSL_INFORMATIONAL_TRACE_VERBOSE
         psTracePrintSigAlgs(hashSigAlg, "Peer CertificateVerify\n");
-
+# endif
         /* The server-sent algorithms has to be one of the ones we sent in
            our ClientHello extension */
         if (!(ssl->hashSigAlg & hashSigAlg))
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("Invalid SigHash\n");
+            psTraceErrr("Invalid SigHash\n");
             return MATRIXSSL_ERROR;
         }
 
@@ -1505,7 +1425,7 @@ int32 parseCertificateVerify(ssl_t *ssl,
 #    endif
         default:
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("Invalid Certificate Verify message\n");
+            psTraceErrr("Invalid Certificate Verify message\n");
             return MATRIXSSL_ERROR;
         }
         c += 2;
@@ -1521,7 +1441,7 @@ int32 parseCertificateVerify(ssl_t *ssl,
     if ((uint32) (end - c) < 2)
     {
         ssl->err = SSL_ALERT_DECODE_ERROR;
-        psTraceInfo("Invalid Certificate Verify message\n");
+        psTraceErrr("Invalid Certificate Verify message\n");
         return MATRIXSSL_ERROR;
     }
     pubKeyLen = *c << 8; c++;
@@ -1529,7 +1449,7 @@ int32 parseCertificateVerify(ssl_t *ssl,
     if ((uint32) (end - c) < pubKeyLen)
     {
         ssl->err = SSL_ALERT_DECODE_ERROR;
-        psTraceInfo("Invalid Certificate Verify message\n");
+        psTraceErrr("Invalid Certificate Verify message\n");
         return MATRIXSSL_ERROR;
     }
     /*  The server side verification of client identity.  If we can match
@@ -1543,12 +1463,13 @@ int32 parseCertificateVerify(ssl_t *ssl,
 #    ifdef USE_TLS_1_2
         if (ssl->flags & SSL_FLAGS_TLS_1_2)
         {
-            if ((i = psEccDsaVerify(cvpkiPool,
-                     &ssl->sec.cert->publicKey.key.ecc,
-                     hsMsgHash, certVerifyLen,
-                     c, pubKeyLen, &rc, pkiData)) != 0)
+            i = psEccDsaVerify(cvpkiPool,
+                               &ssl->sec.cert->publicKey.key.ecc,
+                               hsMsgHash, certVerifyLen,
+                               c, pubKeyLen, &rc, pkiData);
+            if (i != PS_SUCCESS)
             {
-                psTraceInfo("ECDSA signature validation failed\n");
+                psTraceErrr("ECDSA signature validation failed\n");
                 ssl->err = SSL_ALERT_BAD_CERTIFICATE;
                 return MATRIXSSL_ERROR;
             }
@@ -1556,33 +1477,35 @@ int32 parseCertificateVerify(ssl_t *ssl,
         else
         {
             certVerifyLen = SHA1_HASH_SIZE; /* per spec */
-            if ((i = psEccDsaVerify(cvpkiPool,
-                     &ssl->sec.cert->publicKey.key.ecc,
-                     hsMsgHash + MD5_HASH_SIZE, certVerifyLen,
-                     c, pubKeyLen,
-                     &rc, pkiData)) != 0)
+            i = psEccDsaVerify(cvpkiPool,
+                               &ssl->sec.cert->publicKey.key.ecc,
+                               hsMsgHash + MD5_HASH_SIZE, certVerifyLen,
+                               c, pubKeyLen,
+                               &rc, pkiData);
+            if (i != PS_SUCCESS)
             {
-                psTraceInfo("ECDSA signature validation failed\n");
+                psTraceErrr("ECDSA signature validation failed\n");
                 ssl->err = SSL_ALERT_BAD_CERTIFICATE;
                 return MATRIXSSL_ERROR;
             }
         }
 #    else
         certVerifyLen = SHA1_HASH_SIZE; /* per spec */
-        if ((i = psEccDsaVerify(cvpkiPool,
-                 &ssl->sec.cert->publicKey.key.ecc,
-                 hsMsgHash + MD5_HASH_SIZE, certVerifyLen,
-                 c, pubKeyLen,
-                 &rc, pkiData)) != 0)
+        i = psEccDsaVerify(cvpkiPool,
+                           &ssl->sec.cert->publicKey.key.ecc,
+                           hsMsgHash + MD5_HASH_SIZE, certVerifyLen,
+                           c, pubKeyLen,
+                           &rc, pkiData);
+        if (i != PS_SUCCESS)
         {
-            psTraceInfo("ECDSA signature validation failed\n");
+            psTraceErrr("ECDSA signature validation failed\n");
             ssl->err = SSL_ALERT_BAD_CERTIFICATE;
             return MATRIXSSL_ERROR;
         }
 #    endif
         if (rc != 1)
         {
-            psTraceInfo("Can't verify certVerify sig\n");
+            psTraceErrr("Can't verify certVerify sig\n");
             ssl->err = SSL_ALERT_BAD_CERTIFICATE;
             return MATRIXSSL_ERROR;
         }
@@ -1596,39 +1519,43 @@ int32 parseCertificateVerify(ssl_t *ssl,
 #    ifdef USE_TLS_1_2
     if (ssl->flags & SSL_FLAGS_TLS_1_2)
     {
-        if ((i = pubRsaDecryptSignedElement(cvpkiPool,
-                 &ssl->sec.cert->publicKey.key.rsa, c, pubKeyLen, certVerify,
-                 certVerifyLen, pkiData)) < 0)
+        i = pubRsaDecryptSignedElement(cvpkiPool,
+                                       &ssl->sec.cert->publicKey.key.rsa,
+                                       c, pubKeyLen, certVerify,
+                                       certVerifyLen, pkiData);
+        if (i < 0)
         {
-            psTraceInfo("Unable to decrypt CertVerify digital element\n");
+            psTraceErrr("Unable to decrypt CertVerify digital element\n");
             return MATRIXSSL_ERROR;
         }
     }
     else
     {
-        if ((i = psRsaDecryptPub(cvpkiPool, &ssl->sec.cert->publicKey.key.rsa, c,
-                 pubKeyLen, certVerify, certVerifyLen, pkiData)) < 0)
+        i = psRsaDecryptPub(cvpkiPool, &ssl->sec.cert->publicKey.key.rsa, c,
+                            pubKeyLen, certVerify, certVerifyLen, pkiData);
+        if (i < 0)
         {
-            psTraceInfo("Unable to publicly decrypt Certificate Verify message\n");
+            psTraceErrr("Unable to publicly decrypt Certificate Verify message\n");
             return MATRIXSSL_ERROR;
         }
     }
 #    else /* !USE_TLS_1_2 */
-    if ((i = psRsaDecryptPub(cvpkiPool, &ssl->sec.cert->publicKey.key.rsa, c,
-             pubKeyLen, certVerify, certVerifyLen, pkiData)) < 0)
+    i = psRsaDecryptPub(cvpkiPool, &ssl->sec.cert->publicKey.key.rsa, c,
+                        pubKeyLen, certVerify, certVerifyLen, pkiData);
+    if (i < 0)
     {
-        psTraceInfo("Unable to publicly decrypt Certificate Verify message\n");
+        psTraceErrr("Unable to publicly decrypt Certificate Verify message\n");
         return MATRIXSSL_ERROR;
     }
 #    endif /* USE_TLS_1_2 */
 
     if (memcmpct(certVerify, hsMsgHash, certVerifyLen) != 0)
     {
-        psTraceInfo("Unable to verify client certificate signature\n");
+        psTraceErrr("Unable to verify client certificate signature\n");
         return MATRIXSSL_ERROR;
     }
 #   else /* RSA is 'default' so if that didn't get hit there is a problem */
-    psTraceInfo("There is no handler for CertificateVerify parse. ERROR\n");
+    psTraceErrr("There is no handler for CertificateVerify parse. ERROR\n");
     return MATRIXSSL_ERROR;
 #   endif /* USE_RSA */
 #   ifdef USE_ECC
@@ -1659,7 +1586,8 @@ int32 parseServerHello(ssl_t *ssl, int32 hsLen, unsigned char **cp,
 
     c = *cp;
 
-    psTraceHs(">>> Client parsing SERVER_HELLO message\n");
+    psTracePrintHsMessageParse(ssl, SSL_HS_SERVER_HELLO);
+
 # ifdef USE_MATRIXSSL_STATS
     matrixsslUpdateStat(ssl, SH_RECV_STAT, 1);
 # endif
@@ -1687,145 +1615,38 @@ int32 parseServerHello(ssl_t *ssl, int32 hsLen, unsigned char **cp,
     if (end - c < 2)
     {
         ssl->err = SSL_ALERT_DECODE_ERROR;
-        psTraceInfo("Invalid ssl header version length\n");
+        psTraceErrr("Invalid ssl header version length\n");
         return MATRIXSSL_ERROR;
     }
     ssl->reqMajVer = *c; c++;
     ssl->reqMinVer = *c; c++;
-    psTracePrintProtocolVersion("Parsed ServerHello.server_version",
-            ssl->reqMajVer, ssl->reqMinVer, 1);
+    psTracePrintProtocolVersion(INDENT_HS_MSG,
+            "server_version",
+            ssl->reqMajVer,
+            ssl->reqMinVer,
+            1);
 
-    if (ssl->reqMajVer != ssl->majVer)
+    rc = checkServerHelloVersion(ssl);
+    if (rc < 0)
     {
-        ssl->err = SSL_ALERT_PROTOCOL_VERSION;
-        psTraceIntInfo("Unsupported ssl version: %d\n", ssl->reqMajVer);
-        return MATRIXSSL_ERROR;
+        return rc;
     }
-
-# ifdef USE_TLS
-    /* See if the protocol is being downgraded */
-    if (ssl->reqMinVer != ssl->minVer)
-    {
-        if (ssl->clientRejectVersionDowngrade)
-        {
-            ssl->err = SSL_ALERT_PROTOCOL_VERSION;
-            psTraceInfo("Error: version downgrade attempt by server ");
-            psTraceInfo(" rejected: ServerHello.server_version <");
-            psTraceInfo(" ClientHello.client_version\n");
-            return MATRIXSSL_ERROR;
-        }
-
-        if (ssl->reqMinVer == SSL3_MIN_VER && ssl->minVer >= TLS_MIN_VER)
-        {
-#  ifdef DISABLE_SSLV3
-            ssl->err = SSL_ALERT_PROTOCOL_VERSION;
-            psTraceInfo("Server wants to talk SSLv3 but it's disabled\n");
-            return MATRIXSSL_ERROR;
-#  else
-            /*  Server minVer now becomes OUR initial requested version.
-                This is used during the creation of the premaster where
-                this initial requested version is part of the calculation.
-                The RFC actually says to use the original requested version
-                but no implemenations seem to follow that and just use the
-                agreed upon one. */
-            ssl->reqMinVer = ssl->minVer;
-            ssl->minVer = SSL3_MIN_VER;
-            ssl->flags &= ~SSL_FLAGS_TLS;
-#   ifdef USE_TLS_1_1
-            ssl->flags &= ~SSL_FLAGS_TLS_1_1;
-#   endif   /* USE_TLS_1_1 */
-#   ifdef USE_TLS_1_2
-            ssl->flags &= ~SSL_FLAGS_TLS_1_2;
-#   endif /* USE_TLS_1_2 */
-#  endif  /* DISABLE_SSLV3 */
-        }
-        else
-        {
-#  ifdef USE_TLS_1_1
-#   ifdef USE_TLS_1_2
-            /* Step down one at a time */
-            if (ssl->reqMinVer < TLS_1_2_MIN_VER &&
-                (ssl->flags & SSL_FLAGS_TLS_1_2))
-            {
-                ssl->flags &= ~SSL_FLAGS_TLS_1_2;
-                if (ssl->reqMinVer == TLS_1_1_MIN_VER)
-                {
-#    ifdef DISABLE_TLS_1_1
-                    ssl->err = SSL_ALERT_PROTOCOL_VERSION;
-                    psTraceInfo("Server wants to talk TLS1.1 but it's disabled\n");
-                    return MATRIXSSL_ERROR;
-#    else
-                    ssl->reqMinVer = ssl->minVer;
-                    ssl->minVer = TLS_1_1_MIN_VER;
-                    goto PROTOCOL_DETERMINED;
-#    endif
-                }
-            }
-#   endif   /* USE_TLS_1_2 */
-            if (ssl->reqMinVer == TLS_MIN_VER &&
-                ssl->minVer <= TLS_1_2_MIN_VER)
-            {
-#   ifdef DISABLE_TLS_1_0
-                ssl->err = SSL_ALERT_PROTOCOL_VERSION;
-                psTraceInfo("Server wants to talk TLS1.0 but it's disabled\n");
-                return MATRIXSSL_ERROR;
-#   else
-                if (ssl->disable_tls_1_0)
-                {
-                    ssl->err = SSL_ALERT_PROTOCOL_VERSION;
-                    psTraceInfo("Server wants to talk TLS1.0 but it's disabled\n");
-                    return MATRIXSSL_ERROR;
-                }
-                else
-                {
-                    ssl->reqMinVer = ssl->minVer;
-                    ssl->minVer = TLS_MIN_VER;
-                    ssl->flags &= ~SSL_FLAGS_TLS_1_1;
-                }
-#   endif
-            }
-            else
-            {
-#  endif    /* USE_TLS_1_1 */
-#  ifdef USE_DTLS
-            /* Tests for DTLS downgrades */
-            if (ssl->flags & SSL_FLAGS_DTLS)
-            {
-                if (ssl->reqMinVer == DTLS_MIN_VER &&
-                    ssl->minVer == DTLS_1_2_MIN_VER)
-                {
-                    ssl->reqMinVer = ssl->minVer;
-                    ssl->minVer = DTLS_MIN_VER;
-                    ssl->flags &= ~SSL_FLAGS_TLS_1_2;
-                    goto PROTOCOL_DETERMINED;
-                }
-            }
-#  endif
-            /* Wasn't able to settle on a common protocol */
-            ssl->err = SSL_ALERT_PROTOCOL_VERSION;
-            psTraceIntInfo("Unsupported ssl version: %d\n",
-                ssl->reqMajVer);
-            return MATRIXSSL_ERROR;
-#  ifdef USE_TLS_1_1
-        }
-#  endif    /* USE_TLS_1_1 */
-        }
-    }
-# endif /* USE_TLS */
-
-# if (defined (USE_TLS_1_2) && !defined(DISABLE_TLS_1_1)) || defined (USE_DTLS)
-PROTOCOL_DETERMINED:
-# endif /* (USE_TLS_1_2 && !DISABLE_TLS_1_1) || USE_DTLS */
 
     /*  Next is a 32 bytes of random data for key generation
         and a single byte with the session ID length */
     if (end - c < SSL_HS_RANDOM_SIZE + 1)
     {
         ssl->err = SSL_ALERT_DECODE_ERROR;
-        psTraceInfo("Invalid length of random data\n");
+        psTraceErrr("Invalid length of random data\n");
         return MATRIXSSL_ERROR;
     }
-    memcpy(ssl->sec.serverRandom, c, SSL_HS_RANDOM_SIZE);
+    Memcpy(ssl->sec.serverRandom, c, SSL_HS_RANDOM_SIZE);
+    psTracePrintHex(INDENT_HS_MSG,
+            "random",
+            ssl->sec.serverRandom,
+            SSL_HS_RANDOM_SIZE,
+            PS_TRUE);
+
     c += SSL_HS_RANDOM_SIZE;
     sessionIdLen = *c; c++;
     if (sessionIdLen > SSL_MAX_SESSION_ID_SIZE ||
@@ -1834,6 +1655,12 @@ PROTOCOL_DETERMINED:
         ssl->err = SSL_ALERT_DECODE_ERROR;
         return MATRIXSSL_ERROR;
     }
+    psTracePrintHex(INDENT_HS_MSG,
+            "session_id",
+            c,
+            (psSizeL_t)sessionIdLen,
+            PS_TRUE);
+
     /*  If a session length was specified, the server has sent us a
         session Id.  We may have requested a specific session, and the
         server may or may not agree to use that session. */
@@ -1841,16 +1668,16 @@ PROTOCOL_DETERMINED:
     {
         if (ssl->sessionIdLen > 0)
         {
-            if (memcmp(ssl->sessionId, c, sessionIdLen) == 0)
+            if (Memcmp(ssl->sessionId, c, sessionIdLen) == 0)
             {
                 ssl->flags |= SSL_FLAGS_RESUMED;
             }
             else
             {
                 ssl->cipher = sslGetCipherSpec(ssl, SSL_NULL_WITH_NULL_NULL);
-                memset(ssl->sec.masterSecret, 0x0, SSL_HS_MASTER_SIZE);
+                Memset(ssl->sec.masterSecret, 0x0, SSL_HS_MASTER_SIZE);
                 ssl->sessionIdLen = (unsigned char) sessionIdLen;
-                memcpy(ssl->sessionId, c, sessionIdLen);
+                Memcpy(ssl->sessionId, c, sessionIdLen);
                 ssl->flags &= ~SSL_FLAGS_RESUMED;
 # ifdef USE_MATRIXSSL_STATS
                 matrixsslUpdateStat(ssl, FAILED_RESUMPTIONS_STAT, 1);
@@ -1878,7 +1705,7 @@ PROTOCOL_DETERMINED:
         else
         {
             ssl->sessionIdLen = (unsigned char) sessionIdLen;
-            memcpy(ssl->sessionId, c, sessionIdLen);
+            Memcpy(ssl->sessionId, c, sessionIdLen);
         }
         c += sessionIdLen;
     }
@@ -1887,9 +1714,9 @@ PROTOCOL_DETERMINED:
         if (ssl->sessionIdLen > 0)
         {
             ssl->cipher = sslGetCipherSpec(ssl, SSL_NULL_WITH_NULL_NULL);
-            memset(ssl->sec.masterSecret, 0x0, SSL_HS_MASTER_SIZE);
+            Memset(ssl->sec.masterSecret, 0x0, SSL_HS_MASTER_SIZE);
             ssl->sessionIdLen = 0;
-            memset(ssl->sessionId, 0x0, SSL_MAX_SESSION_ID_SIZE);
+            Memset(ssl->sessionId, 0x0, SSL_MAX_SESSION_ID_SIZE);
             ssl->flags &= ~SSL_FLAGS_RESUMED;
 # ifdef USE_MATRIXSSL_STATS
             matrixsslUpdateStat(ssl, FAILED_RESUMPTIONS_STAT, 1);
@@ -1900,11 +1727,16 @@ PROTOCOL_DETERMINED:
     if (end - c < 2)
     {
         ssl->err = SSL_ALERT_DECODE_ERROR;
-        psTraceInfo("Invalid cipher suite length\n");
+        psTraceErrr("Invalid cipher suite length\n");
         return MATRIXSSL_ERROR;
     }
     cipher = *c << 8; c++;
     cipher += *c; c++;
+
+    psTracePrintCiphersuiteName(INDENT_HS_MSG,
+            "cipher_suite",
+            cipher,
+            PS_TRUE);
 
     /*  A resumed session can only match the cipher originally
         negotiated. Otherwise, match the first cipher that we support */
@@ -1914,13 +1746,22 @@ PROTOCOL_DETERMINED:
         if (ssl->cipher->ident != cipher)
         {
             ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
-            psTraceInfo("Can't support resumed cipher\n");
+            psTraceErrr("Can't support resumed cipher\n");
             return MATRIXSSL_ERROR;
         }
     }
     else
     {
-        if ((ssl->cipher = sslGetCipherSpec(ssl, cipher)) == NULL)
+        ssl->cipher = sslGetCipherSpec(ssl, cipher);
+        /*
+          Check whether we support the ciphersuite chosen by the server.
+
+          Do not allow the server to choose the NULL suite - we always
+          have it in our supported suites array, since it is used
+          as a terminator, and it is not possible to disable it at run-time.
+        */
+        if (ssl->cipher == NULL
+                || ssl->cipher->ident == SSL_NULL_WITH_NULL_NULL)
         {
             ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
             psTraceIntInfo("Can't support requested cipher: %d\n", cipher);
@@ -1935,7 +1776,7 @@ PROTOCOL_DETERMINED:
     if (end - c < 1)
     {
         ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-        psTraceInfo("Expected compression value\n");
+        psTraceErrr("Expected compression value\n");
         return MATRIXSSL_ERROR;
     }
     switch (*c)
@@ -1973,7 +1814,7 @@ PROTOCOL_DETERMINED:
 # endif /* USE_ZLIB_COMPRESSION */
     default:
         ssl->err = SSL_ALERT_DECODE_ERROR;
-        psTraceInfo("zlib compression not enabled.\n");
+        psTraceErrr("zlib compression not enabled.\n");
         return MATRIXSSL_ERROR;
     }
     /*  At this point, if we're resumed, we have all the required info
@@ -1992,12 +1833,33 @@ PROTOCOL_DETERMINED:
         next handshake message or if it is extension data */
     if (c != end && ((int32) hsLen > (c - extData)))
     {
+        /* If hsLen indicates that there is some extension data to parse,
+           check that there are at least two octets; at minimum, extensions
+           (if present) must consist of two length octets.
+           Note: extData points to the start of the ServerHello. */
+        if ((int32) hsLen - (c - extData) < 2)
+        {
+            psTraceErrr("Invalid ServerHello length encoding\n");
+            ssl->err = SSL_ALERT_DECODE_ERROR;
+            return MATRIXSSL_ERROR;
+        }
         rc = parseServerHelloExtensions(ssl, hsLen, extData, &c, end - c);
         if (rc < 0)
         {
             /* Alerts will already have been set inside */
             return rc;
         }
+# ifdef USE_TLS_1_3
+        if (!NEGOTIATED_TLS_1_3(ssl))
+        {
+            rc = performTls13DowngradeCheck(ssl);
+            if (rc < 0)
+            {
+                return rc;
+            }
+        }
+
+# endif /* USE_TLS_1_3 */
     }
 
 # ifdef USE_OCSP_MUST_STAPLE
@@ -2006,7 +1868,7 @@ PROTOCOL_DETERMINED:
     {
         if (ssl->extFlags.status_request == 0)
         {
-            psTraceInfo("Server doesn't support OCSP stapling\n");
+            psTraceErrr("Server doesn't support OCSP stapling\n");
             ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
             return MATRIXSSL_ERROR;
         }
@@ -2060,13 +1922,13 @@ PROTOCOL_DETERMINED:
     {
 #   ifdef REQUIRE_SECURE_REHANDSHAKES
         ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
-        psTraceInfo("Srv doesn't support renegotiationInfo\n");
+        psTraceErrr("Srv doesn't support renegotiationInfo\n");
         return MATRIXSSL_ERROR;
 #   else
         if (ssl->secureRenegotiationFlag == PS_TRUE)
         {
             ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
-            psTraceInfo("Srv didn't send renegotiationInfo on re-hndshk\n");
+            psTraceErrr("Srv didn't send renegotiationInfo on re-hndshk\n");
             return MATRIXSSL_ERROR;
         }
 #    ifndef ENABLE_INSECURE_REHANDSHAKES
@@ -2076,7 +1938,7 @@ PROTOCOL_DETERMINED:
             ssl->myVerifyDataLen > 0)
         {
             ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
-            psTraceInfo("Srv attempting insecure renegotiation\n");
+            psTraceErrr("Srv attempting insecure renegotiation\n");
             return MATRIXSSL_ERROR;
         }
 #    endif /* !ENABLE_SECURE_REHANDSHAKES */
@@ -2130,6 +1992,7 @@ int32 parseServerKeyExchange(ssl_t *ssl,
     int32 i;
     uint32 pubDhLen, hashSize;
     psPool_t *skepkiPool = NULL;
+    void *pkiData = ssl->userPtr;
 #  ifndef USE_ONLY_PSK_CIPHER_SUITE
     psDigestContext_t digestCtx;
     unsigned char *sigStart = NULL, *sigStop = NULL;
@@ -2137,20 +2000,23 @@ int32 parseServerKeyExchange(ssl_t *ssl,
 #  ifdef USE_TLS_1_2
     uint32 skeHashSigAlg;
 #  endif
-#  ifdef USE_RSA_CIPHER_SUITE
+#  if defined(USE_ECC_CIPHER_SUITE)
+    int32 res;
+#  endif
+#  if defined(USE_RSA_CIPHER_SUITE)
     unsigned char sigOut[MAX_HASH_SIZE];
 #  endif
+
 #  ifdef USE_ECC_CIPHER_SUITE
-    uint32 res;
     const psEccCurve_t *curve;
 #  endif
-    void *pkiData = ssl->userPtr;
 
 # endif /* USE_DHE_CIPHER_SUITE */
 
     c = *cp;
 
-    psTraceHs(">>> Client parsing SERVER_KEY_EXCHANGE message\n");
+    psTracePrintHsMessageParse(ssl, SSL_HS_SERVER_KEY_EXCHANGE);
+
 # ifdef USE_DHE_CIPHER_SUITE
     /*  Check the DH status.  Could also be a PSK_DHE suite */
     if (ssl->flags & SSL_FLAGS_DHE_KEY_EXCH)
@@ -2170,7 +2036,7 @@ int32 parseServerKeyExchange(ssl_t *ssl,
                 if ((end - c) < 2)
                 {
                     ssl->err = SSL_ALERT_DECODE_ERROR;
-                    psTraceInfo("Invalid PSK Hint Len\n");
+                    psTraceErrr("Invalid PSK Hint Len\n");
                     return MATRIXSSL_ERROR;
                 }
                 ssl->sec.hintLen = *c << 8; c++;
@@ -2180,7 +2046,7 @@ int32 parseServerKeyExchange(ssl_t *ssl,
                     if ((unsigned short) (end - c) < ssl->sec.hintLen)
                     {
                         ssl->err = SSL_ALERT_DECODE_ERROR;
-                        psTraceInfo("Invalid PSK Hint\n");
+                        psTraceErrr("Invalid PSK Hint\n");
                         return MATRIXSSL_ERROR;
                     }
                     ssl->sec.hint = psMalloc(ssl->hsPool, ssl->sec.hintLen);
@@ -2188,12 +2054,13 @@ int32 parseServerKeyExchange(ssl_t *ssl,
                     {
                         return SSL_MEM_ERROR;
                     }
-                    memcpy(ssl->sec.hint, c, ssl->sec.hintLen);
+                    Memcpy(ssl->sec.hint, c, ssl->sec.hintLen);
                     c += ssl->sec.hintLen;
                 }
             }
         }
 #  endif /* USE_PSK_CIPHER_SUITE */
+
 #  ifdef USE_ECC_CIPHER_SUITE
         if (ssl->flags & SSL_FLAGS_ECC_CIPHER)
         {
@@ -2202,7 +2069,7 @@ int32 parseServerKeyExchange(ssl_t *ssl,
             if ((end - c) < 4)       /* ECCurveType, NamedCurve, ECPoint len */
             {
                 ssl->err = SSL_ALERT_DECODE_ERROR;
-                psTraceInfo("Invalid ServerKeyExchange message\n");
+                psTraceErrr("Invalid ServerKeyExchange message\n");
                 return MATRIXSSL_ERROR;
             }
 /*
@@ -2248,7 +2115,7 @@ int32 parseServerKeyExchange(ssl_t *ssl,
             if ((end - c) < i)
             {
                 ssl->err = SSL_ALERT_DECODE_ERROR;
-                psTraceInfo("Invalid ServerKeyExchange message\n");
+                psTraceErrr("Invalid ServerKeyExchange message\n");
                 return MATRIXSSL_ERROR;
             }
             if (psEccNewKey(ssl->hsPool, &ssl->sec.eccKeyPub, curve) < 0)
@@ -2273,7 +2140,7 @@ int32 parseServerKeyExchange(ssl_t *ssl,
         if ((end - c) < 2)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("Invalid ServerKeyExchange message\n");
+            psTraceErrr("Invalid ServerKeyExchange message\n");
             return MATRIXSSL_ERROR;
         }
 #   ifndef USE_ONLY_PSK_CIPHER_SUITE
@@ -2284,15 +2151,24 @@ int32 parseServerKeyExchange(ssl_t *ssl,
         if ((uint32) (end - c) < ssl->sec.dhPLen)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("Invalid ServerKeyExchange message\n");
+            psTraceErrr("Invalid ServerKeyExchange message\n");
             return MATRIXSSL_ERROR;
         }
+        if (ssl->sec.dhPLen < ssl->minDhBits/8)
+        {
+            ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
+            psTraceErrr("Server's DH group too small\n");
+            psTraceIntInfo("Server bits: %hu\n", ssl->sec.dhPLen * 8);
+            psTraceIntInfo("Our minimum: %hu\n", ssl->minDhBits);
+            return MATRIXSSL_ERROR;
+        }
+
         ssl->sec.dhP = psMalloc(ssl->hsPool, ssl->sec.dhPLen);
         if (ssl->sec.dhP == NULL)
         {
             return SSL_MEM_ERROR;
         }
-        memcpy(ssl->sec.dhP, c, ssl->sec.dhPLen);
+        Memcpy(ssl->sec.dhP, c, ssl->sec.dhPLen);
         c += ssl->sec.dhPLen;
 
         ssl->sec.dhGLen = *c << 8; c++;
@@ -2300,7 +2176,7 @@ int32 parseServerKeyExchange(ssl_t *ssl,
         if ((uint32) (end - c) < ssl->sec.dhGLen)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("Invalid ServerKeyExchange message\n");
+            psTraceErrr("Invalid ServerKeyExchange message\n");
             return MATRIXSSL_ERROR;
         }
         ssl->sec.dhG = psMalloc(ssl->hsPool, ssl->sec.dhGLen);
@@ -2308,7 +2184,7 @@ int32 parseServerKeyExchange(ssl_t *ssl,
         {
             return SSL_MEM_ERROR;
         }
-        memcpy(ssl->sec.dhG, c, ssl->sec.dhGLen);
+        Memcpy(ssl->sec.dhG, c, ssl->sec.dhGLen);
         c += ssl->sec.dhGLen;
 
         pubDhLen = *c << 8; c++;
@@ -2317,7 +2193,7 @@ int32 parseServerKeyExchange(ssl_t *ssl,
         if ((uint32) (end - c) < pubDhLen)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("Invalid ServerKeyExchange message\n");
+            psTraceErrr("Invalid ServerKeyExchange message\n");
             return MATRIXSSL_ERROR;
         }
 /*
@@ -2387,7 +2263,7 @@ int32 parseServerKeyExchange(ssl_t *ssl,
         if ((end - c) < 2)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("Invalid ServerKeyExchange message\n");
+            psTraceErrr("Invalid ServerKeyExchange message\n");
             return MATRIXSSL_ERROR;
         }
 
@@ -2427,7 +2303,7 @@ int32 parseServerKeyExchange(ssl_t *ssl,
         if ((uint32) (end - c) < pubDhLen)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("Invalid ServerKeyExchange message\n");
+            psTraceErrr("Invalid ServerKeyExchange message\n");
             return MATRIXSSL_ERROR;
         }
 
@@ -2517,7 +2393,7 @@ int32 parseServerKeyExchange(ssl_t *ssl,
                     (uint32) (sigStop - sigStart));
                 psMd5Sha1Final(&digestCtx.md5sha1, hsMsgHash);
 #    else       /* USE_MD5SHA1 */
-                psTraceInfo("USE_MD5SHA1 required\n");
+                psTraceErrr("USE_MD5SHA1 required\n");
                 return MATRIXSSL_ERROR;
 #    endif      /* USE_MD5SHA1 */
             }
@@ -2537,7 +2413,7 @@ int32 parseServerKeyExchange(ssl_t *ssl,
                 (uint32) (c - sigStart));
             psMd5Sha1Final(&digestCtx.md5sha1, hsMsgHash);
 #    else
-            psTraceInfo("USE_MD5SHA1 required\n");
+            psTraceErrr("USE_MD5SHA1 required\n");
             return MATRIXSSL_ERROR;
 #    endif /* USE_MD5SHA1 */
 #   endif  /* USE_TLS_1_2 */
@@ -2556,7 +2432,7 @@ int32 parseServerKeyExchange(ssl_t *ssl,
                          hashSize, pkiData)) < 0)
                 {
 
-                    psTraceInfo("Can't decrypt serverKeyExchange sig\n");
+                    psTraceErrr("Can't decrypt serverKeyExchange sig\n");
                     ssl->err = SSL_ALERT_BAD_CERTIFICATE;
                     return MATRIXSSL_ERROR;
                 }
@@ -2570,7 +2446,7 @@ int32 parseServerKeyExchange(ssl_t *ssl,
                          &ssl->sec.cert->publicKey.key.rsa, c, pubDhLen, sigOut,
                          hashSize, pkiData)) < 0)
                 {
-                    psTraceInfo("Can't decrypt server key exchange sig\n");
+                    psTraceErrr("Can't decrypt server key exchange sig\n");
                     ssl->err = SSL_ALERT_BAD_CERTIFICATE;
                     return MATRIXSSL_ERROR;
                 }
@@ -2580,7 +2456,7 @@ int32 parseServerKeyExchange(ssl_t *ssl,
             if ((i = psRsaDecryptPub(skepkiPool, &ssl->sec.cert->publicKey.key.rsa,
                      c, pubDhLen, sigOut, hashSize, pkiData)) < 0)
             {
-                psTraceInfo("Unable to decrypt server key exchange sig\n");
+                psTraceErrr("Unable to decrypt server key exchange sig\n");
                 ssl->err = SSL_ALERT_BAD_CERTIFICATE;
                 return MATRIXSSL_ERROR;
             }
@@ -2591,7 +2467,7 @@ int32 parseServerKeyExchange(ssl_t *ssl,
 
             if (memcmpct(sigOut, hsMsgHash, hashSize) != 0)
             {
-                psTraceInfo("Fail to verify serverKeyExchange sig\n");
+                psTraceErrr("Fail to verify serverKeyExchange sig\n");
                 ssl->err = SSL_ALERT_BAD_CERTIFICATE;
                 return MATRIXSSL_ERROR;
             }
@@ -2684,13 +2560,14 @@ int32 parseServerKeyExchange(ssl_t *ssl,
 
             i = 0;
 
-            if ((res = psEccDsaVerify(skepkiPool,
-                     &ssl->sec.cert->publicKey.key.ecc,
-                     hsMsgHash, hashSize,
-                     c, pubDhLen,
-                     &i, pkiData)) != 0)
+            res = psEccDsaVerify(skepkiPool,
+                                 &ssl->sec.cert->publicKey.key.ecc,
+                                 hsMsgHash, hashSize,
+                                 c, pubDhLen,
+                                 &i, pkiData);
+            if (res != PS_SUCCESS)
             {
-                psTraceInfo("ECDSA signature validation failed\n");
+                psTraceErrr("ECDSA signature validation failed\n");
                 ssl->err = SSL_ALERT_BAD_CERTIFICATE;
                 return MATRIXSSL_ERROR;
             }
@@ -2700,7 +2577,7 @@ int32 parseServerKeyExchange(ssl_t *ssl,
  */
             if (i != 1)
             {
-                psTraceInfo("Can't verify serverKeyExchange sig\n");
+                psTraceErrr("Can't verify serverKeyExchange sig\n");
                 ssl->err = SSL_ALERT_BAD_CERTIFICATE;
                 return MATRIXSSL_ERROR;
 
@@ -2721,7 +2598,7 @@ int32 parseServerKeyExchange(ssl_t *ssl,
         if ((end - c) < 2)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("Invalid ServerKeyExchange message\n");
+            psTraceErrr("Invalid ServerKeyExchange message\n");
             return MATRIXSSL_ERROR;
         }
         ssl->sec.hintLen = *c << 8; c++;
@@ -2729,7 +2606,7 @@ int32 parseServerKeyExchange(ssl_t *ssl,
         if ((uint32) (end - c) < ssl->sec.hintLen)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("Invalid ServerKeyExchange message\n");
+            psTraceErrr("Invalid ServerKeyExchange message\n");
             return MATRIXSSL_ERROR;
         }
         if (ssl->sec.hintLen > 0)
@@ -2739,7 +2616,7 @@ int32 parseServerKeyExchange(ssl_t *ssl,
             {
                 return SSL_MEM_ERROR;
             }
-            memcpy(ssl->sec.hint, c, ssl->sec.hintLen);
+            Memcpy(ssl->sec.hint, c, ssl->sec.hintLen);
             c += ssl->sec.hintLen;
         }
         ssl->hsState = SSL_HS_SERVER_HELLO_DONE;
@@ -2753,7 +2630,7 @@ int32 parseServerKeyExchange(ssl_t *ssl,
 
 # ifdef USE_OCSP_RESPONSE
 int32 parseCertificateStatus(ssl_t *ssl, int32 hsLen, unsigned char **cp,
-    unsigned char *end)
+                             unsigned char *end)
 {
     unsigned char *c;
     int32_t responseLen, rc;
@@ -2762,7 +2639,7 @@ int32 parseCertificateStatus(ssl_t *ssl, int32 hsLen, unsigned char **cp,
     /*
         struct {
             CertificateStatusType status_type;
-            select (status_type) {
+            Select (status_type) {
                 case ocsp: OCSPResponse;
             } response;
         } CertificateStatus;
@@ -2774,18 +2651,20 @@ int32 parseCertificateStatus(ssl_t *ssl, int32 hsLen, unsigned char **cp,
         (using the ASN.1 type OCSPResponse defined in [RFC6960]).  Only one
         OCSP response may be sent.
      */
+    psTracePrintHsMessageParse(ssl, SSL_HS_CERTIFICATE_STATUS);
+
     c = *cp;
     if ((end - c) < 4)
     {
         ssl->err = SSL_ALERT_DECODE_ERROR;
-        psTraceInfo("Invalid CertificateStatus length\n");
+        psTraceErrr("Invalid CertificateStatus length\n");
         return MATRIXSSL_ERROR;
     }
 
     if (*c != 0x1)
     {
         ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-        psTraceInfo("Invalid status_type in certificateStatus message\n");
+        psTraceErrr("Invalid status_type in certificateStatus message\n");
         return MATRIXSSL_ERROR;
     }
     c++;
@@ -2797,17 +2676,17 @@ int32 parseCertificateStatus(ssl_t *ssl, int32 hsLen, unsigned char **cp,
     if (responseLen > (end - c))
     {
         ssl->err = SSL_ALERT_DECODE_ERROR;
-        psTraceInfo("Malformed CertificateStatus message\n");
+        psTraceErrr("Malformed CertificateStatus message\n");
         return MATRIXSSL_ERROR;
     }
-    memset(&response, 0x0, sizeof(psOcspResponse_t));
-    if ((rc = psOcspParseResponse(ssl->hsPool, responseLen, &c, end, &response))
-        < 0)
+    Memset(&response, 0x0, sizeof(psOcspResponse_t));
+    rc = psOcspParseResponse(ssl->hsPool, responseLen, &c, end, &response);
+    if (rc < 0)
     {
         /* Couldn't parse or no good responses in stream */
         psX509FreeCert(response.OCSPResponseCert);
         ssl->err = SSL_ALERT_BAD_CERTIFICATE_STATUS_RESPONSE;
-        psTraceInfo("Unable to parse OCSPResponse\n");
+        psTraceErrr("Unable to parse OCSPResponse\n");
         return MATRIXSSL_ERROR;
     }
     *cp = c;
@@ -2816,13 +2695,14 @@ int32 parseCertificateStatus(ssl_t *ssl, int32 hsLen, unsigned char **cp,
         AND passing through the server chain as well because some real
         world examples we have seen use the intermediate cert as the
         OCSP responder */
-    if ((rc = psOcspResponseValidateOld(ssl->hsPool, ssl->keys->CAcerts,
-             ssl->sec.cert, &response)) < 0)
+    rc = psOcspResponseValidateOld(ssl->hsPool, ssl->keys->CAcerts,
+                                   ssl->sec.cert, &response);
+    if (rc < 0)
     {
         /* Couldn't validate */
         psX509FreeCert(response.OCSPResponseCert);
         ssl->err = SSL_ALERT_BAD_CERTIFICATE_STATUS_RESPONSE;
-        psTraceInfo("Unable to validate OCSPResponse\n");
+        psTraceErrr("Unable to validate OCSPResponse\n");
         return MATRIXSSL_ERROR;
     }
     psX509FreeCert(response.OCSPResponseCert);
@@ -2855,11 +2735,12 @@ int32 parseServerHelloDone(ssl_t *ssl, int32 hsLen, unsigned char **cp,
 
     c = *cp;
 
-    psTraceHs(">>> Client parsing SERVER_HELLO_DONE message\n");
+    psTracePrintHsMessageParse(ssl, SSL_HS_SERVER_HELLO_DONE);
+
     if (hsLen != 0)
     {
         ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-        psTraceInfo("Invalid ServerHelloDone message\n");
+        psTraceErrr("Invalid ServerHelloDone message\n");
         return MATRIXSSL_ERROR;
     }
 
@@ -2877,12 +2758,14 @@ int32 parseServerHelloDone(ssl_t *ssl, int32 hsLen, unsigned char **cp,
             {
                 return PS_MEM_FAIL;
             }
-            if ((rc = matrixSslGenEphemeralEcKey(ssl->keys,
-                     ssl->sec.eccKeyPriv, ssl->sec.eccKeyPub->curve,
-                     pkiData)) < 0)
+            rc = matrixSslGenEphemeralEcKey(ssl->keys,
+                                            ssl->sec.eccKeyPriv,
+                                            ssl->sec.eccKeyPub->curve,
+                                            pkiData);
+            if (rc < 0)
             {
                 psEccDeleteKey(&ssl->sec.eccKeyPriv);
-                psTraceInfo("GenEphemeralEcc failed\n");
+                psTraceErrr("GenEphemeralEcc failed\n");
                 ssl->err = SSL_ALERT_INTERNAL_ERROR;
                 return MATRIXSSL_ERROR;
             }
@@ -2900,9 +2783,10 @@ int32 parseServerHelloDone(ssl_t *ssl, int32 hsLen, unsigned char **cp,
         {
             return MATRIXSSL_ERROR;
         }
-        if ((rc = psDhGenKey(ssl->sec.dhKeyPool, ssl->sec.dhPLen,
-                 ssl->sec.dhP, ssl->sec.dhPLen, ssl->sec.dhG,
-                 ssl->sec.dhGLen, ssl->sec.dhKeyPriv, pkiData)) < 0)
+        rc = psDhGenKey(ssl->sec.dhKeyPool, ssl->sec.dhPLen,
+                        ssl->sec.dhP, ssl->sec.dhPLen, ssl->sec.dhG,
+                        ssl->sec.dhGLen, ssl->sec.dhKeyPriv, pkiData);
+        if (rc < 0)
         {
             psFree(ssl->sec.dhKeyPriv, ssl->sec.dhKeyPool);
             ssl->sec.dhKeyPriv = NULL;
@@ -2926,30 +2810,38 @@ int32 parseServerHelloDone(ssl_t *ssl, int32 hsLen, unsigned char **cp,
 
 /******************************************************************************/
 
-# ifndef USE_ONLY_PSK_CIPHER_SUITE
-int32 parseCertificateRequest(ssl_t *ssl, int32 hsLen, unsigned char **cp,
-    unsigned char *end)
+# if defined(USE_CLIENT_SIDE_SSL) && defined(USE_CLIENT_AUTH)
+int32 parseCertificateRequest(ssl_t *ssl,
+                              int32 hsLen, unsigned char **cp,
+                              unsigned char *end)
 {
-#  ifdef USE_CLIENT_AUTH
-    psX509Cert_t *cert;
-    int32 i;
-#  endif
-    int32 certTypeLen, certChainLen;
-    uint32 certLen;
-#  ifdef USE_TLS_1_2
-    uint32 sigAlgMatch;
-#  endif
     unsigned char *c;
+# ifndef USE_ONLY_PSK_CIPHER_SUITE
+    int32 certTypeLen;
+    unsigned char *c0;
+    sslKeySelectInfo_t *keySelect = &ssl->sec.keySelect;
+# endif
 
-    c = *cp;
+    if (ssl->flags & SSL_FLAGS_PSK_CIPHER)
+    {
+        psTraceInfo("Ignoring CertificateRequest - not needed when " \
+                "using a PSK ciphersuite.\n");
+        c = end;
+        goto skip_parse;
+    }
 
-    psTraceHs(">>> Client parsing CERTIFICATE_REQUEST message\n");
+# ifndef USE_ONLY_PSK_CIPHER_SUITE
+    psTracePrintHsMessageParse(ssl, SSL_HS_CERTIFICATE_REQUEST);
+
     if (hsLen < 4)
     {
         ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-        psTraceInfo("Invalid Certificate Request message\n");
+        psTraceErrr("Invalid Certificate Request message\n");
         return MATRIXSSL_ERROR;
     }
+
+    c = *cp;
+
     /*  Currently ignoring the authentication type request because it was
         underspecified up to TLS 1.1 and TLS 1.2 is now taking care of this
         with the supported_signature_algorithms handling */
@@ -2957,151 +2849,124 @@ int32 parseCertificateRequest(ssl_t *ssl, int32 hsLen, unsigned char **cp,
     if (end - c < certTypeLen)
     {
         ssl->err = SSL_ALERT_DECODE_ERROR;
-        psTraceInfo("Invalid Certificate Request message\n");
+        psTraceErrr("Invalid Certificate Request message\n");
         return MATRIXSSL_ERROR;
     }
     c += certTypeLen; /* Skipping (RSA_SIGN etc.) */
-#  ifdef USE_TLS_1_2
-    sigAlgMatch = 0;
+
+    /* read short and advance pointer */
+#define GETSHORT(buf) (unsigned short)((buf)[0] << 8) | ((buf)[1])
+
+    /* TLS 1.2 specifies signature algorithms */
     if (ssl->flags & SSL_FLAGS_TLS_1_2)
     {
+        size_t len, nSigAlg = 0;
         /* supported_signature_algorithms field
             enum {none(0), md5(1), sha1(2), sha224(3), sha256(4), sha384(5),
                 sha512(6), (255) } HashAlgorithm;
-
             enum { anonymous(0), rsa(1), dsa(2), ecdsa(3), (255) } SigAlg */
         if (end - c < 2)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("Invalid SigHash in Certificate Request message\n");
+            psTraceErrr("Invalid SigHash in Certificate Request message (short header)\n");
             return MATRIXSSL_ERROR;
         }
-        certChainLen = *c << 8; c++; /* just borrowing this variable */
-        certChainLen |= *c; c++;
-        if (end - c < certChainLen)
+        len = GETSHORT(c); c += 2;
+        if (end - c < len)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("Invalid SigHash in Certificate Request message\n");
+            psTraceErrr("Invalid SigHash in Certificate Request message (short message)\n");
             return MATRIXSSL_ERROR;
         }
-#   ifdef USE_CLIENT_AUTH
         /* Parse supported_signature_algorithms list. */
         ssl->serverSigAlgs = 0;
-        while (certChainLen >= 2)
+        while (len >= 2)
         {
-            i = HASH_SIG_MASK(c[0], c[1]);
-            ssl->serverSigAlgs |= i;
+            uint32_t val = HASH_SIG_MASK(c[0], c[1]);
+            keySelect->peerSigAlgs[nSigAlg++] = val;
+            ssl->serverSigAlgs |= val;
             c += 2;
-            certChainLen -= 2;
+            len -= 2;
         }
+        keySelect->peerSigAlgsLen = nSigAlg;
+        keySelect->peerSigAlgMask = ssl->serverSigAlgs;
+        c += len;
+# ifdef USE_SSL_INFORMATIONAL_TRACE_VERBOSE
         psTracePrintSigAlgs(ssl->serverSigAlgs, "Peer CertificateRequest");
-
-        /*
-          RFC 5246, section 7.4.4:
-          "Any certificates provided by the client MUST be signed using a
-          hash/signature algorithm pair found in
-          supported_signature_algorithms."
-
-          Check our certificate chain and set sigAlgMatch to 0 if we
-          find a cert whose sigAlg is not supported by the server.
-          sigAlgMatch==0 will result in us sending an empty Certificate
-          message later, as required by RFC 5246.
-        */
-        sigAlgMatch = 1;
-        if (ssl->keys == NULL || ssl->keys->cert == NULL)
-        {
-            sigAlgMatch = 0;
-        }
-        else
-        {
-            cert = ssl->keys->cert;
-            while (cert)
-            {
-                if (!peerSupportsSigAlg(cert->sigAlgorithm,
-                                ssl->serverSigAlgs))
-                {
-                    sigAlgMatch = 0;
-                }
-                cert = cert->next;
-            }
-        }
-#   endif /* USE_CLIENT_AUTH */
-        c += certChainLen;
+# endif
     }
-#  endif /* TLS_1_2 */
+    else
+    {
+        /* <TLS1.2: conveniently all bits are set:
+           TBD: set only those supported by library */
+        keySelect->peerSigAlgMask = 0xffffffff;
+    }
 
-    certChainLen = 0;
+    /* Read certificate authority names */
     if (end - c >= 2)
     {
-        certChainLen = *c << 8; c++;
-        certChainLen |= *c; c++;
-        if (end - c < certChainLen)
-        {
-            ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("Invalid Certificate Request message\n");
-            return MATRIXSSL_ERROR;
-        }
-    }
-    /*  Check the passed in DNs against our cert issuer to see if they match.
-        Only supporting a single cert on the client side. */
-    ssl->sec.certMatch = 0;
+        size_t len, certLen, nCas = 0;
 
-#  ifdef USE_CLIENT_AUTH
-    /*  If the user has actually gone to the trouble to load a certificate
-        to reply with, we flag that here so there is some flexibility as
-        to whether we want to reply with something (even if it doesn't match)
-        just in case the server is willing to do a custom test of the cert */
-    if (ssl->keys != NULL && ssl->keys->cert)
-    {
-        ssl->sec.certMatch = SSL_ALLOW_ANON_CONNECTION;
-    }
-#  endif /* USE_CLIENT_AUTH */
-    while (certChainLen > 2)
-    {
-        certLen = *c << 8; c++;
-        certLen |= *c; c++;
-        if ((uint32) (end - c) < certLen || certLen <= 0 ||
-            (int32) certLen > certChainLen)
+        len = GETSHORT(c); c += 2;
+        if (end - c < len)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("Invalid CertificateRequest message\n");
+            psTraceErrr("Invalid Certificate Request message (short CA's header)\n");
             return MATRIXSSL_ERROR;
         }
-        certChainLen -= 2;
-#  ifdef USE_CLIENT_AUTH
-        /*      Can parse the message, but will not look for a match.  The
-            setting of certMatch to 1 will trigger the correct response
-            in sslEncode */
-        if (ssl->keys != NULL && ssl->keys->cert)
+        /* Count the number of CA's */
+        c0 = c; /* remember where we started. */
+        while (len > 2)
         {
-            /* Flag a match if the hash of the DN issuer is identical */
-            if (ssl->keys->cert->issuer.dnencLen == certLen)
+            certLen = GETSHORT(c); c += 2;
+            if (certLen == 0 || (end - c) < certLen || certLen > len)
             {
-                if (memcmp(ssl->keys->cert->issuer.dnenc, c, certLen) == 0)
-                {
-                    ssl->sec.certMatch = 1;
-                }
+                ssl->err = SSL_ALERT_DECODE_ERROR;
+                psTraceErrr("Invalid CertificateRequest message (short CA data)\n");
+                return MATRIXSSL_ERROR;
             }
+            c += certLen;
+            len -= (2 + certLen);
+            nCas++;
         }
-#  endif /* USE_CLIENT_AUTH */
-        c += certLen;
-        certChainLen -= certLen;
-    }
-#  ifdef USE_TLS_1_2
-    if (ssl->flags & SSL_FLAGS_TLS_1_2)
-    {
-        /* We let the DN parse complete but if we didn't get a sigAlgMatch
-            from the previous test we're going to adhere to that for spec
-            compliance.  So here goes */
-        if (sigAlgMatch == 0)
-        {
-            ssl->sec.certMatch = 0;
-        }
-    }
-#  endif
-    ssl->hsState = SSL_HS_SERVER_HELLO_DONE;
 
+        /* Fill in keySelect - we have now checked the data, so taking the easy path. */
+        keySelect->nCas = nCas;
+        keySelect->caNames = psCalloc(ssl->hsPool, nCas, sizeof(keySelect->caNames[0]));
+        keySelect->caNameLens = psCalloc(ssl->hsPool, nCas, sizeof(keySelect->caNameLens[0]));
+        if (keySelect->caNames == NULL || keySelect->caNameLens == NULL)
+        {
+            psFree(keySelect->caNames, ssl->hsPool);
+            psFree(keySelect->caNameLens, ssl->hsPool);
+            ssl->err = SSL_ALERT_INTERNAL_ERROR;
+            return MATRIXSSL_ERROR;
+        }
+        for (nCas = 0; nCas < keySelect->nCas; nCas++)
+        {
+            /* NOTE: caNames points to the original TLS record data,
+               and pointers are valid only as long as the packet is
+               valid. */
+            keySelect->caNameLens[nCas] = GETSHORT(c0); c0 += 2;
+            keySelect->caNames[nCas] = c0; c0 += keySelect->caNameLens[nCas];
+        }
+    }
+
+    if (ssl->chosenIdentity == NULL)
+    {
+        int32_t rc;
+
+        rc = matrixSslChooseClientKeys(ssl, keySelect);
+        if (rc != PS_SUCCESS)
+        {
+            psTraceInfo("Unable to load suitable client certificate\n");
+        }
+    }
+# endif /* USE_ONLY_PSK_CIPHER_SUITE */
+
+    /* Consume record and advance state machine */
+skip_parse:
     *cp = c;
+    ssl->hsState = SSL_HS_SERVER_HELLO_DONE;
     ssl->decState = SSL_HS_CERTIFICATE_REQUEST;
     return PS_SUCCESS;
 }
@@ -3123,16 +2988,16 @@ int32 parseFinished(ssl_t *ssl, int32 hsLen,
 
     psAssert(hsLen <= SHA384_HASH_SIZE);
 
+    psTracePrintHsMessageParse(ssl, SSL_HS_FINISHED);
+
     /* Before the finished handshake message, we should have seen the
         CHANGE_CIPHER_SPEC message come through in the record layer, which
         would have activated the read cipher, and set the READ_SECURE flag.
         This is the first handshake message that was sent securely. */
-    psTraceStrHs(">>> %s parsing FINISHED message\n",
-        (ssl->flags & SSL_FLAGS_SERVER) ? "Server" : "Client");
     if (!(ssl->flags & SSL_FLAGS_READ_SECURE))
     {
         ssl->err = SSL_ALERT_UNEXPECTED_MESSAGE;
-        psTraceInfo("Finished before ChangeCipherSpec\n");
+        psTraceErrr("Finished before ChangeCipherSpec\n");
         return MATRIXSSL_ERROR;
     }
     /* The contents of the finished message is a 16 byte MD5 hash followed
@@ -3146,7 +3011,7 @@ int32 parseFinished(ssl_t *ssl, int32 hsLen,
         if (hsLen != TLS_HS_FINISHED_SIZE)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("Invalid Finished length\n");
+            psTraceErrr("Invalid Finished length\n");
             return MATRIXSSL_ERROR;
         }
     }
@@ -3156,7 +3021,7 @@ int32 parseFinished(ssl_t *ssl, int32 hsLen,
     if (hsLen != MD5_HASH_SIZE + SHA1_HASH_SIZE)
     {
         ssl->err = SSL_ALERT_DECODE_ERROR;
-        psTraceInfo("Invalid Finished length\n");
+        psTraceErrr("Invalid Finished length\n");
         return MATRIXSSL_ERROR;
     }
 #ifdef USE_TLS
@@ -3165,18 +3030,18 @@ int32 parseFinished(ssl_t *ssl, int32 hsLen,
     if ((int32) (end - c) < hsLen)
     {
         ssl->err = SSL_ALERT_DECODE_ERROR;
-        psTraceInfo("Invalid Finished length\n");
+        psTraceErrr("Invalid Finished length\n");
         return MATRIXSSL_ERROR;
     }
     if (memcmpct(c, hsMsgHash, hsLen) != 0)
     {
         ssl->err = SSL_ALERT_DECRYPT_ERROR;
-        psTraceInfo("Invalid handshake msg hash\n");
+        psTraceErrr("Invalid handshake msg hash\n");
         return MATRIXSSL_ERROR;
     }
 #ifdef ENABLE_SECURE_REHANDSHAKES
     /* Got the peer verify_data for secure renegotiations */
-    memcpy(ssl->peerVerifyData, c, hsLen);
+    Memcpy(ssl->peerVerifyData, c, hsLen);
     ssl->peerVerifyDataLen = hsLen;
 #endif /* ENABLE_SECURE_REHANDSHAKES */
     c += hsLen;
@@ -3311,8 +3176,7 @@ int32 parseCertificate(ssl_t *ssl, unsigned char **cp, unsigned char *end)
     void *pkiData = ssl->userPtr;
     int32 pathLen;
 
-    psTraceStrHs(">>> %s parsing CERTIFICATE message\n",
-        (ssl->flags & SSL_FLAGS_SERVER) ? "Server" : "Client");
+    psTracePrintHsMessageParse(ssl, SSL_HS_CERTIFICATE);
 
     c = *cp;
 
@@ -3336,7 +3200,7 @@ int32 parseCertificate(ssl_t *ssl, unsigned char **cp, unsigned char *end)
     if (end - c < 3)
     {
         ssl->err = SSL_ALERT_DECODE_ERROR;
-        psTraceInfo("Invalid Certificate message\n");
+        psTraceErrr("Invalid Certificate message\n");
         return MATRIXSSL_ERROR;
     }
     certChainLen = *c << 16; c++;
@@ -3360,13 +3224,13 @@ int32 parseCertificate(ssl_t *ssl, unsigned char **cp, unsigned char *end)
         {
             ssl->err = SSL_ALERT_BAD_CERTIFICATE;
         }
-        psTraceInfo("No certificate sent to verify\n");
+        psTraceErrr("No certificate sent to verify\n");
         return MATRIXSSL_ERROR;
     }
     if (end - c < 3)
     {
         ssl->err = SSL_ALERT_DECODE_ERROR;
-        psTraceInfo("Invalid Certificate message\n");
+        psTraceErrr("Invalid Certificate message\n");
         return MATRIXSSL_ERROR;
     }
 
@@ -3430,7 +3294,7 @@ SKIP_CERT_CHAIN_INIT:
         if ((uint32) (end - c) < certLen || (int32) certLen > certChainLen)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("Invalid certificate length\n");
+            psTraceErrr("Invalid certificate length\n");
             return MATRIXSSL_ERROR;
         }
         if (ssl->bFlags & BFLAG_KEEP_PEER_CERT_DER)
@@ -3443,7 +3307,7 @@ SKIP_CERT_CHAIN_INIT:
         if ((parseLen = psX509ParseCert(ssl->hsPool, c, certLen, &cert, certFlags))
             < 0)
         {
-            psTraceInfo("Parsing of the peer certificate failed\n");
+            psTraceErrr("Parsing of the peer certificate failed\n");
             psX509FreeCert(cert);
             if (parseLen == PS_MEM_FAIL)
             {
@@ -3464,7 +3328,7 @@ SKIP_CERT_CHAIN_INIT:
            trusted due to missing Basic Constraints, etc. */
         if (cert->version != 2)
         {
-            psTraceInfo("Version 1 peer certificates not allowed\n");
+            psTraceErrr("Version 1 peer certificates not allowed\n");
             ssl->err = SSL_ALERT_BAD_CERTIFICATE;
         }
 #  endif /* ALLOW_VERSION_1_ROOT_CERT_PARSE */
@@ -3558,7 +3422,7 @@ RESUME_VALIDATE_CERTS:
             if (exceeded)
             {
                 /* Max depth exceeded. */
-                psTraceInfo("Error: max_verify_depth exceeded\n");
+                psTraceErrr("Error: max_verify_depth exceeded\n");
                 ssl->err = SSL_ALERT_UNKNOWN_CA;
                 cert->authStatus |= PS_CERT_AUTH_FAIL_PATH_LEN;
                 cert->authFailFlags |= PS_CERT_AUTH_FAIL_VERIFY_DEPTH_FLAG;
@@ -3741,4 +3605,3 @@ STRAIGHT_TO_USER_CALLBACK:
 #endif  /* !USE_ONLY_PSK_CIPHER_SUITE */
 
 /******************************************************************************/
-

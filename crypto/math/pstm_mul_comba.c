@@ -5,7 +5,7 @@
  *      Multiprecision multiplication with Comba technique.
  */
 /*
- *      Copyright (c) 2013-2017 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 INSIDE Secure Corporation
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -117,7 +117,7 @@
         : "=r" (c0), "=r" (c1), "=r" (c2) : "0" (c0), "1" (c1), "2" (c2), "g" (i), "g" (j)  : "%rax", "%rdx", "cc");
 
 /******************************************************************************/
-# elif defined(PSTM_ARM)
+# elif defined(PSTM_ARM) && !defined __ARMCC5
 /* ARM code */
 /* #pragma message ("Using 32 bit ARM Assembly Optimizations") */
 
@@ -149,6 +149,45 @@
         "  ADCS   %1,%1,r1              \n\t"                     \
         "  ADC    %2,%2,#0              \n\t"                     \
         : "=r" (c0), "=r" (c1), "=r" (c2) : "0" (c0), "1" (c1), "2" (c2), "r" (i), "r" (j) : "r0", "r1", "cc");
+
+/******************************************************************************/# elif defined(PSTM_ARM) && defined __ARMCC5
+
+/* ARM Compiler 5 support: */
+
+#pragma arm /* ARM code. Switch code generation to the ARM instruction set so
+               that the inline assembler is available. On platforms with
+               only Thumb code support, it is necessary to use NO_PSTM_ARM
+               as ARM Compiler 5 lacks thumb inline assembly support. */
+
+#  define COMBA_START
+
+#  define COMBA_CLEAR \
+    c0 = c1 = c2 = 0;
+
+#  define COMBA_FORWARD \
+    do { c0 = c1; c1 = c2; c2 = 0; } while (0);
+
+#  define COMBA_STORE(x) \
+    x = c0;
+
+#  define COMBA_STORE2(x) \
+    x = c1;
+
+#  define COMBA_FINI
+
+#  define MULADD(i, j)                                             \
+    do {                                                           \
+        unsigned int reg0;                                         \
+        unsigned int reg1;                                         \
+        unsigned int i_in = i;                                     \
+        unsigned int j_in = j;                                     \
+        __asm {                                                    \
+            UMULL  reg0, reg1, i_in, j_in;                         \
+            ADDS   c0, c0, reg0;                                   \
+            ADCS   c1, c1, reg1;                                   \
+            ADC    c2, c2, 0;                                      \
+        }                                                          \
+    } while(0);
 
 /******************************************************************************/
 # elif defined(PSTM_MIPS)
@@ -250,12 +289,12 @@ static int32_t pstm_mul_comba_gen(psPool_t *pool, const pstm_int *A,
             {
                 return PS_MEM_FAIL;
             }
-            memset(dst, 0x0, sizeof(pstm_digit) * pa);
+            Memset(dst, 0x0, sizeof(pstm_digit) * pa);
         }
         else
         {
             dst = paD;
-            memset(dst, 0x0, paDlen);
+            Memset(dst, 0x0, paDlen);
         }
     }
     else
@@ -264,7 +303,7 @@ static int32_t pstm_mul_comba_gen(psPool_t *pool, const pstm_int *A,
         {
             return PS_MEM_FAIL;
         }
-        memset(dst, 0x0, sizeof(pstm_digit) * pa);
+        Memset(dst, 0x0, sizeof(pstm_digit) * pa);
     }
 
     for (ix = 0; ix < pa; ix++)
@@ -337,8 +376,8 @@ static int32_t pstm_mul_comba16(const pstm_int *A, const pstm_int *B, pstm_int *
             return PS_MEM_FAIL;
         }
     }
-    memcpy(at, A->dp, 16 * sizeof(pstm_digit));
-    memcpy(at + 16, B->dp, 16 * sizeof(pstm_digit));
+    Memcpy(at, A->dp, 16 * sizeof(pstm_digit));
+    Memcpy(at + 16, B->dp, 16 * sizeof(pstm_digit));
 
     COMBA_START;
 
@@ -491,8 +530,8 @@ static int32_t pstm_mul_comba32(const pstm_int *A, const pstm_int *B, pstm_int *
     }
 
     out_size = A->used + B->used;
-    memcpy(at, A->dp, 32 * sizeof(pstm_digit));
-    memcpy(at + 32, B->dp, 32 * sizeof(pstm_digit));
+    Memcpy(at, A->dp, 32 * sizeof(pstm_digit));
+    Memcpy(at + 32, B->dp, 32 * sizeof(pstm_digit));
     COMBA_START;
 
     COMBA_CLEAR;

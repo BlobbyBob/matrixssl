@@ -8,11 +8,11 @@
 extern "C" {
 #endif
 
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
+#include "osdep_stdint.h"
+#include "osdep_stdio.h"
+#include "osdep_stdlib.h"
 
-#include <sys/types.h>
+#include "osdep_sys_types.h"
 
 #include "export.h"
 

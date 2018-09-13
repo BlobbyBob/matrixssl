@@ -50,7 +50,7 @@ void psSha256Update(psSha256_t *sha256, const unsigned char *buf, uint32_t len)
 {
     if (crypto_hash_sha256_update(sha256, buf, len) != 0)
     {
-        memset(sha256, 0x0, sizeof(psSha256_t));
+        Memset(sha256, 0x0, sizeof(psSha256_t));
     }
 }
 
@@ -59,8 +59,8 @@ void psSha256Final(psSha256_t *sha256, unsigned char hash[SHA256_HASHLEN])
 
     if (crypto_hash_sha256_final(sha256, hash) != 0)
     {
-        memset(hash, 0x0, SHA256_HASHLEN);
-        memset(sha256, 0x0, sizeof(psSha256_t));
+        Memset(hash, 0x0, SHA256_HASHLEN);
+        Memset(sha256, 0x0, sizeof(psSha256_t));
     }
 }
 #endif /* USE_LIBSODIUM_SHA256 */
@@ -92,14 +92,14 @@ int32_t psSha384Init(psSha384_t *sha384)
         return PS_FAIL;
     }
     /* 384 uses a different initial state than 512 */
-    memcpy(sha384->state, sha384_initstate, sizeof sha384_initstate);
+    Memcpy(sha384->state, sha384_initstate, sizeof sha384_initstate);
     return PS_SUCCESS;
 }
 void psSha384Update(psSha384_t *sha384, const unsigned char *buf, uint32_t len)
 {
     if (crypto_hash_sha512_update(sha384, buf, len) != 0)
     {
-        memset(sha384, 0x0, sizeof(psSha384_t));
+        Memset(sha384, 0x0, sizeof(psSha384_t));
     }
 }
 void psSha384Final(psSha384_t *sha384, unsigned char hash[SHA384_HASHLEN])
@@ -108,10 +108,10 @@ void psSha384Final(psSha384_t *sha384, unsigned char hash[SHA384_HASHLEN])
 
     if (crypto_hash_sha512_final(sha384, buf) != 0)
     {
-        memset(buf, 0x0, SHA512_HASHLEN);
-        memset(sha384, 0x0, sizeof(psSha384_t));
+        Memset(buf, 0x0, SHA512_HASHLEN);
+        Memset(sha384, 0x0, sizeof(psSha384_t));
     }
-    memcpy(hash, buf, SHA384_HASHLEN);
+    Memcpy(hash, buf, SHA384_HASHLEN);
     memzero_s(buf, SHA512_HASHLEN);
 }
 #endif /* USE_LIBSODIUM_SHA384 */
@@ -129,15 +129,15 @@ void psSha512Update(psSha512_t *sha512, const unsigned char *buf, uint32_t len)
 {
     if (crypto_hash_sha512_update(sha512, buf, len) != 0)
     {
-        memset(sha512, 0x0, sizeof(psSha512_t));
+        Memset(sha512, 0x0, sizeof(psSha512_t));
     }
 }
 void psSha512Final(psSha512_t *sha512, unsigned char hash[SHA512_HASHLEN])
 {
     if (crypto_hash_sha512_final(sha512, hash) != 0)
     {
-        memset(hash, 0x0, SHA512_HASHLEN);
-        memset(sha512, 0x0, sizeof(psSha512_t));
+        Memset(hash, 0x0, SHA512_HASHLEN);
+        Memset(sha512, 0x0, sizeof(psSha512_t));
     }
 }
 #endif /* USE_LIBSODIUM_SHA512 */
@@ -180,7 +180,7 @@ int32_t psHmacSha256Init(psHmacSha256_t *ctx,
 
     if (crypto_auth_hmacsha256_init(ctx, key, keyLen) != 0)
     {
-        memset(ctx, 0x0, sizeof(psHmacSha256_t));
+        Memset(ctx, 0x0, sizeof(psHmacSha256_t));
         psAssert(0);
         return PS_FAIL;
     }
@@ -193,7 +193,7 @@ void psHmacSha256Update(psHmacSha256_t *ctx,
 {
     if (crypto_auth_hmacsha256_update(ctx, buf, len) != 0)
     {
-        memset(ctx, 0x0, sizeof(psHmacSha256_t));
+        Memset(ctx, 0x0, sizeof(psHmacSha256_t));
     }
 
 }
@@ -206,7 +206,7 @@ void psHmacSha256Final(psHmacSha256_t *ctx,
     {
         psAssert(0);
     }
-    memset(ctx, 0x0, sizeof(psHmacSha256_t));
+    Memset(ctx, 0x0, sizeof(psHmacSha256_t));
 }
 #endif /* USE_LIBSODIUM_HMAC_SHA256 */
 

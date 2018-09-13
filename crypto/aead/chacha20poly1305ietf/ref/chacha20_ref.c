@@ -7,9 +7,9 @@
 
 #include "ps_chacha20poly1305ietf_config.h"
 #ifdef USE_MATRIX_CHACHA20_POLY1305_IETF
-# include <stdint.h>
-# include <stdlib.h>
-# include <string.h>
+# include "osdep_stdint.h"
+# include "osdep_stdlib.h"
+# include "osdep_string.h"
 
 # include "crypto_stream_chacha20.h"
 # include "private/common.h"
@@ -94,7 +94,7 @@ chacha20_encrypt_bytes(chacha_ctx *ctx, const uint8_t *m, uint8_t *c,
         return; /* LCOV_EXCL_LINE */
     }
     if (bytes > 64ULL * (1ULL << 32) - 64ULL) {
-        abort();
+        Abort();
     }
     j0  = ctx->input[0];
     j1  = ctx->input[1];
@@ -115,7 +115,7 @@ chacha20_encrypt_bytes(chacha_ctx *ctx, const uint8_t *m, uint8_t *c,
 
     for (;;) {
         if (bytes < 64) {
-            memset(tmp, 0, 64);
+            Memset(tmp, 0, 64);
             for (i = 0; i < bytes; ++i) {
                 tmp[i] = m[i];
             }
@@ -236,7 +236,7 @@ stream_ref(unsigned char *c, unsigned long long clen, const unsigned char *n,
     COMPILER_ASSERT(crypto_stream_chacha20_KEYBYTES == 256 / 8);
     chacha_keysetup(&ctx, k);
     chacha_ivsetup(&ctx, n, NULL);
-    memset(c, 0, clen);
+    Memset(c, 0, clen);
     chacha20_encrypt_bytes(&ctx, c, c, clen);
     psSodium_memzero(&ctx, sizeof ctx);
 
@@ -255,7 +255,7 @@ stream_ietf_ref(unsigned char *c, unsigned long long clen,
     COMPILER_ASSERT(crypto_stream_chacha20_KEYBYTES == 256 / 8);
     chacha_keysetup(&ctx, k);
     chacha_ietf_ivsetup(&ctx, n, NULL);
-    memset(c, 0, clen);
+    Memset(c, 0, clen);
     chacha20_encrypt_bytes(&ctx, c, c, clen);
     psSodium_memzero(&ctx, sizeof ctx);
 

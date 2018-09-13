@@ -6,18 +6,32 @@
 /*****************************************************************************
 * Copyright (c) 2017 INSIDE Secure Oy. All Rights Reserved.
 *
-* This confidential and proprietary software may be used only as authorized
-* by a licensing agreement from INSIDE Secure.
+* The latest version of this code is available at http://www.matrixssl.org
 *
-* The entire notice above must be reproduced on all authorized copies that
-* may only be made to the extent permitted by a licensing agreement from
-* INSIDE Secure.
+* This software is open source; you can redistribute it and/or modify
+* it under the terms of the GNU General Public License as published by
+* the Free Software Foundation; either version 2 of the License, or
+* (at your option) any later version.
+*
+* This General Public License does NOT permit incorporating this software
+* into proprietary programs.  If you are unable to comply with the GPL, a
+* commercial license for this software may be purchased from INSIDE at
+* http://www.insidesecure.com/
+*
+* This program is distributed in WITHOUT ANY WARRANTY; without even the
+* implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+* See the GNU General Public License for more details.
+*
+* You should have received a copy of the GNU General Public License
+* along with this program; if not, write to the Free Software
+* Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+* http://www.gnu.org/copyleft/gpl.html
 *****************************************************************************/
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
+#include "osdep_stdio.h"
+#include "osdep_stdlib.h"
+#include "osdep_string.h"
+#include "osdep_unistd.h"
 #include "core/coreApi.h"
 #include "matrixssl/matrixsslApi.h"
 #include "matrixssl/matrixsslNet.h"
@@ -29,7 +43,7 @@
 #define USE_MATRIX_NET_DEBUG
 #undef DEBUGF                /* Protect against possible multiple definition. */
 #ifdef USE_MATRIX_NET_DEBUG
-# define DEBUGF(...) printf(__VA_ARGS__)
+# define DEBUGF(...) Printf(__VA_ARGS__)
 #else
 # define DEBUGF(...) do {} while (0)
 #endif
@@ -40,6 +54,7 @@
 # define FLAG_TLS_1_0 (1 << 10)
 # define FLAG_TLS_1_1 (1 << 11)
 # define FLAG_TLS_1_2 (1 << 12)
+# define FLAG_TLS_1_3 (1 << 13)
 
 /* Highlight text from peer. */
 static char start_remote_text[] = "\033[1m";
@@ -50,16 +65,16 @@ static uint16_t g_cipher[] = { 47 };
 
 # define HTTP_BUFFER_SIZE (1024 * 1024)
 
-# define logMessage(l, t, ...) do { printf(#l " " #t ": " __VA_ARGS__); printf("\n"); } while (0) /* Log_Verbose, TAG, "Wrote %d bytes", transferred */
+# define logMessage(l, t, ...) do { Printf(#l " " #t ": " __VA_ARGS__); Printf("\n"); } while (0) /* Log_Verbose, TAG, "Wrote %d bytes", transferred */
 
 static int usage(FILE *out, const char *program)
 {
-    fprintf(out, "usage: %s [options]\n", program);
-    fprintf(out, "Where options may include: ");
-    fprintf(out, "\t--help (-h)        Get this usage\n");
-    fprintf(out, "\t--host hostname    Specify host or address\n");
-    fprintf(out, "\t--port port        Specify target port\n");
-    fprintf(out, "\t--get http://url/  Get URL (supports HTTP protocol)\n");
+    Fprintf(out, "usage: %s [options]\n", program);
+    Fprintf(out, "Where options may include: ");
+    Fprintf(out, "\t--help (-h)        Get this usage\n");
+    Fprintf(out, "\t--host hostname    Specify host or address\n");
+    Fprintf(out, "\t--port port        Specify target port\n");
+    Fprintf(out, "\t--get http://url/  Get URL (supports HTTP protocol)\n");
     return 0;
 }
 
@@ -76,7 +91,7 @@ int option(int *argc_p, char ***argv_p, const char *opt, char **target)
         return 0; /* No space for argument with string. */
 
     }
-    if (strcmp((*argv_p)[1], opt) == 0)
+    if (Strcmp((*argv_p)[1], opt) == 0)
     {
         (*argc_p) -= 1;
         (*argv_p)[1] = (*argv_p)[0];
@@ -129,7 +144,7 @@ static int32 getHTTPResponse(const char *url,
 int do_get(const char *url, psSocketType_t type,
     const char *capath, int tls_version)
 {
-    void *buf = malloc(HTTP_BUFFER_SIZE);
+    void *buf = Malloc(HTTP_BUFFER_SIZE);
     size_t bufsz = HTTP_BUFFER_SIZE;
     int32 res;
     struct psSocketTls tls = { capath, tls_version };
@@ -147,7 +162,7 @@ int do_get(const char *url, psSocketType_t type,
 
     if (!buf)
     {
-        fprintf(stderr, "Unable to allocate buffer %d bytes\n",
+        Fprintf(stderr, "Unable to allocate buffer %d bytes\n",
             HTTP_BUFFER_SIZE);
         return 2;
     }
@@ -155,24 +170,24 @@ int do_get(const char *url, psSocketType_t type,
     res = getHTTPResponse(url, buf, &bufsz, type, typespecific, func);
     if (res == PS_INSECURE_PROTOCOL)
     {
-        fprintf(stderr, "Do not try to use capath or tls version with http protocol\n");
-        fprintf(stderr, "these are for https protocol.\n");
+        Fprintf(stderr, "Do not try to use capath or tls version with http protocol\n");
+        Fprintf(stderr, "these are for https protocol.\n");
         exit(1);
     }
     else if (res < 0)
     {
         /* Connection error. */
-        fprintf(stderr, "Connect error: %d\n", res);
+        Fprintf(stderr, "Connect error: %d\n", res);
     }
     else if (res != 0)
     {
         /* HTTP error. */
-        fprintf(stderr, "HTTP return code: %d\n", res);
+        Fprintf(stderr, "HTTP return code: %d\n", res);
     }
     else if (res == 0)
     {
         /* Write output (HTTP code 200 OK). */
-        fwrite(buf, bufsz, 1, stdout);
+        Fwrite(buf, bufsz, 1, stdout);
     }
     return res >= 0 ? 0 : 1;
 }
@@ -197,27 +212,27 @@ int do_dialog(psSocket_t *sock)
         FD_ZERO(&fds);
         FD_SET(STDIN_FILENO, &fds);
         FD_SET(sockfd, &fds);
-        select(sockfd + 1, &fds, NULL, NULL, NULL);
+        Select(sockfd + 1, &fds, NULL, NULL, NULL);
         DEBUGF("an fd ready: stdin: %d sock_read: %d\n",
             FD_ISSET(STDIN_FILENO, &fds),
             FD_ISSET(sockfd, &fds));
         if (count++ == 100000)
         {
-            printf("Finished\n");
+            Printf("Finished\n");
             return 1;
         }
         buf.buf = buf.start = buf.end = ch1024;
         buf.size = (uint32) sizeof(ch1024);
         rc = psSocketReadAppendBuf(sock, &buf, PS_SOCKET_OPTION_NONBLOCK);
-        printf("Got SOCK bytes: %d\n", rc);
+        Printf("Got SOCK bytes: %d\n", rc);
         if (rc == 0)
         {
-            printf("Peer disconnected\n");
+            Printf("Peer disconnected\n");
             return 0;
         }
         else if (rc > 0)
         {
-            printf("%s%.*s%s",
+            Printf("%s%.*s%s",
                 start_remote_text,
                 (int) (buf.end - buf.start),
                 (const char *) buf.start,
@@ -231,10 +246,10 @@ int do_dialog(psSocket_t *sock)
         buf.size = (uint32) sizeof(ch1024);
         rc = psSocketReadAppendBuf(STDIN_FILENO, &buf2,
             PS_SOCKET_OPTION_NONBLOCK);
-        printf("Got STDIN bytes: %d\n", rc);
+        Printf("Got STDIN bytes: %d\n", rc);
         if (rc == 0)
         {
-            printf("Quit from keyboard\n");
+            Printf("Quit from keyboard\n");
             return 0;
         }
         /* Copy input to send buffer. */
@@ -252,13 +267,13 @@ int do_dialog(psSocket_t *sock)
 
             if (psSocketWriteShiftBuf(sock, &buf, 0) < 1)
             {
-                fprintf(stderr, "Connection error\n");
+                Fprintf(stderr, "Connection error\n");
                 return 1;
             }
         }
     }
     while (1);
-    return rc;
+    /* Above loop newer breaks. */
 }
 
 int do_dialog_matrixssl(matrixSslInteract_t *msi_p)
@@ -283,14 +298,14 @@ int do_dialog_matrixssl(matrixSslInteract_t *msi_p)
         FD_SET(STDIN_FILENO, &fds);
         FD_SET(STDIN_FILENO, &except_fds);
         FD_SET(sockfd, &fds);
-        select(sockfd + 1, &fds, NULL, NULL, NULL);
+        Select(sockfd + 1, &fds, NULL, NULL, NULL);
         DEBUGF("an fd ready stdin: %d sock_read: %d\n",
             FD_ISSET(STDIN_FILENO, &fds),
             FD_ISSET(sockfd, &fds));
 
         if (count++ == 2000000000)
         {
-            printf("Finished\n");
+            Printf("Finished\n");
             return 1;
         }
         buf.buf = buf.start = buf.end = ch1024;
@@ -301,24 +316,24 @@ int do_dialog_matrixssl(matrixSslInteract_t *msi_p)
 alert_handler:
             if (msi_p->ch2[0] == 1 && msi_p->ch2[1] == 0)
             {
-                printf("Peer terminated connection.\n");
+                Printf("Peer terminated connection.\n");
                 psSocketShutdown(sock, 0);
                 matrixSslInteractClose(msi_p);
                 return 0;
             }
 
-            fprintf(stderr, "Got alert: level=%d desc=%d\n",
+            Fprintf(stderr, "Got alert: level=%d desc=%d\n",
                 (int) msi_p->ch2[0], (int) msi_p->ch2[1]);
             return 1;
         }
         if (rc == MATRIXSSL_NET_DISCONNECTED)
         {
-            fprintf(stderr, "The peer has disconnected\n");
+            Fprintf(stderr, "The peer has disconnected\n");
             exit(0);
         }
         if (rc < 0)
         {
-            fprintf(stderr, "matrixSslInteract error: %d\n",
+            Fprintf(stderr, "matrixSslInteract error: %d\n",
                 (int) rc);
             exit(1);
         }
@@ -331,14 +346,14 @@ again_read:
                 buf.buf + buf.size - buf.end);
             if (rc < 0)
             {
-                fprintf(stderr, "Read error: rc=%d\n", rc);
+                Fprintf(stderr, "Read error: rc=%d\n", rc);
                 return 1;
             }
             DEBUGF("Interact read gave %d\n", (int) rc);
-            printf("%s", start_remote_text);
-            printf("%.*s", (int) (rc), (const char *) buf.start);
-            printf("%s", end_remote_text);
-            fflush(stdout);
+            Printf("%s", start_remote_text);
+            Printf("%.*s", (int) (rc), (const char *) buf.start);
+            Printf("%s", end_remote_text);
+            Fflush(stdout);
         }
         psSocketSetOptions(sock, PS_SOCKET_OPTION_BLOCK);
 
@@ -363,7 +378,7 @@ again_read:
         }
         if (rc == 0)
         {
-            printf("Quit from keyboard\n");
+            Printf("Quit from keyboard\n");
             return 0;
         }
         /* Copy input to send buffer. */
@@ -388,7 +403,7 @@ again_read:
                     buf.start,
                     buf.end - buf.start) < 0)
             {
-                fprintf(stderr, "Connection error\n");
+                Fprintf(stderr, "Connection error\n");
                 return 1;
             }
             /* Mark the buffer as handled. */
@@ -409,12 +424,12 @@ no_kbd_input:
         }
         if (rc == MATRIXSSL_NET_DISCONNECTED)
         {
-            fprintf(stderr, "The peer has disconnected\n");
+            Fprintf(stderr, "The peer has disconnected\n");
             exit(0);
         }
     }
     while (1);
-    return rc;
+    /* Above loop never breaks. */
 }
 
 int do_dialog_client(const char *host, const char *port)
@@ -425,10 +440,10 @@ int do_dialog_client(const char *host, const char *port)
     rc = psSocketConnect(host, port, 0, PS_SOCKET_STREAM, NULL, NULL, &sock);
     if (rc == PS_SUCCESS)
     {
-        printf("Connected to %s:%s\n", host, port);
+        Printf("Connected to %s:%s\n", host, port);
         return do_dialog(sock);
     }
-    printf("Unable to connect\n");
+    Printf("Unable to connect\n");
     return 2;
 }
 
@@ -469,7 +484,7 @@ int32 do_tls_handshake(matrixSslInteract_t *msi_p, int32 rc)
             DEBUGF("wait for data from peer\n");
             FD_ZERO(&fds);
             FD_SET(sockfd, &fds);
-            select(sockfd + 1, &fds, NULL, NULL, NULL);
+            Select(sockfd + 1, &fds, NULL, NULL, NULL);
         }
         else if (rc ==  MATRIXSSL_REQUEST_SEND ||
                  msi_p->send_len_left > 0)
@@ -477,7 +492,7 @@ int32 do_tls_handshake(matrixSslInteract_t *msi_p, int32 rc)
             DEBUGF("wait for sending data to peer\n");
             FD_ZERO(&fds);
             FD_SET(sockfd, &fds);
-            select(sockfd + 1, NULL, &fds, NULL, NULL);
+            Select(sockfd + 1, NULL, &fds, NULL, NULL);
         }
 /*              if (rc != 0) */
         DEBUGF("hs rc code: %d\n", rc);
@@ -509,6 +524,10 @@ static void set_tls_options_version(sslSessOpts_t *options_p, int tls)
     {
         options_p->versionFlag |= SSL_FLAGS_TLS_1_2;
     }
+    if ((tls & FLAG_TLS_1_3) || tls == 0)
+    {
+        options_p->versionFlag |= SSL_FLAGS_TLS_1_3_DRAFT_23;
+    }
 }
 
 # ifdef USE_CLIENT_SIDE_SSL
@@ -524,24 +543,24 @@ int do_dialog_client_tls(const char *host, const char *port,
     unsigned char *ext = NULL;
     int32 extLen;
 
-    memset(&options, 0x0, sizeof(sslSessOpts_t));
+    Memset(&options, 0x0, sizeof(sslSessOpts_t));
     set_tls_options_version(&options, tls);
 
     if (matrixSslOpen() < 0)
     {
-        fprintf(stderr, "Error initializing MatrixSSL\n");
+        Fprintf(stderr, "Error initializing MatrixSSL\n");
         return 3;
     }
 
     if (matrixSslNewKeys(&keys, NULL) < 0)
     {
-        fprintf(stderr, "Error initializing MatrixSSL: "
+        Fprintf(stderr, "Error initializing MatrixSSL: "
             "matrixSslNewKeys error\n");
         return 3;
     }
     if (matrixSslNewSessionId(&sid, NULL) < 0)
     {
-        fprintf(stderr, "Error initializing MatrixSSL: "
+        Fprintf(stderr, "Error initializing MatrixSSL: "
             "matrixSslNewSessionId error\n");
         return 3;
     }
@@ -559,7 +578,7 @@ int do_dialog_client_tls(const char *host, const char *port,
 #  endif
         if (rc != PS_SUCCESS)
         {
-            fprintf(stderr, "No certificate material loaded.\n");
+            Fprintf(stderr, "No certificate material loaded.\n");
             matrixSslDeleteSessionId(sid);
             matrixSslDeleteKeys(keys);
             matrixSslClose();
@@ -568,7 +587,7 @@ int do_dialog_client_tls(const char *host, const char *port,
     }
 
     matrixSslNewHelloExtension(&extension, NULL);
-    matrixSslCreateSNIext(NULL, (unsigned char *) host, (uint32) strlen(host),
+    matrixSslCreateSNIext(NULL, (unsigned char *) host, (uint32) Strlen(host),
         &ext, &extLen);
     if (ext)
     {
@@ -587,19 +606,19 @@ int do_dialog_client_tls(const char *host, const char *port,
     if (rc >= PS_SUCCESS)
     {
         /* Interact until connected. */
-        printf("Connected to %s:%s (using TLS)\n", host, port);
+        Printf("Connected to %s:%s (using TLS)\n", host, port);
         rc = do_tls_handshake(&msi, rc);
         if (rc == MATRIXSSL_REQUEST_CLOSE)
         {
-            printf("Connection close requested.\n");
+            Printf("Connection close requested.\n");
             exit(1);
         }
         if (rc != PS_SUCCESS)
         {
-            printf("Handshake failure: %d\n", rc);
+            Printf("Handshake failure: %d\n", rc);
             exit(1);
         }
-        printf("Successful handshake\n");
+        Printf("Successful handshake\n");
 
         rc = do_dialog_matrixssl(&msi);
 
@@ -608,10 +627,10 @@ int do_dialog_client_tls(const char *host, const char *port,
 
         matrixSslDeleteKeys(keys);
         matrixSslClose();
-        printf("Closed down\n");
+        Printf("Closed down\n");
         return rc;
     }
-    printf("Unable to connect\n");
+    Printf("Unable to connect\n");
 
     /* Free all allocated/opened resources. */
     matrixSslDeleteSessionId(sid);
@@ -631,14 +650,14 @@ int do_dialog_server(const char *host, const char *port)
     rc = psSocketListen(host, port, 0, 0, PS_SOCKET_STREAM, NULL, NULL, &sock);
     if (rc == PS_SUCCESS)
     {
-        printf("Waiting for connection\n");
+        Printf("Waiting for connection\n");
         rc = psSocketAccept(sock, 0, &sock2);
-        printf("Connected.\n");
+        Printf("Connected.\n");
         rc = do_dialog(sock2);
         psSocketShutdown(sock, 0);
         return rc;
     }
-    printf("Cannot listen to specified address/port\n");
+    Printf("Cannot listen to specified address/port\n");
     return 2;
 }
 
@@ -676,18 +695,18 @@ int do_dialog_server_tls(const char *host, const char *port,
     unsigned char sessTicketName[16];
 #  endif
 
-    memset(&options, 0x0, sizeof(sslSessOpts_t));
+    Memset(&options, 0x0, sizeof(sslSessOpts_t));
     set_tls_options_version(&options, tls);
 
     if (matrixSslOpen() < 0)
     {
-        fprintf(stderr, "Error initializing MatrixSSL\n");
+        Fprintf(stderr, "Error initializing MatrixSSL\n");
         return 3;
     }
 
     if (matrixSslNewKeys(&keys, NULL) < 0)
     {
-        fprintf(stderr, "Error initializing MatrixSSL: "
+        Fprintf(stderr, "Error initializing MatrixSSL: "
             "matrixSslNewKeys error\n");
         return 3;
     }
@@ -735,45 +754,45 @@ int do_dialog_server_tls(const char *host, const char *port,
     rc = psSocketListen(host, port, 0, 0, PS_SOCKET_STREAM, NULL, NULL, &sock);
     if (rc == PS_SUCCESS)
     {
-        printf("Waiting for connection\n");
+        Printf("Waiting for connection\n");
         rc = matrixSslInteractBeginAccept(&msi, sock, 0,
             keys, NULL, &options);
         if (rc < 0)
         {
-            printf("Accept failed\n");
+            Printf("Accept failed\n");
             exit(1);
         }
 
         if (rc >= PS_SUCCESS)
         {
             /* Interact until connected. */
-            printf("Client connected\n");
+            Printf("Client connected\n");
             /* TOOD: Fake read needed. */
             rc = do_tls_handshake(&msi,
                 MATRIXSSL_REQUEST_RECV);
             if (rc == MATRIXSSL_REQUEST_CLOSE)
             {
-                printf("Connection close requested.\n");
+                Printf("Connection close requested.\n");
                 exit(1);
             }
             if (rc != PS_SUCCESS)
             {
-                printf("Handshake failure: %d\n", rc);
+                Printf("Handshake failure: %d\n", rc);
                 exit(1);
             }
-            printf("Successful handshake\n");
+            Printf("Successful handshake\n");
 
             rc = do_dialog_matrixssl(&msi);
 
             /* Free all allocated/opened resources. */
             matrixSslDeleteKeys(keys);
             matrixSslClose();
-            printf("Closed down\n");
+            Printf("Closed down\n");
             psSocketShutdown(sock, 0);
             return rc;
         }
     }
-    printf("Cannot listen to specified address/port\n");
+    Printf("Cannot listen to specified address/port\n");
     return 2;
 }
 # endif /* USE_SERVER_SIDE_SSL */
@@ -828,6 +847,10 @@ int main(int argc, char **argv)
         {
             tls_version |= FLAG_TLS_1_2;
         }
+        else if (option(&argc, &argv, "--tlsv13", NULL))
+        {
+            tls_version |= FLAG_TLS_1_3;
+        }
         else if (option(&argc, &argv, "--capath", &capath))
         {
             tls = 1; /* CApath also enables tls. */
@@ -856,7 +879,7 @@ int main(int argc, char **argv)
     }
     if (argc > 1)
     {
-        fprintf(stderr, "Invalid arguments: Unable to process %s\n",
+        Fprintf(stderr, "Invalid arguments: Unable to process %s\n",
             argv[1]);
         usage(stderr, argv[0]);
         exit(1);
@@ -881,7 +904,7 @@ int main(int argc, char **argv)
                 certpath, keypath, capath,
                 tls_version));
 # else
-        fprintf(stderr, "USE_SERVER_SIDE_SSL required\n");
+        Fprintf(stderr, "USE_SERVER_SIDE_SSL required\n");
         return EXIT_FAILURE;
 # endif
     }
@@ -894,7 +917,7 @@ int main(int argc, char **argv)
 # ifdef USE_CLIENT_SIDE_SSL
         exit(do_dialog_client_tls(host, port, capath, tls_version));
 # else
-        fprintf(stderr, "USE_CLIENT_SIDE_SSL required\n");
+        Fprintf(stderr, "USE_CLIENT_SIDE_SSL required\n");
         return EXIT_FAILURE;
 # endif
     }
@@ -903,7 +926,7 @@ int main(int argc, char **argv)
         exit(do_dialog_client(host, port));
     }
 
-    fprintf(stderr, "Invalid arguments\n");
+    Fprintf(stderr, "Invalid arguments\n");
     usage(stderr, argv[0]);
     exit(1);
     return 0;
@@ -918,11 +941,11 @@ int main(int argc, char **argv)
 int32 main(int32 argc, char **argv)
 {
 # ifndef USE_PS_NETWORKING
-    printf("USE_PS_NETWORKING must be enabled at build"
+    Printf("USE_PS_NETWORKING must be enabled at build"
         " time to run this application\n");
 # endif
 # ifdef USE_ONLY_PSK_CIPHER_SUITE
-    printf("This application is not compatible with"
+    Printf("This application is not compatible with"
         " USE_ONLY_PSK_CIPHER_SUITE.\n");
 # endif
     return 1;

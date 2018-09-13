@@ -265,7 +265,7 @@ void psSha256Update(psSha256_t *sha256, const unsigned char *buf, uint32_t len)
         else
         {
             n = min(len, (64 - sha256->curlen));
-            memcpy(sha256->buf + sha256->curlen, buf, (size_t) n);
+            Memcpy(sha256->buf + sha256->curlen, buf, (size_t) n);
             sha256->curlen  += n;
             buf                 += n;
             len                 -= n;
@@ -359,7 +359,7 @@ void psSha256Final(psSha256_t *sha256, unsigned char hash[SHA256_HASHLEN])
     {
         STORE32H(sha256->state[i], hash + (4 * i));
     }
-    memset(sha256, 0x0, sizeof(psSha256_t));
+    Memset(sha256, 0x0, sizeof(psSha256_t));
 }
 
 # ifdef USE_SHA224
@@ -406,7 +406,7 @@ void psSha224Final(psSha256_t *sha256, unsigned char out[SHA224_HASHLEN])
     psAssert(out != NULL);
 #  endif
     psSha256Final(sha256, buf);
-    memcpy(out, buf, SHA224_HASH_SIZE);
+    Memcpy(out, buf, SHA224_HASH_SIZE);
 #  ifdef USE_BURN_STACK
     psBurnStack(sizeof(buf));
 #  endif

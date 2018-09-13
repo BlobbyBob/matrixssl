@@ -58,25 +58,25 @@
 
 /* Inline functions for conversion between types. */
 
-__inline static
+static inline
 const pstmnt_word *pstmnt_const_ptr(const pstm_int *A_const)
 {
     return (const pstmnt_word *) A_const->dp;
 }
 
-__inline static
+static inline
 pstmnt_word *pstmnt_ptr(pstm_int *A)
 {
     return (pstmnt_word *) A->dp;
 }
 
-__inline static
+static inline
 pstmnt_words pstmnt_size(const pstm_int *A)
 {
     return ((A->used) * DIGIT_BIT) / PSTMNT_WORD_BITS;
 }
 
-__inline static
+static inline
 unsigned int pstmnt_size_bytes(const pstm_int *A)
 {
     return ((A->used) * DIGIT_BIT) / 8;

@@ -53,8 +53,8 @@ int32_t psCryptoOpen(const char *config)
     }
 
     /* 'config' is cryptoconfig + coreconfig */
-    clen = strlen(PSCRYPTO_CONFIG) - strlen(PSCORE_CONFIG);
-    if (strncmp(PSCRYPTO_CONFIG, config, clen) != 0)
+    clen = Strlen(PSCRYPTO_CONFIG) - Strlen(PSCORE_CONFIG);
+    if (Strncmp(PSCRYPTO_CONFIG, config, clen) != 0)
     {
         psErrorStr( "Crypto config mismatch.\n" \
             "Library: " PSCRYPTO_CONFIG \
@@ -96,7 +96,7 @@ int32_t psCryptoOpen(const char *config)
     psCrlOpen();
 #endif
     /* Everything successful, store configuration. */
-    strncpy(g_config, PSCRYPTO_CONFIG, sizeof(g_config) - 1);
+    Strncpy(g_config, PSCRYPTO_CONFIG, sizeof(g_config) - 1);
 
     return PS_SUCCESS;
 }

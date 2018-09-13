@@ -9,8 +9,8 @@
  *  the crypto_box functions.
  */
 
-#include <stddef.h>
-#include <stdint.h>
+#include "osdep_stddef.h"
+#include "osdep_stdint.h"
 #include "export.h"
 
 #ifdef __cplusplus

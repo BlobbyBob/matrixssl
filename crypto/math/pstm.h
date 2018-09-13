@@ -134,14 +134,18 @@ typedef uint64 pstm_word;
 /******************************************************************************/
 /*      This is the maximum size that pstm_int.alloc can be for crypto operations.
     Effectively, it is three times the size of the largest private key. */
-#  define PSTM_MAX_SIZE   ((4096 / DIGIT_BIT) * 3)
+#  ifdef USE_LARGE_DH_GROUPS
+#   define PSTM_MAX_SIZE   ((8192 / DIGIT_BIT) * 3)
+#  else
+#   define PSTM_MAX_SIZE   ((4096 / DIGIT_BIT) * 3)
+#endif
 
 typedef struct
 {
     pstm_digit *dp;
     psPool_t *pool;
-#  if defined (__GNUC__) || defined(__llvm__)
-    /* Save a little space with compilers we know will handle this right */
+#  if defined USE_COMPACT_PSTM_INT
+    /* Save a little space if requested. */
     uint32_t used : 12,
              alloc : 12,
              sign : 1;
@@ -183,6 +187,7 @@ extern void pstm_clear_multi(
     pstm_int *mp4, pstm_int *mp5, pstm_int *mp6, pstm_int *mp7);
 
 extern uint16_t pstm_unsigned_bin_size(const pstm_int *a);
+extern uint16_t pstm_unsigned_bin_size_nullsafe(const pstm_int *a);
 extern uint16_t pstm_count_bits(const pstm_int *a);
 
 extern int32_t pstm_read_unsigned_bin(pstm_int *a,
@@ -193,6 +198,8 @@ extern int32_t pstm_to_unsigned_bin(psPool_t *pool, const pstm_int *a,
                                     unsigned char *b);
 extern int32_t pstm_to_unsigned_bin_nr(psPool_t *pool, const pstm_int *a,
                                        unsigned char *b);
+extern unsigned char *pstm_to_unsigned_bin_alloc(psPool_t *pool,
+                                                 const pstm_int *a);
 #  if defined(USE_ECC) || defined(USE_CERT_GEN)
 extern int32_t pstm_read_radix(psPool_t *pool, pstm_int *a,
                                const char *buf, psSize_t len, uint8_t radix);

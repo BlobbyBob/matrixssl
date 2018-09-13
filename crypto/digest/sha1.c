@@ -195,7 +195,7 @@ void psSha1Update(psSha1_t *sha1, const unsigned char *buf, uint32_t len)
     while (len > 0)
     {
         n = min(len, (64 - sha1->curlen));
-        memcpy(sha1->buf + sha1->curlen, buf, (size_t) n);
+        Memcpy(sha1->buf + sha1->curlen, buf, (size_t) n);
         sha1->curlen    += n;
         buf             += n;
         len             -= n;
@@ -284,7 +284,7 @@ void psSha1Final(psSha1_t *sha1, unsigned char hash[SHA1_HASHLEN])
     {
         STORE32H(sha1->state[i], hash + (4 * i));
     }
-    memset(sha1, 0x0, sizeof(psSha1_t));
+    Memset(sha1, 0x0, sizeof(psSha1_t));
 }
 
 #endif /* USE_MATRIX_SHA1 */

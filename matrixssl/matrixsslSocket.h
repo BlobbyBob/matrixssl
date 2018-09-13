@@ -6,24 +6,33 @@
 /*****************************************************************************
 * Copyright (c) 2017 INSIDE Secure Oy. All Rights Reserved.
 *
-* This confidential and proprietary software may be used only as authorized
-* by a licensing agreement from INSIDE Secure.
+* The latest version of this code is available at http://www.matrixssl.org
 *
-* The entire notice above must be reproduced on all authorized copies that
-* may only be made to the extent permitted by a licensing agreement from
-* INSIDE Secure.
+* This software is open source; you can redistribute it and/or modify
+* it under the terms of the GNU General Public License as published by
+* the Free Software Foundation; either version 2 of the License, or
+* (at your option) any later version.
 *
-* For more information or support, please go to our online support system at
-* https://essoemsupport.insidesecure.com.
-* In case you do not have an account for this system, please send an e-mail to
-* ESSEmbeddedHW-Support@insidesecure.com.
+* This General Public License does NOT permit incorporating this software
+* into proprietary programs.  If you are unable to comply with the GPL, a
+* commercial license for this software may be purchased from INSIDE at
+* http://www.insidesecure.com/
+*
+* This program is distributed in WITHOUT ANY WARRANTY; without even the
+* implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+* See the GNU General Public License for more details.
+*
+* You should have received a copy of the GNU General Public License
+* along with this program; if not, write to the Free Software
+* Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+* http://www.gnu.org/copyleft/gpl.html
 *****************************************************************************/
 
 #ifndef INCLUDE_GUARD_MATRIXSSLSOCKET_H
 #define INCLUDE_GUARD_MATRIXSSLSOCKET_H
 
 /* This code is extension on core.h's USE_PS_NETWORKING */
-#include "core/coreApi.h"
+#include "coreApi.h"
 
 #ifdef USE_PS_NETWORKING
 

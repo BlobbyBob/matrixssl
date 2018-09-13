@@ -31,8 +31,11 @@
  *      Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  *      http://www.gnu.org/copyleft/gpl.html
  */
+#ifndef _POSIX_C_SOURCE
+# define _POSIX_C_SOURCE 200112L
+#endif
 
-#include <signal.h>         /* Defines SIGTERM, etc. */
+#include "osdep_signal.h"         /* Defines SIGTERM, etc. */
 #ifdef OSX
 # include <sys/select.h>    /* Defines fd_set, etc. */
 # define MSG_NOSIGNAL 0
@@ -42,6 +45,8 @@
 /* Currently this example uses _psTrace for tracing, so osdep.h is needed: */
 #include "core/osdep.h"
 #include "core/psUtil.h"
+#include "osdep_sys_time.h"
+#include "osdep_stdio.h"
 
 #ifdef USE_DTLS
 
@@ -79,7 +84,7 @@ static serverDtls_t *findClient(struct sockaddr_in addr);
 static serverDtls_t *registerClient(struct sockaddr_in addr, SOCKET sock,
                                     ssl_t *ssl);
 static void clearClient(serverDtls_t *dtls);
-static void closeClientList();
+static void closeClientList(void);
 static SOCKET newUdpSocket(char *ip, short port, int *err);
 static int sigsetup(void);
 static void sigsegv_handler(int);
@@ -92,11 +97,9 @@ static unsigned char *getaddrstring(struct sockaddr *addr, int withport);
 # endif
 
 # ifndef MATRIX_TESTING_ENVIRONMENT /* Omit the message when testing. */
-#  ifdef WIN32
-#   pragma message("DO NOT USE THESE DEFAULT KEYS IN PRODUCTION ENVIRONMENTS.")
-#  else
-#   warning "DO NOT USE THESE DEFAULT KEYS IN PRODUCTION ENVIRONMENTS."
-#  endif
+#  define WARNING_MESSAGE "DO NOT USE THESE DEFAULT KEYS IN PRODUCTION ENVIRONMENTS."
+#  define WARNING_MESSAGE_DEFAULT_KEY
+#  include "pscompilerwarning.h"
 # endif
 
 /*      Pick ONE cipher suite type you want to use to auto select a certificate
@@ -369,7 +372,7 @@ static int32 certValidator(ssl_t *ssl, psX509Cert_t *cert, int32 alert)
 
 static void usage(void)
 {
-    printf("\nusage: dltsServer { option }\n"
+    Printf("\nusage: dltsServer { option }\n"
         "\n"
         "where option can be one of the following:\n"
         "\n"
@@ -411,7 +414,7 @@ static int32 process_cmd_options(int32 argc, char **argv)
             if ((g_rsaKeySize != 1024) && (g_rsaKeySize != 2048)
                 && (g_rsaKeySize != 3072) && (g_rsaKeySize != 4096))
             {
-                printf("invalid -r option\n");
+                Printf("invalid -r option\n");
                 return -1;
             }
             break;
@@ -422,7 +425,7 @@ static int32 process_cmd_options(int32 argc, char **argv)
                 && (g_eccKeySize != 256) && (g_eccKeySize != 384)
                 && (g_eccKeySize != 521))
             {
-                printf("invalid -e option\n");
+                Printf("invalid -e option\n");
                 return -1;
             }
             break;
@@ -431,7 +434,7 @@ static int32 process_cmd_options(int32 argc, char **argv)
             g_ecdhKeySize = atoi(optarg);
             if ((g_ecdhKeySize != 256) && (g_ecdhKeySize != 521))
             {
-                printf("invalid -d option\n");
+                Printf("invalid -d option\n");
                 return -1;
             }
             break;
@@ -441,12 +444,12 @@ static int32 process_cmd_options(int32 argc, char **argv)
             packet_loss_prob = atoi(optarg);
             if (packet_loss_prob < 0)
             {
-                printf("invalid -l option\n");
+                Printf("invalid -l option\n");
                 return -1;
             }
             if (packet_loss_prob > 0)
             {
-                printf("Server simulating packet loss with probability 1/%d\n",
+                Printf("Server simulating packet loss with probability 1/%d\n",
                     packet_loss_prob);
             }
             break;
@@ -455,7 +458,7 @@ static int32 process_cmd_options(int32 argc, char **argv)
             g_port = atoi(optarg);
             if (g_port < 0)
             {
-                printf("invalid -p option\n");
+                Printf("invalid -p option\n");
                 return -1;
             }
         }
@@ -488,7 +491,7 @@ int main(int argc, char **argv)
 # endif
     sslKeys_t *keys;
     int32 freeBufLen, rc, val, recvLen, err, CAstreamLen;
-    int32 sslBufLen, rcr, rcs, sendLen, recvfromBufLen;
+    int32 sslBufLen, rcr, rcs, recvfromBufLen;
     sslSessOpts_t options;
 
 # ifdef WIN32
@@ -548,15 +551,15 @@ int main(int argc, char **argv)
 
     CAstreamLen = 0;
 #  ifdef USE_RSA
-    memcpy(CAstream, RSACAS, sizeof(RSACAS));
+    Memcpy(CAstream, RSACAS, sizeof(RSACAS));
     CAstreamLen += sizeof(RSACAS);
 #   ifdef USE_ECC
-    memcpy(CAstream + CAstreamLen, ECDHRSACAS, sizeof(ECDHRSACAS));
+    Memcpy(CAstream + CAstreamLen, ECDHRSACAS, sizeof(ECDHRSACAS));
     CAstreamLen += sizeof(ECDHRSACAS);
 #   endif
 #  endif
 #  ifdef USE_ECC
-    memcpy(CAstream + CAstreamLen, ECCAS, sizeof(ECCAS));
+    Memcpy(CAstream + CAstreamLen, ECCAS, sizeof(ECCAS));
     CAstreamLen += sizeof(ECCAS);
 #  endif
 
@@ -693,46 +696,46 @@ int main(int argc, char **argv)
 #  ifdef USE_RSA
     if (g_rsaKeySize == 3072)
     {
-        CAstreamLen += (int32) strlen(rsaCA3072File) + 1;
+        CAstreamLen += (int32) Strlen(rsaCA3072File) + 1;
     }
     else
     {
-        CAstreamLen += (int32) strlen(rsaCAFile) + 1;
+        CAstreamLen += (int32) Strlen(rsaCAFile) + 1;
     }
 #   ifdef USE_ECC
-    CAstreamLen += (int32) strlen(ecdhRsaCAFile) + 1;
+    CAstreamLen += (int32) Strlen(ecdhRsaCAFile) + 1;
 #   endif
 #  endif
 #  ifdef USE_ECC
-    CAstreamLen += (int32) strlen(ecCAFile) + 1;
+    CAstreamLen += (int32) Strlen(ecCAFile) + 1;
 #  endif
     CAstream = psMalloc(NULL, CAstreamLen);
-    memset(CAstream, 0x0, CAstreamLen);
+    Memset(CAstream, 0x0, CAstreamLen);
 
     CAstreamLen = 0;
 #  ifdef USE_RSA
     if (g_rsaKeySize == 3072)
     {
-        memcpy(CAstream, rsaCA3072File, strlen(rsaCA3072File));
-        CAstreamLen += strlen(rsaCA3072File);
+        Memcpy(CAstream, rsaCA3072File, Strlen(rsaCA3072File));
+        CAstreamLen += Strlen(rsaCA3072File);
     }
     else
     {
-        memcpy(CAstream, rsaCAFile, strlen(rsaCAFile));
-        CAstreamLen += strlen(rsaCAFile);
+        Memcpy(CAstream, rsaCAFile, Strlen(rsaCAFile));
+        CAstreamLen += Strlen(rsaCAFile);
     }
 #   ifdef USE_ECC
-    memcpy(CAstream + CAstreamLen, ";", 1); CAstreamLen++;
-    memcpy(CAstream + CAstreamLen, ecdhRsaCAFile,  strlen(ecdhRsaCAFile));
-    CAstreamLen += strlen(ecdhRsaCAFile);
+    Memcpy(CAstream + CAstreamLen, ";", 1); CAstreamLen++;
+    Memcpy(CAstream + CAstreamLen, ecdhRsaCAFile,  Strlen(ecdhRsaCAFile));
+    CAstreamLen += Strlen(ecdhRsaCAFile);
 #   endif
 #  endif
 #  ifdef USE_ECC
     if (CAstreamLen > 0)
     {
-        memcpy(CAstream + CAstreamLen, ";", 1); CAstreamLen++;
+        Memcpy(CAstream + CAstreamLen, ";", 1); CAstreamLen++;
     }
-    memcpy(CAstream + CAstreamLen, ecCAFile,  strlen(ecCAFile));
+    Memcpy(CAstream + CAstreamLen, ecCAFile,  Strlen(ecCAFile));
 #  endif
 
 /* Load Identiy */
@@ -784,7 +787,7 @@ int main(int argc, char **argv)
         PSK_HEADER_TABLE[0].key,
         sizeof(PSK_HEADER_TABLE[0].key),
         PSK_HEADER_TABLE[0].id,
-        strlen((const char *) PSK_HEADER_TABLE[0].id));
+        Strlen((const char *) PSK_HEADER_TABLE[0].id));
 
     for (rc = 1; rc < PSK_HEADER_TABLE_COUNT; rc++)
     {
@@ -824,7 +827,7 @@ int main(int argc, char **argv)
         if needed (that reply may be a resend if reading a repeat message).
         Individual client timeouts are then handled
  */
-        val = select(sock + 1, &readfd, NULL, NULL, &timeout);
+        val = Select(sock + 1, &readfd, NULL, NULL, &timeout);
 
         if (val > 0 && FD_ISSET(sock, &readfd))
         {
@@ -863,7 +866,7 @@ int main(int argc, char **argv)
                if not found */
             if ((dtlsCtx = findClient(inaddr)) == NULL)
             {
-                memset(&options, 0x0, sizeof(sslSessOpts_t));
+                Memset(&options, 0x0, sizeof(sslSessOpts_t));
                 options.versionFlag = SSL_FLAGS_DTLS;
                 options.truncHmac = -1;
 
@@ -885,7 +888,7 @@ int main(int argc, char **argv)
             freeBufLen = matrixSslGetReadbuf(ssl, &sslBuf);
             psAssert(freeBufLen >= recvLen);
             psAssert(freeBufLen == matrixDtlsGetPmtu());
-            memcpy(sslBuf, recvfromBuf, recvLen);
+            Memcpy(sslBuf, recvfromBuf, recvLen);
 
             /*  Notify SSL state machine that we've received more data into the
                ssl buffer retreived with matrixSslGetReadbuf. */
@@ -929,7 +932,7 @@ PROCESS_MORE_FROM_BUFFER:
                 while ((sslBufLen = matrixDtlsGetOutdata(ssl,
                             &sslBuf)) > 0)
                 {
-                    if ((sendLen = udpSend(dtlsCtx->fd, sslBuf, sslBufLen,
+                    if ((udpSend(dtlsCtx->fd, sslBuf, sslBufLen,
                              (struct sockaddr *) &inaddr,
                              sizeof(struct sockaddr_in),
                              dtlsCtx->timeout,
@@ -1034,7 +1037,7 @@ static int32 handleResends(SOCKET sock)
     psTime_t now;
     unsigned char *sslBuf;
     int16_t i;
-    int32_t sendLen, sslBufLen, rc;
+    int32_t sslBufLen, rc;
     uint32_t timeout, clientCount;
 
     clientCount = 0; /* return code is number of active clients or < 0 on error */
@@ -1073,7 +1076,7 @@ static int32 handleResends(SOCKET sock)
                 while ((sslBufLen = matrixDtlsGetOutdata(ssl,
                             &sslBuf)) > 0)
                 {
-                    if ((sendLen = udpSend(dtlsCtx->fd, sslBuf, sslBufLen,
+                    if ((udpSend(dtlsCtx->fd, sslBuf, sslBufLen,
                              (struct sockaddr *) &dtlsCtx->addr,
                              sizeof(struct sockaddr_in),
                              dtlsCtx->timeout / 2,
@@ -1144,7 +1147,7 @@ static SOCKET newUdpSocket(char *ip, short port, int *err)
     struct sockaddr_in addr = { 0 };
     SOCKET fd;
 
-    if ((fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0)
+    if ((fd = Socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0)
     {
         _psTraceInt("Error creating socket %d\n", SOCKET_ERRNO);
         *err = SOCKET_ERRNO;
@@ -1191,15 +1194,15 @@ static void sigintterm_handler(int arg)
 static int sigsetup(void)
 {
     /* set up cleanup handler */
-    if (signal(SIGINT, sigintterm_handler) == SIG_ERR ||
+    if (Signal(SIGINT, sigintterm_handler) == SIG_ERR ||
 # ifndef DEBUG_VALGRIND
-        signal(SIGTERM, sigintterm_handler) == SIG_ERR ||
+        Signal(SIGTERM, sigintterm_handler) == SIG_ERR ||
 # endif
-        signal(SIGPIPE, SIG_IGN) == SIG_ERR)
+        Signal(SIGPIPE, SIG_IGN) == SIG_ERR)
     {
         return -1;
     }
-    if (signal(SIGSEGV, sigsegv_handler) == SIG_ERR)
+    if (Signal(SIGSEGV, sigsegv_handler) == SIG_ERR)
     {
         return -1;
     }
@@ -1208,9 +1211,11 @@ static int sigsetup(void)
 }
 
 # ifdef USE_DTLS_DEBUG_TRACE
+#define NI_MAXHOST      1025
+#define NI_MAXSERV      32
 /******************************************************************************/
 /* Return a string representation of the socket address passed. The return
- * value is allocated with malloc() */
+ * value is allocated with Malloc() */
 static unsigned char *getaddrstring(struct sockaddr *addr,
     int withport)
 {
@@ -1246,15 +1251,15 @@ static unsigned char *getaddrstring(struct sockaddr *addr,
         /* This is a fairly bad failure - it'll fallback to IP if it
          * just can't resolve */
         _psTrace("failed lookup for getaddrstring");
-        strcpy(hbuf, "UNKNOWN");
-        strcpy(sbuf, "?");
+        Strcpy(hbuf, "UNKNOWN");
+        Strcpy(sbuf, "?");
     }
 
     if (withport)
     {
-        len = strlen(hbuf) + 2 + strlen(sbuf);
+        len = Strlen(hbuf) + 2 + Strlen(sbuf);
         retstring = (char *) psMalloc(MATRIX_NO_POOL, len);
-        snprintf(retstring, len, "%s:%s", hbuf, sbuf);
+        Snprintf(retstring, len, "%s:%s", hbuf, sbuf);
     }
     else
     {
@@ -1344,7 +1349,7 @@ static void clearClient(serverDtls_t *dtls)
     dtls->ssl = NULL;
     dtls->connStatus = 0;
     dtls->fd = 0;
-    memset(&dtls->addr, 0x0, sizeof(struct sockaddr_in));
+    Memset(&dtls->addr, 0x0, sizeof(struct sockaddr_in));
     return;
 }
 
@@ -1391,7 +1396,7 @@ static void closeClientList()
  */
 int32 main(int32 argc, char **argv)
 {
-    printf("USE_DTLS must be enabled in " \
+    Printf("USE_DTLS must be enabled in " \
         "matrixsslConfig.h at build time to run this application\n");
     return -1;
 }

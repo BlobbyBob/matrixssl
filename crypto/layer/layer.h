@@ -157,6 +157,14 @@
 #  define USE_MATRIX_DH
 # endif
 
+# if defined(USE_X25519)
+#  define USE_MATRIX_X25519
+# endif
+
+# if defined(USE_ED25519)
+#  define USE_MATRIX_ED25519
+# endif
+
 # if defined(USE_PRNG)
 #  define USE_MATRIX_PRNG
 # endif

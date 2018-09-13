@@ -5,7 +5,7 @@
  *      Configuration validation/sanity checks.
  */
 /*
- *      Copyright (c) 2013-2017 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 INSIDE Secure Corporation
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -87,6 +87,12 @@
 #  endif
 # endif
 
+# ifdef USE_ED25519
+#  ifndef USE_SHA512
+#   error "Enable USE_SHA512 for Ed25519 support"
+#  endif
+# endif
+
 # ifdef USE_CERT_PARSE
 #  ifndef USE_X509
 #   error "USE_X509 required for USE_CERT_PARSE"
@@ -118,7 +124,14 @@
 #   error "Enable USE_CERT_GEN in cryptoConfig.h for USE_OCSP_REQUEST"
 # endif
 
+/* Currently enable PEM decoding whenever private key parsing is enabled.*/
+# if defined(USE_PRIVATE_KEY_PARSING)
+#  define USE_PEM_DECODE
+#  ifndef USE_BASE64_DECODE
+#    define USE_BASE64_DECODE
+#  endif
+# endif
+
 #endif  /* _h_PS_CRYPTOCHECK */
 
 /******************************************************************************/
-

@@ -15,8 +15,8 @@
 #ifndef XGETOPT_H
 #define XGETOPT_H
 
-#include <stdio.h>
-#include <string.h>
+#include "osdep_stdio.h"
+#include "osdep_string.h"
 
 extern int optind, opterr;
 extern char *optarg;

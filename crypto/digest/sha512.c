@@ -207,7 +207,7 @@ static void psSha512Update(psSha512_t *sha512, const unsigned char *buf, uint32_
     uint32_t n;
 
     psAssert(sha512 != NULL);
-    psAssert(buf != NULL);
+    psAssert(len == 0 || buf != NULL);
 
     while (len > 0)
     {
@@ -221,7 +221,7 @@ static void psSha512Update(psSha512_t *sha512, const unsigned char *buf, uint32_
         else
         {
             n = min(len, (128 - sha512->curlen));
-            memcpy(sha512->buf + sha512->curlen, buf, (size_t) n);
+            Memcpy(sha512->buf + sha512->curlen, buf, (size_t) n);
             sha512->curlen  += n;
             buf                 += n;
             len                 -= n;
@@ -297,6 +297,20 @@ static void psSha512Final(psSha512_t *sha512, unsigned char out[SHA512_HASHLEN])
 # endif
 }
 
+# ifdef USE_MATRIX_SHA512
+void psSha512Single(const unsigned char *in,
+        uint32_t inLen,
+        unsigned char out[SHA512_HASHLEN])
+{
+    psSha512_t md;
+
+    psSha512PreInit(&md);
+    psSha512Init(&md);
+    psSha512Update(&md, in, inLen);
+    psSha512Final(&md, out);
+}
+# endif /* USE_MATRIX_SHA512 */
+
 # ifdef USE_MATRIX_SHA384
 /******************************************************************************/
 
@@ -340,7 +354,7 @@ void psSha384Final(psSha384_t *sha384, unsigned char out[SHA384_HASHLEN])
     }
 #  endif
     psSha512Final(sha384, buf);
-    memcpy(out, buf, SHA384_HASHLEN);
+    Memcpy(out, buf, SHA384_HASHLEN);
 #  ifdef USE_BURN_STACK
     psBurnStack(sizeof(buf));
 #  endif

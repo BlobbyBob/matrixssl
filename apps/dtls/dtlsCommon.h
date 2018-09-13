@@ -36,20 +36,20 @@
 
 # ifdef USE_DTLS
 
-#  include <stdlib.h>
-#  include <string.h>
-#  include <stdio.h>
-#  include <fcntl.h>        /* Defines FD_CLOEXEC, etc. */
-#  include <errno.h>        /* Defines EWOULDBLOCK, etc. */
+#  include "osdep_stdlib.h"
+#  include "osdep_string.h"
+#  include "osdep_stdio.h"
+#  include "osdep_fcntl.h"        /* Defines FD_CLOEXEC, etc. */
+#  include "osdep_errno.h"        /* Defines EWOULDBLOCK, etc. */
 
 #  ifdef POSIX
 #   define USE_GETOPT_LONG
 #   ifdef USE_GETOPT_LONG
 #    include <getopt.h>
 #   endif
-#   include <unistd.h>
-#   include <netdb.h>      /* Defines AF_INET, etc. */
-#   include <sys/socket.h> /* sockaddr */
+#   include "osdep_unistd.h"
+#   include "osdep_netdb.h"      /* Defines AF_INET, etc. */
+#   include "osdep_sys_socket.h" /* sockaddr */
 #   include <arpa/inet.h>  /* inet_addr */
 #  endif /* POSIX */
 

@@ -180,7 +180,7 @@ void buildTrustedCABuf(unsigned char **CAstreamOut, int32 *CAstreamLenOut)
 
     if (CAstreamLen > 0)
     {
-        CAstream = psMalloc(NULL, CAstreamLen);
+        CAstream = (unsigned char *)psMalloc(NULL, CAstreamLen);
     }
 
     if (NULL == CAstream) {
@@ -189,7 +189,7 @@ void buildTrustedCABuf(unsigned char **CAstreamOut, int32 *CAstreamLenOut)
         return;
     }
 
-    memset(CAstream, 0x0, CAstreamLen);
+    Memset(CAstream, 0x0, CAstreamLen);
 
 #ifdef USE_RSA_CIPHER_SUITE
     appendCACert(CAstream, CAstreamLen, &bufused, RSACAS, sizeof(RSACAS));
@@ -261,7 +261,7 @@ void buildCAStringFromFiles(const char **CAfileOut)
 
     if (CAstreamLen > 0)
     {
-        CAstream = psMalloc(NULL, CAstreamLen);
+        CAstream = (char *)psMalloc(NULL, CAstreamLen);
     }
 
     if (NULL == CAstream) {
@@ -269,7 +269,7 @@ void buildCAStringFromFiles(const char **CAfileOut)
         return;
     }
 
-    memset(CAstream, 0x0, CAstreamLen);
+    Memset(CAstream, 0x0, CAstreamLen);
 
 #ifdef USE_RSA_CIPHER_SUITE
     appendCAFilename(CAstream, CAstreamLen, rsaCAFile);
@@ -303,7 +303,7 @@ void buildCAStringFromFiles(const char **CAfileOut)
     *CAfileOut = CAstream;
 }
 
-#if defined(USE_HEADER_KEYS) && defined(ID_RSA)
+#if defined(USE_HEADER_KEYS) && defined(ID_RSA) && defined(USE_RSA) && defined(USE_IDENTITY_CERTIFICATES)
 int32 loadRsaExampleKeys(sslKeys_t *keys)
 {
     int32 rc;
@@ -377,9 +377,9 @@ error:
     psFree(trustedCABuf, NULL);
     return rc;
 }
-#endif /* USE_HEADER_KEYS && ID_RSA */
+#endif /* USE_HEADER_KEYS && && ID_RSA && USE_RSA && USE_IDENTITY_CERTIFICATES */
 
-#if defined(USE_HEADER_KEYS) && defined(ID_ECDH_RSA)
+#if defined(USE_HEADER_KEYS) && defined(ID_ECDH_RSA) && defined(USE_ECC) && defined(USE_IDENTITY_CERTIFICATES)
 int32 loadECDHRsaExampleKeys(sslKeys_t *keys)
 {
     int32 rc;
@@ -413,9 +413,9 @@ int32 loadECDHRsaExampleKeys(sslKeys_t *keys)
     psFree(trustedCABuf, NULL);
     return rc;
 }
-#endif /* USE_HEADER_KEYS && ID_ECDH_RSA */
+#endif /* USE_HEADER_KEYS && ID_ECDH_RSA && USE_ECC && USE_IDENTITY_CERTIFICATES */
 
-#if defined(USE_HEADER_KEYS) && defined(ID_ECDH_ECDSA)
+#if defined(USE_HEADER_KEYS) && defined(ID_ECDH_ECDSA) && defined(USE_ECC) && defined(USE_IDENTITY_CERTIFICATES)
 int32 loadECDH_ECDSAExampleKeys(sslKeys_t *keys)
 {
     int32 rc;
@@ -451,7 +451,7 @@ int32 loadECDH_ECDSAExampleKeys(sslKeys_t *keys)
     psFree(trustedCABuf, NULL);
     return rc;
 }
-#endif /* USE_HEADER_KEYS && ID_ECDH_ECDSA */
+#endif /* USE_HEADER_KEYS && ID_ECDH_ECDSA && USE_ECC && USE_IDENTITY_CERTIFICATES */
 
 #ifdef USE_PSK_CIPHER_SUITE
 int32 loadExamplePreSharedKeys(sslKeys_t *keys)
@@ -492,7 +492,7 @@ int32 loadKeysFromFile(sslKeys_t *keys)
         privFile = NULL;
     }
 
-# if defined(USE_RSA) || defined(USE_ECC)
+# if defined(MATRIX_USE_FILE_SYSTEM) && defined(USE_IDENTITY_CERTIFICATES) && (defined(USE_RSA) || defined(USE_ECC))
     psTrace("loadKeysFromFile()\n");
     psTraceStr("Using CA: %s\n", pCA);
     psTraceStr("Using certificate: %s\n", certFile);
@@ -527,7 +527,7 @@ int32 loadRsaKeysFromFile(sslKeys_t *keys)
         privFile = NULL;
     }
 
-#ifdef USE_RSA
+#if defined(USE_RSA) && defined(USE_IDENTITY_CERTIFICATES) && defined(MATRIX_USE_FILE_SYSTEM)
     psTrace("loadRsaKeysFromFile()\n");
     psTraceStr("Using CA: %s\n", pCA);
     psTraceStr("Using certificate: %s\n", certFile);
@@ -562,7 +562,7 @@ int32 loadECDHRsaKeysFromFile(sslKeys_t *keys)
         privFile = NULL;
     }
 
-#ifdef USE_ECC
+#if defined(USE_ECC) && defined(USE_IDENTITY_CERTIFICATES) && defined(MATRIX_USE_FILE_SYSTEM)
     psTrace("loadECDHRsaKeysFromFile()\n");
     psTraceStr("Using CA: %s\n", pCA);
     psTraceStr("Using certificate: %s\n", certFile);
@@ -597,7 +597,7 @@ int32 loadECDH_ECDSAKeysFromFile(sslKeys_t *keys)
         privFile = NULL;
     }
 
-#ifdef USE_ECC
+#if defined USE_ECC && defined(USE_IDENTITY_CERTIFICATES) && defined(MATRIX_USE_FILE_SYSTEM)
     psTrace("loadECDH_ECDSAKeysFromFile()\n");
     psTraceStr("Using CA: %s\n", pCA);
     psTraceStr("Using certificate: %s\n", certFile);

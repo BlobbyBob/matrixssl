@@ -37,7 +37,7 @@
 #include "../../cryptoImpl.h"
 #include "ps_chacha20poly1305ietf.h"
 #include "ps_chacha20poly1305ietf_config.h"
-#include <stdlib.h>
+#include "osdep_stdlib.h"
 
 /******************************************************************************/
 
@@ -70,7 +70,7 @@ psRes_t psChacha20Poly1305IetfInit(
         psAssert(crypto_aead_chacha20poly1305_ietf_ABYTES ==
                  PS_CHACHA20POLY1305_IETF_ABYTES);
 
-        if (!getenv("MATRIX_CHACHA20POLY1305_REF"))
+        if (!Getenv("MATRIX_CHACHA20POLY1305_REF"))
         {
             (void)psSodium_runtime_get_cpu_features();        
             (void)psCrypto_stream_chacha20_pick_best_implementation();
@@ -80,7 +80,7 @@ psRes_t psChacha20Poly1305IetfInit(
     }
 
     /* Copy the key */
-    memcpy(ctx->key, key, PS_CHACHA20POLY1305_IETF_KEYBYTES);
+    Memcpy(ctx->key, key, PS_CHACHA20POLY1305_IETF_KEYBYTES);
 
     return PS_SUCCESS;
 }

@@ -1,8 +1,8 @@
 #include "ps_chacha20poly1305ietf_config.h"
 #ifdef USE_MATRIX_CHACHA20_POLY1305_IETF
 
-# include <stddef.h>
-# include <stdint.h>
+# include "osdep_stddef.h"
+# include "osdep_stdint.h"
 
 # include "crypto_verify_16.h"
 # include "crypto_verify_32.h"

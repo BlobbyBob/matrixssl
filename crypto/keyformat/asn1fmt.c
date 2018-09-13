@@ -38,9 +38,9 @@
 
 #if (defined USE_X509 && defined USE_FULL_CERT_PARSE) || defined USE_OCSP_RESPONSE
 
-# include <stdio.h>   /* for snprintf() */
-# include <string.h>  /* for strlen() */
-#include "core/psPrnf.h"
+# include "osdep_stdio.h"   /* for Snprintf() */
+# include "osdep_string.h"  /* for Strlen() */
+#include "psPrnf.h"
 
 /* Constants used in OID formatting code. */
 # define OID_STR_BUF_LEN (129 * 4) /* Temporary string length. */
@@ -163,7 +163,7 @@ static size_t oid_part_append(char *s, const unsigned char *oid, size_t oidlen)
     /* The most common case: single byte oid segment. */
     if (*oid < 128)
     {
-        sprintf(s, ".%d", *oid);
+        Sprintf(s, ".%d", *oid);
         return 1;
     }
     else if (*oid == 128)
@@ -184,7 +184,7 @@ static size_t oid_part_append(char *s, const unsigned char *oid, size_t oidlen)
         {
             if (pos < 8)
             {
-                sprintf(s, ".%llu", ll);
+                Sprintf(s, ".%llu", ll);
                 return pos + 1;
             }
             else if (pos < OID_STR_MAX_SEQ_LEN)
@@ -196,21 +196,21 @@ static size_t oid_part_append(char *s, const unsigned char *oid, size_t oidlen)
                    precision. */
                 pos += 1;
                 *s = '.';
-                memset(s + 1, 0, pos * 3 + 1);
+                Memset(s + 1, 0, pos * 3 + 1);
                 oid_double_dabble_workhorse(oid_orig, pos,
                     (unsigned char *) (s + 1),
                     pos * 8, pos * 3);
 
                 /* The string formatting generates extra zeroes. Remove them. */
                 s += 1; /* Skip '.' */
-                ilen = strlen(s);
+                ilen = Strlen(s);
                 plen = 0;
                 while (plen < ilen && plen < ilen - 1 && s[plen] == '0')
                 {
                     plen++;
                 }
                 /* Remove initial zeroes. */
-                memmove(s, s + plen, ilen + 1 - plen);
+                Memmove(s, s + plen, ilen + 1 - plen);
                 return pos;
             }
             else
@@ -264,8 +264,8 @@ static char *oid_to_string(const unsigned char *oid, size_t oidlen,
     if (oid[2] < 120)
     {
         /* Simple case, [012].x where x < 40. */
-        sprintf(s, "%d.%d", oid[2] / 40, oid[2] % 40);
-        s += strlen(s);
+        Sprintf(s, "%d.%d", oid[2] / 40, oid[2] % 40);
+        s += Strlen(s);
         oid += 3;
         oidlen -= 3;
     }
@@ -283,11 +283,11 @@ static char *oid_to_string(const unsigned char *oid, size_t oidlen,
         /* Decrement tens eight time. */
         for (i = 0; i < 8; i++)
         {
-            oid_asciidec(s + 2, strlen(s + 2) - 1);
+            oid_asciidec(s + 2, Strlen(s + 2) - 1);
         }
 
         /* Check if there were extra zeroes in s[2]. */
-        while (strlen(s + 2) && s[2] == '0')
+        while (Strlen(s + 2) && s[2] == '0')
         {
             s++;
             prefix++;
@@ -295,7 +295,7 @@ static char *oid_to_string(const unsigned char *oid, size_t oidlen,
 
         s[0] = '2';
         s[1] = '.';
-        s += strlen(s);
+        s += Strlen(s);
         oid += 2 + bytes;
         oidlen -= 2 + bytes;
     }
@@ -308,7 +308,7 @@ static char *oid_to_string(const unsigned char *oid, size_t oidlen,
         }
         oidlen -= bytes;
         oid += bytes;
-        s += strlen(s);
+        s += Strlen(s);
     }
     return str + prefix;
 }
@@ -328,10 +328,10 @@ char *asnFormatOid(psPool_t *pool,
     }
 
     /* Allocate dynamically new memory for the result. */
-    out = psMalloc(pool, strlen(str) + 1);
+    out = psMalloc(pool, Strlen(str) + 1);
     if (out)
     {
-        memcpy(out, str, strlen(str) + 1);
+        Memcpy(out, str, Strlen(str) + 1);
     }
     return out;
 }
@@ -503,11 +503,11 @@ static char *internalStrdup(psPool_t *pool, const char *string)
     {
         return NULL;
     }
-    len = strlen(string) + 1;
+    len = Strlen(string) + 1;
     new_str = psMalloc(pool, len);
     if (new_str)
     {
-        memcpy(new_str, string, len);
+        Memcpy(new_str, string, len);
     }
     return new_str;
 }

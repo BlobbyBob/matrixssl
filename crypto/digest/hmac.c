@@ -33,6 +33,38 @@
 /******************************************************************************/
 
 #include "../cryptoImpl.h"
+int32_t psHmac(psCipherType_e type, const unsigned char *key, psSize_t keyLen,
+    const unsigned char *buf, uint32_t len,
+    unsigned char hash[MAX_HASHLEN])
+{
+    unsigned char hmacKey[MAX_HASH_SIZE] = {0};
+    psSize_t hmacKeyLen;
+
+    switch (type)
+    {
+#ifdef USE_HMAC_MD5
+    case HMAC_MD5:
+        return psHmacMd5(key, keyLen, buf, len, hash, hmacKey, &hmacKeyLen);
+#endif
+#ifdef USE_HMAC_SHA1
+    case HMAC_SHA1:
+        return psHmacSha1(key, keyLen, buf, len, hash, hmacKey, &hmacKeyLen);
+#endif
+#ifdef USE_HMAC_SHA256
+    case HMAC_SHA256:
+        return psHmacSha256(key, keyLen, buf, len, hash, hmacKey, &hmacKeyLen);
+#endif
+#ifdef USE_HMAC_SHA384
+    case HMAC_SHA384:
+        return psHmacSha384(key, keyLen, buf, len, hash, hmacKey, &hmacKeyLen);
+#endif
+    default:
+        return PS_ARG_FAIL;
+    }
+    /* Redundant return */
+    return PS_ARG_FAIL;
+}
+
 
 int32_t psHmacInit(psHmac_t *ctx, psCipherType_e type,
     const unsigned char *key, psSize_t keyLen)
@@ -57,9 +89,9 @@ int32_t psHmacInit(psHmac_t *ctx, psCipherType_e type,
         return psHmacSha384Init(&ctx->u.sha384, key, keyLen);
 #endif
     default:
-        return PS_ARG_FAIL;
+        /* Unsupported algorithm. */
+        break;
     }
-    /* Redundant return */
     return PS_ARG_FAIL;
 }
 
@@ -90,6 +122,27 @@ void psHmacUpdate(psHmac_t *ctx, const unsigned char *buf, uint32_t len)
     default:
         break;
     }
+}
+
+int32_t psHmacSingle(psHmac_t *ctx,
+        psCipherType_e hmacAlg,
+        const unsigned char *key,
+        psSize_t keyLen,
+        const unsigned char *in,
+        psSizeL_t inLen,
+        unsigned char out[MAX_HASHLEN])
+{
+    int32_t rc;
+
+    rc = psHmacInit(ctx, hmacAlg, key, keyLen);
+    if (rc < 0)
+    {
+        return rc;
+    }
+    psHmacUpdate(ctx, in, inLen);
+    psHmacFinal(ctx, out);
+
+    return PS_SUCCESS;
 }
 
 void psHmacFinal(psHmac_t *ctx, unsigned char hash[MAX_HASHLEN])
@@ -171,7 +224,7 @@ int32_t psHmacMd5(const unsigned char *key, psSize_t keyLen,
         psMd5Update(md, key, keyLen);
         psMd5Final(md, hash);
         *hmacKeyLen = MD5_HASHLEN;
-        memcpy(hmacKey, hash, *hmacKeyLen);
+        Memcpy(hmacKey, hash, *hmacKeyLen);
     }
     else
     {
@@ -253,7 +306,7 @@ void psHmacMd5Final(psHmacMd5_t *ctx, unsigned char hash[MD5_HASHLEN])
     psMd5Update(&ctx->md5, hash, MD5_HASHLEN);
     psMd5Final(&ctx->md5, hash);
 
-    memset(ctx->pad, 0x0, sizeof(ctx->pad));
+    Memset(ctx->pad, 0x0, sizeof(ctx->pad));
 }
 
 #endif /* USE_MATRIX_HMAC_MD5 */
@@ -296,7 +349,7 @@ int32_t psHmacSha1(const unsigned char *key, psSize_t keyLen,
         psSha1Update(md, key, keyLen);
         psSha1Final(md, hash);
         *hmacKeyLen = SHA1_HASHLEN;
-        memcpy(hmacKey, hash, *hmacKeyLen);
+        Memcpy(hmacKey, hash, *hmacKeyLen);
     }
     else
     {
@@ -377,7 +430,7 @@ void psHmacSha1Final(psHmacSha1_t *ctx, unsigned char hash[SHA1_HASHLEN])
     psSha1Update(&ctx->sha1, hash, SHA1_HASHLEN);
     psSha1Final(&ctx->sha1, hash);
 
-    memset(ctx->pad, 0x0, sizeof(ctx->pad));
+    Memset(ctx->pad, 0x0, sizeof(ctx->pad));
 }
 
 #endif /* USE_MATRIX_HMAC_SHA1 */
@@ -417,7 +470,7 @@ int32_t psHmacSha256(const unsigned char *key, psSize_t keyLen,
         }
         psSha256Update(md, key, keyLen);
         psSha256Final(md, hash);
-        memcpy(hmacKey, hash, SHA256_HASHLEN);
+        Memcpy(hmacKey, hash, SHA256_HASHLEN);
         *hmacKeyLen = SHA256_HASHLEN;
     }
     else
@@ -500,7 +553,7 @@ void psHmacSha256Final(psHmacSha256_t *ctx,
     psSha256Update(&ctx->sha256, ctx->pad, 64);
     psSha256Update(&ctx->sha256, hash, SHA256_HASHLEN);
     psSha256Final(&ctx->sha256, hash);
-    memset(ctx->pad, 0x0, sizeof(ctx->pad));
+    Memset(ctx->pad, 0x0, sizeof(ctx->pad));
 }
 #endif /* USE_MATRIX_HMAC_SHA256 */
 
@@ -539,7 +592,7 @@ int32_t psHmacSha384(const unsigned char *key, psSize_t keyLen,
         }
         psSha384Update(md, key, keyLen);
         psSha384Final(md, hash);
-        memcpy(hmacKey, hash, SHA384_HASHLEN);
+        Memcpy(hmacKey, hash, SHA384_HASHLEN);
         *hmacKeyLen = SHA384_HASHLEN;
     }
     else
@@ -626,7 +679,7 @@ void psHmacSha384Final(psHmacSha384_t *ctx,
     psSha384Update(&ctx->sha384, hash, SHA384_HASHLEN);
     psSha384Final(&ctx->sha384, hash);
 
-    memset(ctx->pad, 0x0, sizeof(ctx->pad));
+    Memset(ctx->pad, 0x0, sizeof(ctx->pad));
 }
 #endif /* USE_MATRIX_HMAC_SHA384 */
 

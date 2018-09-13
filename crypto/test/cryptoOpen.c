@@ -1,4 +1,4 @@
-#include <stdio.h>
+#include "osdep_stdio.h"
 #include "crypto/cryptoApi.h"
 
 int main(void)
@@ -17,18 +17,18 @@ int main(void)
     unsigned char sum;
     psRes_t res;
     
-    memset(out, 0xfe, 32 + 2);
+    Memset(out, 0xfe, 32 + 2);
 
     /* Try opening cryptographic library. */
     res = psCryptoOpen(PSCRYPTO_CONFIG);
     if (res == PS_SELFTEST_FAILED)
     {
-        fprintf(stdout, "Library initialization failed: Self-test failure\n");
+        Fprintf(stdout, "Library initialization failed: Self-test failure\n");
         return 2;
     }
     else if (res < PS_SUCCESS)
     {
-        fprintf(stdout, "Library initialization failed\n");
+        Fprintf(stdout, "Library initialization failed\n");
         return 2;
     }
 
@@ -46,10 +46,10 @@ int main(void)
 
     if (sum != 0)
     {
-        fprintf(stderr, "Library is broken.\n");
+        Fprintf(stderr, "Library is broken.\n");
         return 3;
     }
     
-    fprintf(stderr, "Successful init.\n");
+    Fprintf(stderr, "Successful init.\n");
     return 0;
 }

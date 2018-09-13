@@ -1,9 +1,9 @@
 #ifndef common_H
 #define common_H 1
 
-#include <stdint.h>
-#include <stdlib.h>
-#include <string.h>
+#include "osdep_stdint.h"
+#include "osdep_stdlib.h"
+#include "osdep_string.h"
 
 #define COMPILER_ASSERT(X) (void) sizeof(char[(X) ? 1 : -1])
 
@@ -41,7 +41,7 @@ load64_le(const uint8_t src[8])
 {
 #ifdef NATIVE_LITTLE_ENDIAN
     uint64_t w;
-    memcpy(&w, src, sizeof w);
+    Memcpy(&w, src, sizeof w);
     return w;
 #else
     uint64_t w = (uint64_t) src[0];
@@ -61,7 +61,7 @@ static inline void
 store64_le(uint8_t dst[8], uint64_t w)
 {
 #ifdef NATIVE_LITTLE_ENDIAN
-    memcpy(dst, &w, sizeof w);
+    Memcpy(dst, &w, sizeof w);
 #else
     dst[0] = (uint8_t) w; w >>= 8;
     dst[1] = (uint8_t) w; w >>= 8;
@@ -80,7 +80,7 @@ load32_le(const uint8_t src[4])
 {
 #ifdef NATIVE_LITTLE_ENDIAN
     uint32_t w;
-    memcpy(&w, src, sizeof w);
+    Memcpy(&w, src, sizeof w);
     return w;
 #else
     uint32_t w = (uint32_t) src[0];
@@ -96,7 +96,7 @@ static inline void
 store32_le(uint8_t dst[4], uint32_t w)
 {
 #ifdef NATIVE_LITTLE_ENDIAN
-    memcpy(dst, &w, sizeof w);
+    Memcpy(dst, &w, sizeof w);
 #else
     dst[0] = (uint8_t) w; w >>= 8;
     dst[1] = (uint8_t) w; w >>= 8;
@@ -113,7 +113,7 @@ load64_be(const uint8_t src[8])
 {
 #ifdef NATIVE_BIG_ENDIAN
     uint64_t w;
-    memcpy(&w, src, sizeof w);
+    Memcpy(&w, src, sizeof w);
     return w;
 #else
     uint64_t w = (uint64_t) src[7];
@@ -133,7 +133,7 @@ static inline void
 store64_be(uint8_t dst[8], uint64_t w)
 {
 #ifdef NATIVE_BIG_ENDIAN
-    memcpy(dst, &w, sizeof w);
+    Memcpy(dst, &w, sizeof w);
 #else
     dst[7] = (uint8_t) w; w >>= 8;
     dst[6] = (uint8_t) w; w >>= 8;
@@ -152,7 +152,7 @@ load32_be(const uint8_t src[4])
 {
 #ifdef NATIVE_BIG_ENDIAN
     uint32_t w;
-    memcpy(&w, src, sizeof w);
+    Memcpy(&w, src, sizeof w);
     return w;
 #else
     uint32_t w = (uint32_t) src[3];
@@ -168,7 +168,7 @@ static inline void
 store32_be(uint8_t dst[4], uint32_t w)
 {
 #ifdef NATIVE_BIG_ENDIAN
-    memcpy(dst, &w, sizeof w);
+    Memcpy(dst, &w, sizeof w);
 #else
     dst[3] = (uint8_t) w; w >>= 8;
     dst[2] = (uint8_t) w; w >>= 8;
@@ -195,7 +195,7 @@ store32_be(uint8_t dst[4], uint32_t w)
 #if defined(_MSC_VER) && \
     (defined(_M_X64) || defined(_M_AMD64) || defined(_M_IX86))
 
-# include <intrin.h>
+# include "osdep_intrin.h"
 
 # define HAVE_INTRIN_H    1
 # define HAVE_MMINTRIN_H  1
@@ -211,7 +211,7 @@ store32_be(uint8_t dst[4], uint32_t w)
 #  define HAVE_AVX2INTRIN_H 1
 # endif
 #elif defined(HAVE_INTRIN_H)
-# include <intrin.h>
+# include "osdep_intrin.h"
 #endif
 
 #endif

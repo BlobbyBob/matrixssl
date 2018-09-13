@@ -74,6 +74,7 @@
 # ifdef USE_MATRIX_CHACHA20_POLY1305_IETF
 #  include "../ps_chacha20poly1305ietf.h"
 # endif
+#  include "cl_types_base.h"
 
 /******************************************************************************/
 /* Universal types and defines */
@@ -91,7 +92,7 @@ typedef union
 # ifdef USE_MATRIX_RC2
     psRc2Cbc_t rc2;
 # endif
-# ifdef USE_MATRIX_ARC4
+# if defined USE_MATRIX_ARC4 || defined USE_CL_ARC4
     psArc4_t arc4;
 # endif
 # if defined USE_MATRIX_3DES || defined USE_CL_3DES
@@ -104,8 +105,6 @@ typedef union
     psSeed_t seed;
 # endif
 } psCipherContext_t;
-
-typedef uint32 CL_AnyAsset_t;
 
 typedef struct
 {

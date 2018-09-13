@@ -39,7 +39,7 @@
 /* TODO aesni_cbc_sha256_enc */
 #ifdef USE_OPENSSL_AES_CBC
 
-__inline static const EVP_CIPHER *EVP_aes_cbc(uint8_t keylen)
+static inline const EVP_CIPHER *EVP_aes_cbc(uint8_t keylen)
 {
     switch (keylen)
     {

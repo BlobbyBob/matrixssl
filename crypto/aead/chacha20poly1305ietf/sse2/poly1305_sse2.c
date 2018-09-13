@@ -1,7 +1,7 @@
 #include "../ps_chacha20poly1305ietf_config.h"
 #ifdef USE_MATRIX_CHACHA20_POLY1305_IETF
-# include <stdint.h>
-# include <string.h>
+# include "osdep_stdint.h"
+# include "osdep_string.h"
 
 # include "../onetimeauth_poly1305.h"
 # include "crypto_verify_16.h"
@@ -68,7 +68,7 @@ static xmmi
 _fakealign_mm_loadl_epi64(const void *m)
 {
     xmmi tmp;
-    memcpy(&tmp, m, 8);
+    Memcpy(&tmp, m, 8);
 
     return _mm_loadl_epi64(&tmp);
 }
@@ -87,17 +87,17 @@ poly1305_block_copy31(unsigned char *dst, const unsigned char *src,
         dst += 16;
     }
     if (bytes & 8) {
-        memcpy(dst, src, 8);
+        Memcpy(dst, src, 8);
         src += 8;
         dst += 8;
     }
     if (bytes & 4) {
-        memcpy(dst, src, 4);
+        Memcpy(dst, src, 4);
         src += 4;
         dst += 4;
     }
     if (bytes & 2) {
-        memcpy(dst, src, 2);
+        Memcpy(dst, src, 2);
         src += 2;
         dst += 2;
     }
@@ -126,8 +126,8 @@ poly1305_init_ext(poly1305_state_internal_t *st, const unsigned char key[32],
     _mm_storeu_si128((xmmi *) (void *) &st->hh[8], _mm_setzero_si128());
 
     /* clamp key */
-    memcpy(&t0, key, 8);
-    memcpy(&t1, key + 8, 8);
+    Memcpy(&t0, key, 8);
+    Memcpy(&t1, key + 8, 8);
     r0 = t0 & 0xffc0fffffff;
     t0 >>= 44;
     t0 |= t1 << 20;
@@ -144,8 +144,8 @@ poly1305_init_ext(poly1305_state_internal_t *st, const unsigned char key[32],
     R[4] = (uint32_t)((r2 >> 16));
 
     /* save pad */
-    memcpy(&st->pad[0], key + 16, 8);
-    memcpy(&st->pad[1], key + 24, 8);
+    Memcpy(&st->pad[0], key + 16, 8);
+    Memcpy(&st->pad[1], key + 24, 8);
 
     rt0 = r0;
     rt1 = r1;
@@ -852,7 +852,7 @@ poly1305_finish_ext(poly1305_state_internal_t *st, const unsigned char *m,
     {
         uint128_t h;
 
-        memcpy(&h, &st->pad[0], 16);
+        Memcpy(&h, &st->pad[0], 16);
         h += ((uint128_t) h1 << 64) | h0;
         h0 = (uint64_t) h;
         h1 = (uint64_t)(h >> 64);
@@ -867,8 +867,8 @@ poly1305_finish_ext(poly1305_state_internal_t *st, const unsigned char *m,
     _mm_storeu_si128((xmmi *) (void *) st + 6, _mm_setzero_si128());
     _mm_storeu_si128((xmmi *) (void *) st + 7, _mm_setzero_si128());
 
-    memcpy(&mac[0], &h0, 8);
-    memcpy(&mac[8], &h1, 8);
+    Memcpy(&mac[0], &h0, 8);
+    Memcpy(&mac[8], &h1, 8);
 
     psSodium_memzero((void *) st, sizeof *st);
 }

@@ -82,15 +82,16 @@
  */
 enum
 {
-    IANA_SECP192R1 = 19,
-    IANA_SECP224R1 = 21,
-    IANA_SECP256R1 = 23,
-    IANA_SECP384R1,
-    IANA_SECP521R1,
-    IANA_BRAIN256R1,
-    IANA_BRAIN384R1,
-    IANA_BRAIN512R1,
-
+    IANA_SECP192R1  = 19,
+    IANA_SECP224R1  = 21,
+    IANA_SECP256R1  = 23,
+    IANA_SECP384R1  = 24,
+    IANA_SECP521R1  = 25,
+    IANA_BRAIN256R1 = 26,
+    IANA_BRAIN384R1 = 27,
+    IANA_BRAIN512R1 = 28,
+    IANA_X25519     = 29,
+    IANA_X448       = 30,
     IANA_BRAIN224R1 = 255 /**< @note this is not defined by IANA */
 };
 
@@ -130,8 +131,13 @@ extern int32_t getEccParamById(psCurve16_t curveId, const psEccCurve_t **curve);
 extern int32_t getEccParamByName(const char *curveName,
                                  const psEccCurve_t **curve);
 extern int32_t getEccParamByOid(uint32_t oid, const psEccCurve_t **curve);
-
-# endif
+extern int32_t psEccWritePrivKeyMem(psPool_t *pool, const psEccKey_t *key,
+        unsigned char **keyMem, psSize_t *keyMemLen);
+#  ifdef MATRIX_USE_FILE_SYSTEM
+extern int32_t psEccWritePrivKeyFile(psPool_t *pool, const psEccKey_t *key,
+        const char *fileName, const char *password, uint8_t pemFlag);
+#  endif /* MATRIX_USE_FILE_SYSTEM */
+# endif /* USE_ECC */
 
 /******************************************************************************/
 
@@ -166,7 +172,9 @@ enum PACKED
     PS_DSA,
     PS_ECC,
     PS_DH,
-    PS_CL_PK /* A public key for CL Library. May contain any key format. */
+    PS_CL_PK, /* A public key for CL Library. May contain any key format. */
+    PS_X25519,
+    PS_ED25519
 };
 
 /** Signature types */
@@ -175,8 +183,17 @@ enum PACKED
     RSA_TYPE_SIG = 5,
     ECDSA_TYPE_SIG,
     RSAPSS_TYPE_SIG,
-    DSA_TYPE_SIG
+    DSA_TYPE_SIG,
+    ED25519_TYPE_SIG
 };
+
+typedef struct psX25519Key
+{
+    unsigned char priv[32];
+    unsigned char pub[32];
+    psBool_t havePriv;
+    psBool_t havePub;
+} psCurve25519Key_t;
 
 /**
     Univeral public key type.
@@ -195,6 +212,12 @@ typedef struct
 #  ifdef USE_ECC
         psEccKey_t ecc;
 #  endif
+#  ifdef USE_X25519
+        psCurve25519Key_t x25519;
+#  endif
+#  ifdef USE_ED25519
+        psCurve25519Key_t ed25519;
+#  endif
 #  ifdef USE_DH
         psDhKey_t dh;
 #  endif
@@ -204,6 +227,13 @@ typedef struct
     psSize_t keysize;           /* in bytes. 512 max for RSA 4096 */
     uint8_t type;               /* PS_RSA, PS_ECC, PS_DH */
 } psPubKey_t;
+
+typedef struct {
+    uint32_t flags;
+    int32_t rsaPssHashAlg;
+    unsigned char *rsaPssSalt;
+    psSize_t rsaPssSaltLen;
+} psSignOpts_t;
 
 extern int32_t pkcs1Pad(const unsigned char *in, psSize_t inlen,
                         unsigned char *out, psSize_t outlen,
@@ -215,57 +245,104 @@ extern int32_t pkcs1Unpad(const unsigned char *in, psSize_t inlen,
 # if defined(USE_RSA) || defined(USE_ECC)
 
 int32_t psHashLenToSigAlg(psSize_t hash_len,
-                          uint8_t key_type);
+        uint8_t key_type);
 
-/*
-    Hash some data for signature generation or verification
+/** Hash some data for signature generation or verification
     purposes.
 
     Compute a digest that is to be signed or whose signature is
     to be verified.
- */
+*/
 psRes_t psComputeHashForSig(const unsigned char *dataBegin,
-                            psSizeL_t dataLen,
-                            int32_t signatureAlgorithm,
-                            unsigned char hashOut[SHA512_HASH_SIZE],
-                            psSize_t * hashOutLen);
+        psSizeL_t dataLen,
+        int32_t signatureAlgorithm,
+        unsigned char hashOut[SHA512_HASH_SIZE],
+        psSize_t * hashOutLen);
 
-/*
-    Struct for passing additional options to psVerifySig.
- */
+/** Algorithm-independent function for signing hashes.
+*/
+int32_t psSignHash(psPool_t *pool,
+        psPubKey_t *privKey,
+        int32_t sigAlg,
+        const unsigned char *in,
+        psSize_t inLen,
+        unsigned char **out,
+        psSize_t *outLen,
+        psSignOpts_t *opts);
+
+/** Algorithm-independent function for signing arbitrary
+    data.
+
+    The data is first hashed if the signature algorithm
+    is only able to sign hashes. TODO: not really. Fix.
+*/
+int32_t psSign(psPool_t *pool,
+        psPubKey_t *privKey,
+        int32_t sigAlg,
+        const unsigned char *in,
+        psSizeL_t inLen,
+        unsigned char **out,
+        psSize_t *outLen,
+        psSignOpts_t *opts);
+
+/**
+    Struct for passing additional options to psVerify, psVerifySig
+    and psHashDataAndVerifySig.
+*/
 typedef struct
 {
     uint32 flags;
-} psVerifySigOptions_t;
+#  ifdef USE_PKCS1_PSS
+    int32_t rsaPssHashAlg;
+    psSize_t rsaPssHashLen;
+    psSize_t rsaPssSaltLen;
+    psBool_t useRsaPss;
+#  endif
+    /* The signed data was a DigestInfo structure. This is only
+       relevant for RSA. */
+    psBool_t msgIsDigestInfo;
+} psVerifyOptions_t;
 
-/*
-    Verify the signature of a digest.
- */
+typedef psVerifyOptions_t psVerifySigOptions_t;
+
+/** Verify the signature of a digest.
+*/
 psRes_t psVerifySig(psPool_t *pool,
-                    const unsigned char hashIn[SHA512_HASH_SIZE],
-                    psSize_t hashInLen,
-                    const unsigned char *sig,
-                    psSize_t sigLen,
-                    psPubKey_t *key,
-                    int32_t signatureAlgorithm,
-                    psBool_t *verifyResult,
-                    psVerifySigOptions_t *opts);
+        const unsigned char *msgIn,
+        psSizeL_t msgInLen,
+        const unsigned char *sig,
+        psSize_t sigLen,
+        psPubKey_t *key,
+        int32_t signatureAlgorithm,
+        psBool_t *verifyResult,
+        psVerifyOptions_t *opts);
+
+/** Verify the signature of a arbitrary data.
+*/
+psRes_t psVerify(psPool_t *pool,
+        const unsigned char *dataBegin,
+        psSizeL_t dataLen,
+        const unsigned char *sig,
+        psSize_t sigLen,
+        psPubKey_t *key,
+        int32_t signatureAlgorithm,
+        psBool_t *verifyResult,
+        psVerifyOptions_t *opts);
 
 /*
     Hash some data _and_ verify the signature of the resulting
     digest.
  */
 psRes_t psHashDataAndVerifySig(psPool_t *pool,
-                               const unsigned char *dataBegin,
-                               psSizeL_t dataLen,
-                               const unsigned char *sig,
-                               psSize_t sigLen,
-                               psPubKey_t *key,
-                               int32_t signatureAlgorithm,
-                               psBool_t *verifyResult,
-                               psVerifySigOptions_t *opts);
+        const unsigned char *dataBegin,
+        psSizeL_t dataLen,
+        const unsigned char *sig,
+        psSize_t sigLen,
+        psPubKey_t *key,
+        int32_t signatureAlgorithm,
+        psBool_t *verifyResult,
+        psVerifyOptions_t *opts);
 # endif
 /******************************************************************************/
 
 #endif /* _h_PS_PUBKEY */
-

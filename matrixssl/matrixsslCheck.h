@@ -5,7 +5,7 @@
  *      Configuration validation/sanity checks.
  */
 /*
- *      Copyright (c) 2013-2017 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 INSIDE Secure Corporation
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -66,10 +66,22 @@ extern "C" {
 #  endif
 # endif
 
+# if defined(USE_TLS_1_3) && !defined(DISABLE_SSLV3)
+#  error "DISABLE_SSLV3 required with USE_TLS_1_3"
+# endif
+
+# if defined(USE_TLS_1_3) && defined(USE_RSA) && !defined(USE_PKCS1_PSS)
+#  error "USE_RSA with USE_TLS_1_3 requires USE_PKCS1_PSS"
+# endif
+
 /*
   Convenience macros for finding out minimum and maximum enabled TLS version.
 */
-# if defined(USE_TLS_1_2) && !defined(DISABLE_TLS_1_2)
+# if defined(USE_TLS_1_3) && !defined(DISABLE_TLS_1_3)
+#  define MAX_ENABLED_TLS_VER TLS_1_3_MIN_VER
+#  define MIN_ENABLED_TLS_1_3_DRAFT_VERSION 22
+#  define MAX_ENABLED_TLS_1_3_DRAFT_VERSION 28
+# elif defined(USE_TLS_1_2) && !defined(DISABLE_TLS_1_2)
 #  define MAX_ENABLED_TLS_VER TLS_1_2_MIN_VER
 # elif defined(USE_TLS_1_1) && !defined(DISABLE_TLS_1_1)
 #  define MAX_ENABLED_TLS_VER TLS_1_1_MIN_VER
@@ -87,6 +99,8 @@ extern "C" {
 #  define MIN_ENABLED_TLS_VER TLS_1_1_MIN_VER
 # elif defined(USE_TLS_1_2) && !defined(DISABLE_TLS_1_2)
 #  define MIN_ENABLED_TLS_VER TLS_1_2_MIN_VER
+# elif defined(USE_TLS_1_3) && !defined(DISABLE_TLS_1_3)
+#  define MIN_ENABLED_TLS_VER TLS_1_3_LOWEST_DRAFT_MIN_VER
 # endif
 
 # ifdef USE_SHARED_SESSION_CACHE
@@ -113,6 +127,9 @@ extern "C" {
 #  endif
 #  ifndef USE_STATELESS_SESSION_TICKETS
 #   error "EAP_FAST requires STATELESS_SESSION_TICKETS"
+#  endif
+#  ifdef USE_TLS_1_3
+#   error "USE_TLS_1_3 not allowed with EAP_FAST"
 #  endif
 # endif /* USE_EAP_FAST */
 
@@ -144,15 +161,6 @@ extern "C" {
  */
 # if defined(ENABLE_INSECURE_REHANDSHAKES) && defined(REQUIRE_SECURE_REHANDSHAKES)
 #  error "Can't enable both ENABLE_INSECURE_REHANDSHAKES and REQUIRE_SECURE_REHANDSHAKES"
-# endif
-
-# if defined(ENABLE_INSECURE_REHANDSHAKES) || defined(ENABLE_SECURE_REHANDSHAKES)
-#  define SSL_REHANDSHAKES_ENABLED
-# endif
-
-# if defined(REQUIRE_SECURE_REHANDSHAKES) && !defined(ENABLE_SECURE_REHANDSHAKES)
-#  define SSL_REHANDSHAKES_ENABLED
-#  define ENABLE_SECURE_REHANDSHAKES
 # endif
 
 # ifdef USE_STATELESS_SESSION_TICKETS
@@ -279,6 +287,22 @@ extern "C" {
 #   define USE_CHACHA20_POLY1305_IETF_CIPHER_SUITE
 #  endif
 
+# if defined(USE_TLS_AES_256_GCM_SHA384) || defined(USE_TLS_AES_128_GCM_SHA256)
+#   define USE_DHE_CIPHER_SUITE
+#   define USE_ECDSA_CIPHER_SUITE
+#   define USE_ECC_CIPHER_SUITE
+#   define USE_AES_CIPHER_SUITE
+#   define USE_TLS_1_3_CIPHER_SUITE
+# endif
+
+# ifdef USE_TLS_CHACHA20_POLY1305_SHA256
+#   define USE_DHE_CIPHER_SUITE
+#   define USE_ECDSA_CIPHER_SUITE
+#   define USE_ECC_CIPHER_SUITE
+#   define USE_CHACHA20_POLY1305_IETF_CIPHER_SUITE
+#   define USE_TLS_1_3_CIPHER_SUITE
+# endif
+
 #  ifdef USE_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
 #   ifndef USE_RSA
 #    error "Enable USE_RSA in cryptoConfig.h for USE_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256"
@@ -379,7 +403,7 @@ extern "C" {
 #   define USE_RSA_CIPHER_SUITE
 #  endif
 
-#  ifdef USE_TLS_DHE_RSA_WITH_AES_128_CBC_SHA256
+#  if defined(USE_TLS_DHE_RSA_WITH_AES_128_CBC_SHA256) || defined(USE_TLS_DHE_RSA_WITH_AES_128_GCM_SHA256)
 #   ifndef USE_RSA
 #    error "Enable USE_RSA in cryptoConfig.h for TLS_DHE_RSA_WITH_AES_128_CBC_SHA256"
 #   endif
@@ -396,7 +420,7 @@ extern "C" {
 #   define USE_RSA_CIPHER_SUITE
 #  endif
 
-#  ifdef USE_TLS_DHE_RSA_WITH_AES_256_CBC_SHA256
+#  if defined(USE_TLS_DHE_RSA_WITH_AES_256_CBC_SHA256) || defined(USE_TLS_DHE_RSA_WITH_AES_256_GCM_SHA256)
 #   ifndef USE_RSA
 #    error "Enable USE_RSA in cryptoConfig.h for TLS_DHE_RSA_WITH_AES_256_CBC_SHA256"
 #   endif
@@ -784,7 +808,7 @@ extern "C" {
 #  define USE_RSA_CIPHER_SUITE
 # endif
 
-# ifdef USE_TLS_DHE_RSA_WITH_AES_128_CBC_SHA
+# if defined(USE_TLS_DHE_RSA_WITH_AES_128_CBC_SHA) || defined(USE_TLS_DHE_RSA_WITH_AES_128_GCM_SHA)
 #  ifndef USE_RSA
 #   error "Enable USE_RSA in cryptoConfig.h for TLS_DHE_RSA_WITH_AES_128_CBC_SHA"
 #  endif
@@ -801,7 +825,7 @@ extern "C" {
 #  define USE_RSA_CIPHER_SUITE
 # endif
 
-# ifdef USE_TLS_DHE_RSA_WITH_AES_256_CBC_SHA
+# if defined(USE_TLS_DHE_RSA_WITH_AES_256_CBC_SHA) || defined(USE_TLS_DHE_RSA_WITH_AES_256_GCM_SHA)
 #  ifndef USE_RSA
 #   error "Enable USE_RSA in cryptoConfig.h for TLS_DHE_RSA_WITH_AES_256_CBC_SHA"
 #  endif
@@ -856,7 +880,7 @@ extern "C" {
 #  define USE_DHE_PSK_CIPHER_SUITE
 # endif
 
-# ifdef USE_TLS_PSK_WITH_AES_256_CBC_SHA
+# if defined(USE_TLS_PSK_WITH_AES_256_CBC_SHA) || defined(USE_TLS_PSK_WITH_AES_256_GCM_SHA)
 #  ifndef USE_AES
 #   error "Enable USE_AES in cryptoConfig.h for TLS_PSK_WITH_AES_256_CBC_SHA"
 #  endif
@@ -868,7 +892,7 @@ extern "C" {
 #  define USE_PSK_CIPHER_SUITE
 # endif
 
-# ifdef USE_TLS_PSK_WITH_AES_128_CBC_SHA
+# if defined(USE_TLS_PSK_WITH_AES_128_CBC_SHA) || defined(USE_TLS_PSK_WITH_AES_128_GCM_SHA)
 #  ifndef USE_AES
 #   error "Enable USE_AES in cryptoConfig.h for TLS_PSK_WITH_AES_128_CBC_SHA"
 #  endif
@@ -880,7 +904,7 @@ extern "C" {
 #  define USE_PSK_CIPHER_SUITE
 # endif
 
-# ifdef USE_TLS_PSK_WITH_AES_128_CBC_SHA256
+# if defined(USE_TLS_PSK_WITH_AES_128_CBC_SHA256) || defined(USE_TLS_PSK_WITH_AES_128_GCM_SHA256)
 #  ifndef USE_AES
 #   error "Enable USE_AES in cryptoConfig.h for TLS_PSK_WITH_AES_128_CBC_SHA256"
 #  endif
@@ -895,7 +919,7 @@ extern "C" {
 #  define USE_PSK_CIPHER_SUITE
 # endif
 
-# ifdef USE_TLS_PSK_WITH_AES_256_CBC_SHA384
+# if defined(USE_TLS_PSK_WITH_AES_256_CBC_SHA384) || defined(USE_TLS_PSK_WITH_AES_256_GCM_SHA384)
 #  ifndef USE_AES
 #   error "Enable USE_AES in cryptoConfig.h for TLS_PSK_WITH_AES_256_CBC_SHA384"
 #  endif
@@ -1116,7 +1140,9 @@ extern "C" {
  */
 # if !defined(USE_RSA_CIPHER_SUITE) && !defined(USE_DHE_CIPHER_SUITE) && \
     !defined(USE_DH_CIPHER_SUITE)
-#  define USE_ONLY_PSK_CIPHER_SUITE
+#  ifndef USE_ONLY_PSK_CIPHER_SUITE
+#   define USE_ONLY_PSK_CIPHER_SUITE
+#  endif
 #  ifndef USE_X509
 typedef int32 psX509Cert_t;
 #  endif
@@ -1160,6 +1186,75 @@ typedef int32 psX509Cert_t;
 #  endif
 # endif
 
+# ifdef USE_TLS_1_3_CIPHER_SUITE
+#  ifndef USE_TLS_1_3
+#   error "Need USE_TLS_1_3 for TLS 1.3 suites"
+#  endif
+#  ifdef SEND_HELLO_RANDOM_TIME
+#   error "Not allowed to use SEND_HELLO_RANDOM_TIME when TLS 1.3 enabled"
+#  endif
+#  if !defined(USE_SHA256) && !defined(USE_SHA384)
+#   error "Need USE_SHA256 or USE_SHA384 for TLS 1.3"
+#  endif
+#  ifndef USE_HKDF
+#   error "Need USE_HKDF for TLS 1.3"
+#  endif
+#  define USE_ECC_CIPHER_SUITE
+#  define USE_DHE_CIPHER_SUITE
+#  define USE_PSK_CIPHER_SUITE
+#  ifdef USE_DH
+#   define REQUIRE_DH_PARAMS
+#  endif
+# endif
+
+# if defined(USE_TLS_1_3) && !defined(DISABLE_TLS_1_3)
+#  ifndef USE_TLS_1_3_CIPHER_SUITE
+#   error "Need at least one TLS 1.3 ciphersuite for USE_TLS_1_3"
+#  endif
+# endif
+
+# ifdef USE_SSL_INFORMATIONAL_TRACE
+#  ifndef USE_SSL_HANDSHAKE_MSG_TRACE
+#   error "Need USE_SSL_HANDSHAKE_MSG_TRACE for USE_SSL_INFORMATIONAL_TRACE"
+#  endif
+# endif
+
+/* USE_IDENTITY_CERTIFICATES maps high level "features" requiring
+   certificate/public key authentication into a single concrete CPP definition
+   used to guard code line needed to implement the features.
+
+   Key-pair/certificate selection is used for client, if client-authentication
+   is enabled, and for server that is not PSK-only. The keys->identity, and
+   chosenIdentity, and functions handling these depend on this definition.
+
+   The client use of certificate to verify server identity using
+   trusted CA certificates is not covered by
+   USE_IDENTITY_CERTIFICATES.  */
+
+#if !defined(USE_ONLY_PSK_CIPHER_SUITE)
+# if (defined(USE_CLIENT_SIDE_SSL) && defined(USE_CLIENT_AUTH)) || defined(USE_SERVER_SIDE_SSL)
+#  define USE_IDENTITY_CERTIFICATES 1
+#  if !defined(USE_ECC_CIPHER_SUITE) && !defined(USE_RSA_CIPHER_SUITE) && !defined(USE_ECDSA_CIPHER_SUITE)
+#   error "conflicting compilation options detected"
+#  endif
+# endif
+# if defined(USE_IDENTITY_CERTIFICATES) || defined(USE_CLIENT_SIDE_SSL)
+#  define USE_CA_CERTIFICATES 1
+# endif
+#endif
+
+#if defined(USE_RSA_CIPHER_SUITE) && !defined(USE_RSA)
+# define USE_RSA 1
+#endif
+
+#if defined(USE_ECC_CIPHER_SUITE) && !defined(USE_ECC)
+# define USE_ECC 1
+#endif
+
+#if defined(USE_ECDSA_CIPHER_SUITE) && !defined(USE_ECC)
+# define USE_ECC 1
+#endif
+
 # ifdef __cplusplus
 }
 # endif
@@ -1167,4 +1262,3 @@ typedef int32 psX509Cert_t;
 #endif /* _h_MATRIXSSLCHECK */
 
 /******************************************************************************/
-

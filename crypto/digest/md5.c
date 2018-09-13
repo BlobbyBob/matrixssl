@@ -72,7 +72,7 @@ void psMd5Update(psMd5_t *md5, const unsigned char *buf, uint32_t len)
     while (len > 0)
     {
         n = min(len, (64 - md5->curlen));
-        memcpy(md5->buf + md5->curlen, buf, (size_t) n);
+        Memcpy(md5->buf + md5->curlen, buf, (size_t) n);
         md5->curlen += n;
         buf             += n;
         len             -= n;
@@ -170,7 +170,7 @@ void psMd5Final(psMd5_t *md5, unsigned char hash[MD5_HASHLEN])
         STORE32L(md5->state[i], hash + (4 * i));
     }
 L_CLEAR:
-    memset(md5, 0x0, sizeof(psMd5_t));
+    Memset(md5, 0x0, sizeof(psMd5_t));
 }
 
 /******************************************************************************/

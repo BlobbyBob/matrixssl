@@ -50,7 +50,7 @@
    Only the lower 16 bits of result are significant; other bits are garbage.
  */
 
-static __inline uint32 idea_mulop(uint32 a, uint32 b)
+static inline uint32 idea_mulop(uint32 a, uint32 b)
 {
     uint32 ab = a * b;
 
@@ -70,7 +70,7 @@ static __inline uint32 idea_mulop(uint32 a, uint32 b)
 /* Computes the multiplicative inverse of a modulo 65537. The algorithm
    used is the Euclid's. */
 
-static __inline uint32 idea_mulinv(uint32 a)
+static inline uint32 idea_mulinv(uint32 a)
 {
     long n1, n2, q, r, b1, b2, t;
 
@@ -187,7 +187,7 @@ int32_t psIdeaInit(psIdea_t *idea, const unsigned char IV[IDEA_IVLEN],
         psTraceCrypto("psIdeaInit arg fail\n");
         return PS_ARG_FAIL;
     }
-    memset(idea, 0x0, sizeof(psIdea_t));
+    Memset(idea, 0x0, sizeof(psIdea_t));
     /* setup cipher */
     if ((err = psIdeaInitKey(key, &idea->key))
         != PS_SUCCESS)
@@ -259,8 +259,8 @@ void psIdeaDecrypt(psIdea_t *idea, const unsigned char *ct,
         /* Copy the new key to replace the original and replace the
             temporal data with zeros. */
 
-        memcpy(key->key_schedule, temp, sizeof(uint16) * 52);
-        memset(temp, 0, sizeof(uint16) * 52);
+        Memcpy(key->key_schedule, temp, sizeof(uint16) * 52);
+        Memset(temp, 0, sizeof(uint16) * 52);
         idea->inverted = 1;
     }
 

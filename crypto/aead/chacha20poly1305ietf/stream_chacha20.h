@@ -2,7 +2,7 @@
 #ifndef stream_chacha20_H
 #define stream_chacha20_H
 
-#include <stdint.h>
+#include "osdep_stdint.h"
 
 typedef struct crypto_stream_chacha20_implementation {
     int (*stream)(unsigned char *c, unsigned long long clen,

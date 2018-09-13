@@ -172,7 +172,7 @@ int getopt(int argc, char *argv[], char *optstring)
             return EOF;
         }
 
-        if (strcmp(argv[optind], "--") == 0)
+        if (Strcmp(argv[optind], "--") == 0)
         {
             optind++;
             optarg = NULL;
@@ -189,7 +189,7 @@ int getopt(int argc, char *argv[], char *optstring)
     }
 
     c = *next++;
-    cp = strchr(optstring, c);
+    cp = Strchr(optstring, c);
 
     if (cp == NULL || c == ':')
     {

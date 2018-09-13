@@ -137,7 +137,7 @@ static __m128i psAesKeygenAssist(__m128i temp, int i)
 }
 
 /* psAesInitKey has set up the key for encryption, change it */
-__inline static void invertKeySchedule(psAesKey_t *key)
+static inline void invertKeySchedule(psAesKey_t *key)
 {
     __m128i temp;
     int i;
@@ -606,7 +606,7 @@ void psAesReadyGCM(psAesGcm_t *ctx,
     ctx->c_len = 0;
     ctx->cipher_started = 0;
 
-    memcpy(ctx->IV, IV, 12);
+    Memcpy(ctx->IV, IV, 12);
 
     /* The AAD is TLS 1.2 specific */
     gcm_update(ctx, aad, aadLen);
@@ -648,7 +648,7 @@ void psAesGetGCMTag(psAesGcm_t *ctx,
     psAssert(tag && tagBytes <= AES_BLOCKLEN);
 # endif
     gcm_final(ctx, digest);
-    memcpy(tag, digest, tagBytes);
+    Memcpy(tag, digest, tagBytes);
 }
 
 /* Decrypt ct to pt and verify hash in ct */
@@ -782,8 +782,8 @@ static void galois_counter(psAesGcm_t *ctx, unsigned char *dst,
     if (partial_len != 0)
     {
         unsigned char partial[16];
-        memset(partial, 0x00, 16);
-        memcpy(partial, src + (n * 16), partial_len);
+        Memset(partial, 0x00, 16);
+        Memcpy(partial, src + (n * 16), partial_len);
 
         /* First round */
         temp_m128i = _mm_xor_si128(icb_m128i, key_schedule[0]);
@@ -800,7 +800,7 @@ static void galois_counter(psAesGcm_t *ctx, unsigned char *dst,
         temp_m128i = _mm_xor_si128(src_m128i, temp_m128i);
         _mm_storeu_si128((void *) (partial), temp_m128i);
 
-        memcpy(dst + (n * 16), partial, partial_len);
+        Memcpy(dst + (n * 16), partial, partial_len);
     }
 # ifdef PSTM_64BIT
     ctx->icb_m128i = icb_m128i;
@@ -938,8 +938,8 @@ static void gcm_update(psAesGcm_t *ctx, const unsigned char *buffer,
     /* The last partial block */
     if (partial_len != 0)
     {
-        memset(partial, 0x0, AES_BLOCKLEN);
-        memcpy(partial, ((buffer + len) - partial_len), partial_len);
+        Memset(partial, 0x0, AES_BLOCKLEN);
+        Memcpy(partial, ((buffer + len) - partial_len), partial_len);
 # ifdef PSTM_64BIT
         ctx->y_m128i = galois_hash(ctx->h_m128i, ctx->y_m128i, partial, 16);
 # else
@@ -965,7 +965,7 @@ static void gcm_final(psAesGcm_t *ctx, unsigned char *digest)
     unsigned char iv_full[16];
     unsigned char final_y[16];
 
-    memset(len_buffer, 0x00, 16);
+    Memset(len_buffer, 0x00, 16);
     /* Store the number of bytes of AAD and AEAD */
     GCM_PUT_32BIT(len_buffer + 4, ctx->a_len * 8);
     GCM_PUT_32BIT(len_buffer + 12, ctx->c_len * 8);
@@ -985,8 +985,8 @@ static void gcm_final(psAesGcm_t *ctx, unsigned char *digest)
 # endif
 
     /* Run through GCTR to get T, old icb is not needed anymore */
-    memset(iv_full, 0x00, 16);
-    memcpy(iv_full, ctx->IV, 12);
+    Memset(iv_full, 0x00, 16);
+    Memcpy(iv_full, ctx->IV, 12);
     iv_full[15] = 0x01;
 # ifdef PSTM_64BIT
     ctx->icb_m128i = _mm_loadu_si128((__m128i *) iv_full);
@@ -1009,12 +1009,12 @@ static void gcm_transform(psAesGcm_t *ctx, unsigned char *dest,
     {
         return;
     }
-    memcpy(ctx->IV, iv, 12);
+    Memcpy(ctx->IV, iv, 12);
     if (!ctx->cipher_started)
     {
         /* Create IV */
-        memset(iv_full, 0x00, 16);
-        memcpy(iv_full, iv, 12);
+        Memset(iv_full, 0x00, 16);
+        Memcpy(iv_full, iv, 12);
         iv_full[15] = 0x02;
 # ifdef PSTM_64BIT
         ctx->icb_m128i = _mm_loadu_si128((__m128i *) iv_full);

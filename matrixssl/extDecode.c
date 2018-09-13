@@ -5,7 +5,7 @@
  *      CLIENT_HELLO and SERVER_HELLO extension parsing
  */
 /*
- *      Copyright (c) 2013-2017 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 INSIDE Secure Corporation
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -49,7 +49,111 @@ static int dealWithAlpnExt(ssl_t *ssl, const unsigned char *c,
                            unsigned short extLen);
 #endif
 
+
 #ifdef USE_SERVER_SIDE_SSL
+#ifdef USE_TLS_1_2
+int32_t tlsParseSignatureAlgorithms(ssl_t *ssl,
+        const unsigned char *c,
+        unsigned short extLen)
+{
+# ifdef USE_ONLY_PSK_CIPHER_SUITE
+    /* No need for signatures when using only PSK suites. */
+    psTracePrintExtensionParse(ssl, EXT_SIGNATURE_ALGORITHMS);
+    return MATRIXSSL_SUCCESS;
+# else
+    unsigned short tmpLen;
+    uint16_t sigAlg;
+    sslKeySelectInfo_t *keySelect;
+
+    psTracePrintExtensionParse(ssl, EXT_SIGNATURE_ALGORITHMS);
+
+    /* This extension is responsible for telling the server which
+       sig algorithms it accepts so here we are saving them
+       aside for when user chooses identity certificate.
+       https://tools.ietf.org/html/rfc5246#section-7.4.1.4.1 */
+
+
+    /* Minimum length of 2 b type, 2 b alg */
+    /* Arbitrary Max of 64 suites */
+    if (extLen > (2 + 128) || extLen < 4 || (extLen & 1))
+    {
+        psTraceErrr("Malformed sig_alg len\n");
+        goto out_decode_error;
+    }
+
+    tmpLen = *c << 8; c++;
+    tmpLen |= *c; c++;
+    extLen -= 2;
+
+    if ((uint32) tmpLen > extLen || tmpLen < 2 || (tmpLen & 1))
+    {
+        psTraceErrr("Malformed sig_alg extension\n");
+        goto out_decode_error;
+    }
+    keySelect = &ssl->sec.keySelect;
+
+    /* list of 2 byte pairs in a hash/sig format that
+       need to be searched to find match with server
+       cert sigAlgorithm
+       Test if client will be able to accept our sigs
+       based on what our idenity certificate is */
+    while (tmpLen >= 2 && extLen >= 2)
+    {
+        sigAlg = (c[0] << 8) + c[1];
+        /* Those algorithms that are not supported by us will be filtered
+           out here */
+        if (findFromUint16Array(ssl->supportedSigAlgs,
+                        ssl->supportedSigAlgsLen,
+                        sigAlg) != PS_FAILURE)
+        {
+            /* This client supplied sig_alg is on our supported list */
+            ssl->hashSigAlg |= HASH_SIG_MASK(c[0], c[1]);
+            if (keySelect->peerSigAlgsLen < TLS_MAX_SIGNATURE_ALGORITHMS)
+            {
+                keySelect->peerSigAlgs[keySelect->peerSigAlgsLen++] = sigAlg;
+            }
+        }
+        c += 2;
+        tmpLen -= 2;
+        extLen -= 2;
+    }
+
+#  ifdef USE_TLS_1_3
+    /* Debug print issue: at this point, protocol version has not been
+       negotiated yet (TLS 1.3 can be chosen only after parsing the
+       supported_versions extensions). Thus, we are not sure whether
+       the signature algorithm IDs should be interpreted as TLS 1.3 or
+       1.2 IDs. */
+    psTracePrintTls13SigAlgList(INDENT_EXTENSION,
+            "signature_algorithms",
+            keySelect->peerSigAlgs,
+            keySelect->peerSigAlgsLen,
+            PS_TRUE);
+    /* Copy the signature_algorithms also to signature_algorithms_cert. If
+       we later receive the _cert extension it will override */
+    if (keySelect->peerSigAlgsLen > 0 && keySelect->peerCertSigAlgsLen == 0)
+    {
+        Memcpy(keySelect->peerCertSigAlgs,
+                keySelect->peerSigAlgs,
+                sizeof(keySelect->peerSigAlgs));
+        keySelect->peerCertSigAlgsLen = keySelect->peerSigAlgsLen;
+    }
+#  else
+    psTracePrintSigAlgs(INDENT_EXTENSION,
+            "signature_algorithms",
+            ssl->hashSigAlg,
+            PS_FALSE);
+#  endif
+
+    return MATRIXSSL_SUCCESS;
+
+out_decode_error:
+    ssl->err = SSL_ALERT_DECODE_ERROR;
+    return MATRIXSSL_ERROR;
+# endif /* USE_ONLY_PSK_CIPHER_SUITE */
+}
+#endif /* USE_TLS_1_2 */
+
 /******************************************************************************/
 /*
     Parse the ClientHello extension list.
@@ -87,7 +191,7 @@ int32 parseClientHelloExtensions(ssl_t *ssl, unsigned char **cp, unsigned short 
         if (end - c < 2)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("Invalid extension header len\n");
+            psTraceErrr("Invalid extension header len\n");
             return MATRIXSSL_ERROR;
         }
         extLen = *c << 8; c++; /* Total length of list, in bytes */
@@ -96,7 +200,7 @@ int32 parseClientHelloExtensions(ssl_t *ssl, unsigned char **cp, unsigned short 
         if ((uint32) (end - c) != extLen || extLen < 4)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("Invalid extension header len\n");
+            psTraceErrr("Invalid extension header len\n");
             return MATRIXSSL_ERROR;
         }
 
@@ -110,7 +214,7 @@ int32 parseClientHelloExtensions(ssl_t *ssl, unsigned char **cp, unsigned short 
             if (end - c < 2)
             {
                 ssl->err = SSL_ALERT_DECODE_ERROR;
-                psTraceInfo("Invalid extension header len\n");
+                psTraceErrr("Invalid extension header len\n");
                 return MATRIXSSL_ERROR;
             }
             extLen = *c << 8; c++; /* length of one extension */
@@ -119,7 +223,7 @@ int32 parseClientHelloExtensions(ssl_t *ssl, unsigned char **cp, unsigned short 
             if ((uint32) (end - c) < extLen)
             {
                 ssl->err = SSL_ALERT_DECODE_ERROR;
-                psTraceInfo("Invalid extension header len\n");
+                psTraceErrr("Invalid extension header len\n");
                 return MATRIXSSL_ERROR;
             }
 # ifdef ENABLE_SECURE_REHANDSHAKES
@@ -142,7 +246,7 @@ int32 parseClientHelloExtensions(ssl_t *ssl, unsigned char **cp, unsigned short 
     if (ssl->extFlags.require_extended_master_secret == 1 &&
         ssl->extFlags.extended_master_secret == 0)
     {
-        psTraceInfo("Client doesn't support extended master secret\n");
+        psTraceErrr("Client doesn't support extended master secret\n");
         ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
         return MATRIXSSL_ERROR;
     }
@@ -165,7 +269,7 @@ int32 parseClientHelloExtensions(ssl_t *ssl, unsigned char **cp, unsigned short 
 #  else
             if (ssl->flags & SSL_FLAGS_CLIENT_AUTH)
             {
-                psTraceInfo("Client didn't provide hashSigAlg and sha1 not supported\n");
+                psTraceErrr("Client didn't provide hashSigAlg and sha1 not supported\n");
                 ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
                 return MATRIXSSL_ERROR;
             }
@@ -179,7 +283,7 @@ int32 parseClientHelloExtensions(ssl_t *ssl, unsigned char **cp, unsigned short 
         then we can forget we ever received a sessionID now */
     if (ssl->extFlags.session_id == 1)
     {
-        memset(ssl->sessionId, 0, SSL_MAX_SESSION_ID_SIZE);
+        Memset(ssl->sessionId, 0, SSL_MAX_SESSION_ID_SIZE);
         ssl->sessionIdLen = 0;
     }
     ssl->extFlags.session_id = 0;
@@ -194,16 +298,26 @@ int32 parseClientHelloExtensions(ssl_t *ssl, unsigned char **cp, unsigned short 
         if (ssl->secureRenegotiationFlag == PS_FALSE &&
             ssl->myVerifyDataLen == 0)
         {
-            psTraceInfo("Client doesn't support renegotiation hello\n");
+#   ifdef USE_TLS_1_3
+            /* If the client only offers TLS 1.3, legacy renegotation
+               is not going to happen in any case, so do not require
+               renegotiation_info or the SCSV. */
+            if (!peerOnlySupportsTls13(ssl))
+            {
+#   endif
+            psTraceErrr("Client doesn't support renegotiation hello\n");
             ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
             return MATRIXSSL_ERROR;
+#   ifdef USE_TLS_1_3
+            }
+#   endif
         }
 #  endif /* REQUIRE_SECURE_REHANDSHAKES */
         if (ssl->secureRenegotiationFlag == PS_TRUE &&
             ssl->myVerifyDataLen > 0)
         {
             ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
-            psTraceInfo("Cln missing renegotiationInfo on re-hndshk\n");
+            psTraceErrr("Cln missing renegotiationInfo on re-hndshk\n");
             return MATRIXSSL_ERROR;
         }
 #  ifndef ENABLE_INSECURE_REHANDSHAKES
@@ -211,7 +325,7 @@ int32 parseClientHelloExtensions(ssl_t *ssl, unsigned char **cp, unsigned short 
             ssl->myVerifyDataLen > 0)
         {
             ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
-            psTraceInfo("Cln attempting insecure handshake\n");
+            psTraceErrr("Cln attempting insecure handshake\n");
             return MATRIXSSL_ERROR;
         }
 #  endif /* !ENABLE_INSECURE_REHANDSHAKES */
@@ -226,20 +340,31 @@ int32 parseClientHelloExtensions(ssl_t *ssl, unsigned char **cp, unsigned short 
 /*
     Parse a single client extension
  */
-static int ClientHelloExt(ssl_t *ssl, unsigned short extType, unsigned short extLen,
-    const unsigned char *c)
+static int ClientHelloExt(ssl_t *ssl,
+        unsigned short extType,
+        unsigned short extLen,
+        const unsigned char *c)
 {
     int i;
-
+    int32_t rc;
 # ifdef USE_ECC_CIPHER_SUITE
     unsigned short dataLen, curveId;
     uint32 ecFlags;
 # elif defined USE_OCSP_RESPONSE
     unsigned short dataLen;
 # endif /* USE_ECC_CIPHER_SUITE || USE_OCSP_RESPONSE */
-# ifdef USE_TLS_1_2
-    unsigned short tmpLen;
-# endif
+# ifdef USE_TLS_1_3
+    psParseBuf_t extDataBuf;
+
+    /* According TLS 1.3 draft 24, section 4.2.11, pre_shared_key
+       MUST be the last extension in ClientHello. It clearly was not
+       the last one if we arrived here again after parsing. */
+    if (ssl->extFlags.got_pre_shared_key)
+    {
+        ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
+        return MATRIXSSL_ERROR;
+    }
+# endif /* USE_TLS_1_3 */
 
     switch (extType)
     {
@@ -247,9 +372,10 @@ static int ClientHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
     /**************************************************************************/
 
     case EXT_TRUNCATED_HMAC:
+        psTracePrintExtensionParse(ssl, EXT_TRUNCATED_HMAC);
         if (extLen != 0)
         {
-            psTraceInfo("Bad truncated HMAC extension\n");
+            psTraceErrr("Bad truncated HMAC extension\n");
             ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
             return MATRIXSSL_ERROR;
         }
@@ -261,9 +387,10 @@ static int ClientHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
         break;
 
     case EXT_EXTENDED_MASTER_SECRET:
+        psTracePrintExtensionParse(ssl, EXT_EXTENDED_MASTER_SECRET);
         if (extLen != 0)
         {
-            psTraceInfo("Bad extended master secret extension\n");
+            psTraceErrr("Bad extended master secret extension\n");
             ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
             return MATRIXSSL_ERROR;
         }
@@ -273,9 +400,10 @@ static int ClientHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
     /**************************************************************************/
 
     case EXT_MAX_FRAGMENT_LEN:
+        psTracePrintExtensionParse(ssl, EXT_MAX_FRAGMENT_LEN);
         if (extLen != 1)
         {
-            psTraceInfo("Invalid frag len ext len\n");
+            psTraceErrr("Invalid frag len ext len\n");
             ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
             return MATRIXSSL_ERROR;
         }
@@ -301,7 +429,7 @@ static int ClientHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
             }
             else
             {
-                psTraceInfo("Client sent bad frag len value\n");
+                psTraceErrr("Client sent bad frag len value\n");
                 ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
                 return MATRIXSSL_ERROR;
             }
@@ -311,10 +439,12 @@ static int ClientHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
     /**************************************************************************/
 
     case EXT_SNI:
+        psTracePrintExtensionParse(ssl, EXT_SNI);
+
         /* Must hold (2 b len + 1 b zero) + 2 b len */
         if (extLen < 5)
         {
-            psTraceInfo("Invalid server name ext len\n");
+            psTraceErrr("Invalid server name ext len\n");
             ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
             return MATRIXSSL_ERROR;
         }
@@ -325,7 +455,7 @@ static int ClientHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
         i += *c; c++;
         if (*c++ != 0x0)
         {
-            psTraceInfo("Expected host_name in SNI ext\n");
+            psTraceErrr("Expected host_name in SNI ext\n");
             ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
             return MATRIXSSL_ERROR;
         }
@@ -337,7 +467,7 @@ static int ClientHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
         /* Arbitrary length cap between 1 and min(extlen,255) */
         if ((int32) extLen < i || i > 255 || i <= 0)
         {
-            psTraceInfo("Invalid host name ext len\n");
+            psTraceErrr("Invalid host name ext len\n");
             ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
             return MATRIXSSL_ERROR;
         }
@@ -345,13 +475,18 @@ static int ClientHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
         {
             psFree(ssl->expectedName, ssl->sPool);
         }
-        if ((ssl->expectedName = psMalloc(ssl->sPool, i + 1)) == NULL)
+        if ((ssl->expectedName =
+             psMalloc(ssl->sPool, i + 1)) == NULL)
         {
             ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
             return MATRIXSSL_ERROR;
         }
-        memcpy(ssl->expectedName, c, i);
+        Memcpy(ssl->expectedName, c, i);
         ssl->expectedName[i] = '\0';
+        psTracePrintServerName(INDENT_EXTENSION,
+                "HostName",
+                ssl->expectedName,
+                PS_TRUE);
         ssl->extFlags.sni_in_last_client_hello = 1;
         break;
 
@@ -359,10 +494,12 @@ static int ClientHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
     /**************************************************************************/
 
     case EXT_ALPN:
+        psTracePrintExtensionParse(ssl, EXT_ALPN);
+
         /* Must hold 2 b len 1 b zero 2 b len */
         if (extLen < 2)
         {
-            psTraceInfo("Invalid ALPN ext len\n");
+            psTraceErrr("Invalid ALPN ext len\n");
             ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
             return MATRIXSSL_ERROR;
         }
@@ -375,11 +512,11 @@ static int ClientHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
                 if (rc == PS_PROTOCOL_FAIL)
                 {
                     /* This is a user space rejection */
-                    psTraceInfo("User rejects ALPN ext\n");
+                    psTraceErrr("User rejects ALPN ext\n");
                     ssl->err = SSL_ALERT_NO_APP_PROTOCOL;
                     return MATRIXSSL_ERROR;
                 }
-                psTraceInfo("Invalid ALPN ext\n");
+                psTraceErrr("Invalid ALPN ext\n");
                 ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
                 return MATRIXSSL_ERROR;
             }
@@ -391,6 +528,8 @@ static int ClientHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
     /**************************************************************************/
 
     case EXT_RENEGOTIATION_INFO:
+        psTracePrintExtensionParse(ssl, EXT_RENEGOTIATION_INFO);
+
         if (ssl->secureRenegotiationFlag == PS_FALSE &&
             ssl->myVerifyDataLen == 0)
         {
@@ -401,7 +540,7 @@ static int ClientHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
             else
             {
                 ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
-                psTraceInfo("Cln sent bad renegotiationInfo\n");
+                psTraceErrr("Cln sent bad renegotiationInfo\n");
                 return MATRIXSSL_ERROR;
             }
         }
@@ -411,13 +550,13 @@ static int ClientHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
             if (*c != ssl->peerVerifyDataLen)
             {
                 ssl->err = SSL_ALERT_DECODE_ERROR;
-                psTraceInfo("Invalid renegotiation encoding\n");
+                psTraceErrr("Invalid renegotiation encoding\n");
                 return MATRIXSSL_ERROR;
             }
             if (memcmpct(c + 1, ssl->peerVerifyData,
                     ssl->peerVerifyDataLen) != 0)
             {
-                psTraceInfo("Cli verify renegotiation fail\n");
+                psTraceErrr("Cli verify renegotiation fail\n");
                 ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
                 return MATRIXSSL_ERROR;
             }
@@ -425,7 +564,7 @@ static int ClientHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
         }
         else
         {
-            psTraceInfo("Bad state/len of renegotiation ext\n");
+            psTraceErrr("Bad state/len of renegotiation ext\n");
             ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
             return MATRIXSSL_ERROR;
         }
@@ -434,51 +573,32 @@ static int ClientHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
 
 # ifdef USE_TLS_1_2
     /**************************************************************************/
-
     case EXT_SIGNATURE_ALGORITHMS:
-        /* This extension is responsible for telling the server which
-            sig algorithms it accepts so here we are saving them
-            aside for when user chooses identity certificate.
-            https://tools.ietf.org/html/rfc5246#section-7.4.1.4.1 */
-
-        /* Minimum length of 2 b type, 2 b alg */
-        /* Arbitrary Max of 16 suites */
-        if (extLen > (2 + 32) || extLen < 4 || (extLen & 1))
+        rc = tlsParseSignatureAlgorithms(ssl, c, extLen);
+        if (rc < 0)
         {
-            psTraceInfo("Malformed sig_alg len\n");
-            ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
-            return MATRIXSSL_ERROR;
-        }
-
-        tmpLen = *c << 8; c++;
-        tmpLen |= *c; c++;
-        extLen -= 2;
-
-        if ((uint32) tmpLen > extLen || tmpLen < 2 || (tmpLen & 1))
-        {
-            psTraceInfo("Malformed sig_alg extension\n");
-            ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
-            return MATRIXSSL_ERROR;
-        }
-        /* list of 2 byte pairs in a hash/sig format that
-            need to be searched to find match with server
-            cert sigAlgorithm
-            Test if client will be able to accept our sigs
-            based on what our idenity certificate is */
-        while (tmpLen >= 2 && extLen >= 2)
-        {
-            ssl->hashSigAlg |= HASH_SIG_MASK(c[0], c[1]);
-            c += 2;
-            tmpLen -= 2;
-            extLen -= 2;
+            return rc;
         }
         break;
 # endif /* USE_TLS_1_2 */
+
+# ifdef USE_TLS_1_3
+    /**************************************************************************/
+    case EXT_SIGNATURE_ALGORITHMS_CERT:
+        rc = tls13ParseSignatureAlgorithms(ssl, &c, extLen, PS_TRUE);
+        if (rc < 0)
+        {
+            ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
+            return rc;
+        }
+        break;
+# endif
 
 # ifdef USE_STATELESS_SESSION_TICKETS
     /**************************************************************************/
 
     case EXT_SESSION_TICKET:
+        psTracePrintExtensionParse(ssl, EXT_SESSION_TICKET);
         /* Have a handy place to store this info.  Tickets are
             the only way a server will make use of 'sid'.
             Could already exist if rehandshake case here */
@@ -493,7 +613,7 @@ static int ClientHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
                 ssl->err = SSL_ALERT_INTERNAL_ERROR;
                 return MATRIXSSL_ERROR;
             }
-            memset(ssl->sid, 0x0, sizeof(sslSessionId_t));
+            Memset(ssl->sid, 0x0, sizeof(sslSessionId_t));
             ssl->sid->pool = ssl->sPool;
         }
         if (extLen > 0)   /* received a ticket */
@@ -506,7 +626,7 @@ static int ClientHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
                 /* Understood the token */
                 ssl->flags |= SSL_FLAGS_RESUMED;
                 ssl->sid->sessionTicketState = SESS_TICKET_STATE_USING_TICKET;
-                memcpy(ssl->sec.masterSecret, ssl->sid->masterSecret,
+                Memcpy(ssl->sec.masterSecret, ssl->sid->masterSecret,
                     SSL_HS_MASTER_SIZE);
 #  ifdef USE_MATRIXSSL_STATS
                 matrixsslUpdateStat(ssl, RESUMPTIONS_STAT, 1);
@@ -518,7 +638,7 @@ static int ClientHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
                     we can ignore that here now */
                 if (ssl->sessionIdLen > 0)
                 {
-                    memset(ssl->sessionId, 0, SSL_MAX_SESSION_ID_SIZE);
+                    Memset(ssl->sessionId, 0, SSL_MAX_SESSION_ID_SIZE);
                     ssl->sessionIdLen = 0;
                 }
                 /* Issue another one if we have any keys */
@@ -550,14 +670,216 @@ static int ClientHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
         break;
 # endif /* USE_STATELESS_SESSION_TICKETS */
 
+# ifdef USE_TLS_1_3
+    case EXT_PRE_SHARED_KEY:
+        (void)psParseBufFromStaticData(&extDataBuf,
+                c, extLen);
+        rc = tls13ParsePreSharedKey(ssl, &extDataBuf);
+        if (rc < 0)
+        {
+            return rc;
+        }
+        ssl->extFlags.got_pre_shared_key = 1;
+        break;
+    case EXT_PSK_KEY_EXCHANGE_MODES:
+        (void)psParseBufFromStaticData(&extDataBuf,
+                c, extLen);
+        rc = tls13ParsePskKeyExchangeModes(ssl, &extDataBuf);
+        if (rc < 0)
+        {
+            return rc;
+        }
+        ssl->extFlags.got_psk_key_exchange_modes = 1;
+        break;
+    case EXT_EARLY_DATA:
+        psTracePrintExtensionParse(ssl, EXT_EARLY_DATA);
+        if (!ssl->tls13IncorrectDheKeyShare)
+        {
+            ssl->extFlags.got_early_data = 1;
+        }
+        else
+        {
+            /* early_data extension should not be included to CH after HRR
+               so ignore it */
+            ssl->extFlags.got_early_data = 0;
+        }
+        break;
+    case EXT_COOKIE:
+        (void)psParseBufFromStaticData(&extDataBuf,
+                c, extLen);
+        rc = tls13ParseCookie(ssl, &extDataBuf);
+        if (rc < 0)
+        {
+            return rc;
+        }
+        ssl->extFlags.got_cookie = 1;
+        break;
+    case EXT_KEY_SHARE:
+    case EXT_KEY_SHARE_PRE_DRAFT_23:
+        psTracePrintExtensionParse(ssl, EXT_KEY_SHARE);
+        /*
+          enum {
+            unallocated_RESERVED(0x0000),
+
+            // Elliptic Curve Groups (ECDHE)
+            obsolete_RESERVED(0x0001..0x0016),
+            secp256r1(0x0017), secp384r1(0x0018), secp521r1(0x0019),
+            obsolete_RESERVED(0x001A..0x001C),
+            x25519(0x001D), x448(0x001E),
+
+            // Finite Field Groups (DHE)
+            ffdhe2048(0x0100), ffdhe3072(0x0101), ffdhe4096(0x0102),
+            ffdhe6144(0x0103), ffdhe8192(0x0104),
+
+            // Reserved Code Points
+            ffdhe_private_use(0x01FC..0x01FF),
+            ecdhe_private_use(0xFE00..0xFEFF),
+            obsolete_RESERVED(0xFF01..0xFF02),
+            (0xFFFF)
+        } NamedGroup;
+
+          struct {
+            NamedGroup group;
+            opaque key_exchange<1..2^16-1>;
+          } KeyShareEntry;
+
+          struct {
+            KeyShareEntry client_shares<0..2^16-1>;
+          } KeyShareClientHello;
+        */
+
+        /*
+          Minimum length: 7 ==
+          2 (client_shares length)
+          + 2 (NamedGroup)
+          + 2 (key_exchange length)
+          + 1 (min bytes in key_exchange data)
+        */
+        if (extLen < 7)
+        {
+            psTraceErrr("Malformed key_share extension\n");
+            ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
+            return MATRIXSSL_ERROR;
+        }
+        else
+        {
+            /* KeyShareEntry client_shares<0..2^16-1>; */
+            psSizeL_t clientSharesLen = 0;
+            psBool_t importedPeerPubValue = PS_FALSE;
+            psSize_t n = psParseTlsVariableLengthVec(c, c + extLen,
+                    0, (1 << 16) - 1,
+                    &clientSharesLen);
+
+            psTraceIndent(INDENT_EXTENSION,
+                    "Groups in ClientHello.key_share:\n");
+
+            if (n <= 0 || clientSharesLen < 1)
+            {
+                psTraceErrr("Malformed key_share extension\n");
+                ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
+                return MATRIXSSL_ERROR;
+            }
+            c += n;
+            extLen -= n;
+
+            while (clientSharesLen > 0)
+            {
+                psSizeL_t keyExchangeLen = 0;
+                psSize_t n;
+                psBool_t foundSupportedCurve = PS_FALSE;
+
+                /* 2-byte NamedGroup ID */
+                if (extLen < 2)
+                {
+                    psTraceErrr("Malformed key_share extension\n");
+                    ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
+                    return MATRIXSSL_ERROR;
+                }
+                curveId = *c << 8; c++;
+                curveId += *c; c++;
+                extLen -= 2;
+                clientSharesLen -= 2;
+
+                psTracePrintTls13NamedGroup(INDENT_EXTENSION + 1,
+                        NULL, curveId, PS_TRUE);
+                if (tls13AddPeerKeyShareGroup(ssl, curveId) < 0)
+                {
+                    ssl->err = SSL_ALERT_INTERNAL_ERROR;
+                    return MATRIXSSL_ERROR;
+                }
+                if (tls13WeSupportGroup(ssl, curveId))
+                {
+                    psTracePrintTls13NamedGroup(INDENT_NEGOTIATED_PARAM,
+                            "Found supported group",
+                            curveId,
+                            PS_TRUE);
+                    foundSupportedCurve = PS_TRUE;
+                }
+
+                /* opaque key_exchange<1..2^16-1>; */
+                n = psParseTlsVariableLengthVec(c, c + extLen,
+                        1, (1 << 16) - 1,
+                        &keyExchangeLen);
+                if (n <= 0 || keyExchangeLen < 1)
+                {
+                    psTraceErrr("Malformed key_share extension\n");
+                    ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
+                    return MATRIXSSL_ERROR;
+                }
+
+                c += n;
+                extLen -= n;
+                clientSharesLen -= n;
+
+                /* Import the first public value that we can support. */
+                if (foundSupportedCurve && !importedPeerPubValue)
+                {
+                    rc = tls13ImportPublicValue(ssl,
+                            c,
+                            keyExchangeLen,
+                            curveId);
+                    if (rc < 0)
+                    {
+                        return rc;
+                    }
+
+                    /* We will still iterate over the rest of the entries,
+                       but will not try to import another public value. */
+                    importedPeerPubValue = PS_TRUE;
+                    ssl->tls13NegotiatedGroup = curveId;
+                }
+
+                c += keyExchangeLen;
+                extLen -= keyExchangeLen;
+                clientSharesLen -= keyExchangeLen;
+            }
+        }
+        ssl->extFlags.got_key_share = 1;
+        break;
+
+    case EXT_SUPPORTED_VERSIONS:
+        /* This is defined in TLS 1.3 draft 22, but TLS 1.2 implementations
+           SHOULD also be able to parse this. */
+        rc = tls13ParseSupportedVersions(ssl, &c, extLen);
+        if (rc < 0)
+        {
+            return rc;
+        }
+        psTracePrintSupportedVersionsList(INDENT_HS_MSG,
+                "ClientHello.supported_versions",
+                ssl, PS_TRUE, PS_FALSE);
+        break;
+# endif /* USE_TLS_1_3 */
+
 # ifdef USE_ECC_CIPHER_SUITE
     /**************************************************************************/
 
     case EXT_ELLIPTIC_CURVE:
+        psTracePrintExtensionParse(ssl, EXT_ELLIPTIC_CURVE);
         /* Minimum is 2 b dataLen and 2 b cipher */
         if (extLen < 4)
         {
-            psTraceInfo("Invalid ECC Curve len\n");
+            psTraceErrr("Invalid ECC Curve len\n");
             ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
             return MATRIXSSL_ERROR;
         }
@@ -566,19 +888,31 @@ static int ClientHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
         extLen -= 2;
         if (dataLen > extLen || dataLen < 2 || (dataLen & 1))
         {
-            psTraceInfo("Malformed ECC Curve extension\n");
+            psTraceErrr("Malformed ECC Curve extension\n");
             ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
             return MATRIXSSL_ERROR;
         }
         /* Matching EC curve logic */
         ecFlags = IS_RECVD_EXT; /* Flag if we got it */
         ssl->ecInfo.ecCurveId = 0;
+        psTracePrintTls13NamedGroupList(INDENT_EXTENSION,
+                "supported_groups/elliptic_curves",
+                c, dataLen,
+                ssl,
+                PS_FALSE);
         while (dataLen >= 2 && extLen >= 2)
         {
             curveId = *c << 8; c++;
             curveId += *c; c++;
             dataLen -= 2;
             extLen -= 2;
+# ifdef USE_TLS_1_3
+            if (tls13AddPeerSupportedGroup(ssl, curveId) < 0)
+            {
+                ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
+                return MATRIXSSL_ERROR;
+            }
+# endif /* USE_TLS_1_3 */
 /*
             Find the curves that are in common between client and server.
             ssl->ecInfo.ecFlags defaults to all curves compiled into the library.
@@ -605,9 +939,10 @@ static int ClientHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
     /**************************************************************************/
 
     case EXT_ELLIPTIC_POINTS:
+        psTracePrintExtensionParse(ssl, EXT_ELLIPTIC_POINTS);
         if (extLen < 1)
         {
-            psTraceInfo("Invaid ECC Points len\n");
+            psTraceErrr("Invaid ECC Points len\n");
             ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
             return MATRIXSSL_ERROR;
         }
@@ -615,23 +950,25 @@ static int ClientHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
         extLen -= 1;
         if (dataLen > extLen || dataLen < 1)
         {
-            psTraceInfo("Malformed ECC Points extension\n");
+            psTraceErrr("Malformed ECC Points extension\n");
             ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
             return MATRIXSSL_ERROR;
         }
         /*      One of them has to be a zero (uncompressed) and that
             is all we are looking for at the moment */
-        if (memchr(c, '\0', dataLen) == NULL)
+        if (Memchr(c, '\0', dataLen) == NULL)
         {
-            psTraceInfo("ECC Uncommpressed Points missing\n");
+            psTraceErrr("ECC Uncommpressed Points missing\n");
             ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
             return MATRIXSSL_ERROR;
         }
+        ssl->extFlags.got_elliptic_points = 1;
         break;
 # endif /* USE_ECC_CIPHER_SUITE */
 
 # ifdef USE_OCSP_RESPONSE
     case EXT_STATUS_REQUEST:
+        psTracePrintExtensionParse(ssl, EXT_STATUS_REQUEST);
         /*  Validation of minimum size and status_type of 1 (ocsp) */
         if (extLen < 5 || *c != 0x1)
         {
@@ -659,7 +996,6 @@ static int ClientHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
             ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
             return MATRIXSSL_ERROR;
         }
-        c += dataLen;
         /* Currently, the OCSPResponse must be loaded into the key material
             so we check if that exists to determine if we will reply with
             the extension and CERTIFICATE_STATUS handshake message */
@@ -734,7 +1070,7 @@ static int dealWithAlpnExt(ssl_t *ssl, const unsigned char *c, unsigned short ex
             }
             return PS_MEM_FAIL;
         }
-        memcpy(proto[i], c, protoLen[i]);
+        Memcpy(proto[i], c, protoLen[i]);
         totLen -= protoLen[i];
         c += protoLen[i];
     }
@@ -796,7 +1132,7 @@ static int dealWithAlpnExt(ssl_t *ssl, const unsigned char *c, unsigned short ex
         that here for checking later (in choosing cipher suite, etc).
         @see https://tools.ietf.org/html/rfc7540#section-9.2
      */
-    if ((ssl->alpnLen == 2) && (memcmp(ssl->alpn, "h2", 2) == 0))
+    if ((ssl->alpnLen == 2) && (Memcmp(ssl->alpn, "h2", 2) == 0))
     {
         ssl->flags |= SSL_FLAGS_HTTP2;
     }
@@ -804,7 +1140,6 @@ static int dealWithAlpnExt(ssl_t *ssl, const unsigned char *c, unsigned short ex
     return PS_SUCCESS;
 }
 # endif /* USE_ALPN */
-
 #endif  /* USE_SERVER_SIDE_SSL */
 
 #ifdef USE_CLIENT_SIDE_SSL
@@ -828,37 +1163,34 @@ int32 parseServerHelloExtensions(ssl_t *ssl, int32 hsLen,
     c = *cp;
     end = c + len;
 
+    /* Check that we can parse the two length octets. */
     if (end - c < 2)
     {
-        ssl->err = SSL_ALERT_DECODE_ERROR;
-        psTraceInfo("Invalid extension header len\n");
-        return MATRIXSSL_ERROR;
+        goto out_decode_error_length;
     }
     extLen = *c << 8; c++; /* Total length of list */
     extLen += *c; c++;
     if ((uint32) (end - c) < extLen)
     {
-        ssl->err = SSL_ALERT_DECODE_ERROR;
-        psTraceInfo("Invalid extension header len\n");
-        return MATRIXSSL_ERROR;
+        goto out_decode_error_length;
     }
     while ((int32) hsLen > (c - extData))
     {
+        if (end - c < 2)
+        {
+            goto out_decode_error_length;
+        }
         extType = *c << 8; c++; /* Individual hello ext */
         extType += *c; c++;
         if (end - c < 2)
         {
-            ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("Invalid extension header len\n");
-            return MATRIXSSL_ERROR;
+            goto out_decode_error_length;
         }
         extLen = *c << 8; c++; /* Length of individual extension */
         extLen += *c; c++;
         if ((uint32) (end - c) < extLen)
         {
-            ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInfo("Invalid extension header len\n");
-            return MATRIXSSL_ERROR;
+            goto out_decode_error_length;
         }
 # ifdef ENABLE_SECURE_REHANDSHAKES
         if (extType == EXT_RENEGOTIATION_INFO)
@@ -883,7 +1215,7 @@ int32 parseServerHelloExtensions(ssl_t *ssl, int32 hsLen,
             one so this case means the server doesn't support it */
         if (ssl->extFlags.require_extended_master_secret == 1)
         {
-            psTraceInfo("Server doesn't support extended master secret\n");
+            psTraceErrr("Server doesn't support extended master secret\n");
             ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
             return MATRIXSSL_ERROR;
         }
@@ -894,7 +1226,7 @@ int32 parseServerHelloExtensions(ssl_t *ssl, int32 hsLen,
     {
         if (ssl->extFlags.status_request == 0)
         {
-            psTraceInfo("Server doesn't support OCSP stapling\n");
+            psTraceErrr("Server doesn't support OCSP stapling\n");
             ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
             return MATRIXSSL_ERROR;
         }
@@ -909,7 +1241,7 @@ int32 parseServerHelloExtensions(ssl_t *ssl, int32 hsLen,
         if (ssl->secureRenegotiationFlag == PS_FALSE &&
             ssl->myVerifyDataLen == 0)
         {
-            psTraceInfo("Server doesn't support renegotiation hello\n");
+            psTraceErrr("Server doesn't support renegotiation hello\n");
             ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
             return MATRIXSSL_ERROR;
         }
@@ -918,7 +1250,7 @@ int32 parseServerHelloExtensions(ssl_t *ssl, int32 hsLen,
             ssl->myVerifyDataLen > 0)
         {
             ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
-            psTraceInfo("Server missing renegotiationInfo on re-hndshk\n");
+            psTraceErrr("Server missing renegotiationInfo on re-hndshk\n");
             return MATRIXSSL_ERROR;
         }
 #  ifndef ENABLE_INSECURE_REHANDSHAKES
@@ -926,7 +1258,7 @@ int32 parseServerHelloExtensions(ssl_t *ssl, int32 hsLen,
             ssl->myVerifyDataLen > 0)
         {
             ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
-            psTraceInfo("Server attempting insecure handshake\n");
+            psTraceErrr("Server attempting insecure handshake\n");
             return MATRIXSSL_ERROR;
         }
 #  endif /* !ENABLE_INSECURE_REHANDSHAKES */
@@ -935,6 +1267,11 @@ int32 parseServerHelloExtensions(ssl_t *ssl, int32 hsLen,
 
     *cp = c;
     return rc;
+
+out_decode_error_length:
+    psTraceErrr("Invalid ServerHello extension header len\n");
+    ssl->err = SSL_ALERT_DECODE_ERROR;
+    return MATRIXSSL_ERROR;
 }
 
 /******************************************************************************/
@@ -949,6 +1286,7 @@ static int ServerHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
     /*  Verify the server only responds with an extension the client requested.
         Zero the value once seen so that it will catch the error if sent twice */
     rc = -1;
+    psTracePrintExtensionParse(ssl, extType);
     switch (extType)
     {
 
@@ -980,13 +1318,13 @@ static int ServerHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
         if (!(ssl->maxPtFrag & 0x10000))
         {
             ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-            psTraceInfo("Server sent unexpected MAX_FRAG ext\n");
+            psTraceErrr("Server sent unexpected MAX_FRAG ext\n");
             return MATRIXSSL_ERROR;
         }
         if (extLen != 1)
         {
             ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-            psTraceInfo("Server sent bad MAX_FRAG ext\n");
+            psTraceErrr("Server sent bad MAX_FRAG ext\n");
             return MATRIXSSL_ERROR;
         }
         /* Confirm it's the same size we requested and strip
@@ -1014,7 +1352,7 @@ static int ServerHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
         else
         {
             ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-            psTraceInfo("Server sent mismatched MAX_FRAG ext\n");
+            psTraceErrr("Server sent mismatched MAX_FRAG ext\n");
             return MATRIXSSL_ERROR;
         }
         c++; extLen--;
@@ -1031,7 +1369,7 @@ static int ServerHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
         if (extLen != 0)
         {
             ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-            psTraceInfo("Server sent bad truncated hmac ext\n");
+            psTraceErrr("Server sent bad truncated hmac ext\n");
             return MATRIXSSL_ERROR;
         }
         ssl->extFlags.truncated_hmac = 1;
@@ -1046,7 +1384,7 @@ static int ServerHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
         if (extLen != 0)
         {
             ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-            psTraceInfo("Server sent bad extended master secret ext\n");
+            psTraceErrr("Server sent bad extended master secret ext\n");
             return MATRIXSSL_ERROR;
         }
         ssl->extFlags.extended_master_secret = 1;
@@ -1056,7 +1394,15 @@ static int ServerHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
     /**************************************************************************/
 
     case EXT_ELLIPTIC_CURVE:
-        /* @note we do not allow EXT_ELLIPTIC_CURVE from server */
+        /* elliptic_curves is defined as a ClientHello-only extension, but some
+           servers send it in ServerHello as a reply. Like OpenSSL client,
+           we allow this, but ignore the extension contents. We will still
+           reject the extension if unsolicited, i.e. if we did not send it in
+           our ClientHello. */
+        if (ssl->extFlags.req_elliptic_curve == 1)
+        {
+            rc = 0;
+        }
         break;
 
     /**************************************************************************/
@@ -1070,7 +1416,7 @@ static int ServerHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
         if (*c++ != (extLen - 1))
         {
             ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
-            psTraceInfo("Server sent bad ECPointFormatList\n");
+            psTraceErrr("Server sent bad ECPointFormatList\n");
             return MATRIXSSL_ERROR;
         }
         extLen--;
@@ -1124,7 +1470,7 @@ static int ServerHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
         else
         {
             ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-            psTraceInfo("Server sent unexpected SESSION_TICKET\n");
+            psTraceErrr("Server sent unexpected SESSION_TICKET\n");
             return MATRIXSSL_ERROR;
         }
         break;
@@ -1149,7 +1495,7 @@ static int ServerHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
             else
             {
                 ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
-                psTraceInfo("Server sent bad renegotiationInfo\n");
+                psTraceErrr("Server sent bad renegotiationInfo\n");
                 return MATRIXSSL_ERROR;
             }
         }
@@ -1161,14 +1507,14 @@ static int ServerHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
                     ssl->myVerifyDataLen) != 0)
             {
                 ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
-                psTraceInfo("Srv had bad my renegotiationInfo\n");
+                psTraceErrr("Srv had bad my renegotiationInfo\n");
                 return MATRIXSSL_ERROR;
             }
             if (memcmpct(c + ssl->myVerifyDataLen, ssl->peerVerifyData,
                     ssl->peerVerifyDataLen) != 0)
             {
                 ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
-                psTraceInfo("Srv had bad peer renegotiationInfo\n");
+                psTraceErrr("Srv had bad peer renegotiationInfo\n");
                 return MATRIXSSL_ERROR;
             }
             ssl->secureRenegotiationInProgress = PS_TRUE;
@@ -1176,7 +1522,7 @@ static int ServerHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
         else
         {
             ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
-            psTraceInfo("Server sent bad renegotiationInfo\n");
+            psTraceErrr("Server sent bad renegotiationInfo\n");
             return MATRIXSSL_ERROR;
         }
         break;
@@ -1224,4 +1570,3 @@ static int ServerHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
 #endif
 
 /**************************************************************************/
-

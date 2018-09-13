@@ -31,9 +31,18 @@
  *      http://www.gnu.org/copyleft/gpl.html
  */
 /******************************************************************************/
+#ifndef _POSIX_C_SOURCE
+# define _POSIX_C_SOURCE 200112L
+#endif
 
-#include <unistd.h> /* sleep */
+#ifndef NEED_PS_TIME_CONCRETE
+# define NEED_PS_TIME_CONCRETE
+#endif
+
+#include "osdep_stdio.h"
+#include "osdep_unistd.h" /* sleep */
 #include "crypto/cryptoImpl.h"
+#include "osdep-types.h"
 
 #if defined(USE_RSA) && defined(USE_PRIVATE_KEY_PARSING)
 
@@ -340,7 +349,7 @@ static keyList_t keys[] = {
  */
 
 # ifdef STATS
-#  include <fcntl.h>
+#  include "osdep_fcntl.h"
 #  ifdef USE_HIGHRES_TIME
 #   define TIME_STRING "\t%lld"
 #  else
@@ -374,20 +383,20 @@ int main(int argc, char **argv)
 
     /* Verify time sanity */
     psGetTime(&start, NULL);
-    sleep(1);
+    Sleep(1);
     psGetTime(&end, NULL);
-    printf("Time sanity, 1 second = " TIME_UNITS "\n", psDiffMsecs(start, end, NULL));
+    Printf("Time sanity, 1 second = " TIME_UNITS "\n", psDiffMsecs(start, end, NULL));
 
     _psTraceStr("STARTING RSAPERF\n", NULL);
 # ifdef STATS
-    if ((sfd = fopen("perfstat.txt", "w")) == NULL)
+    if ((sfd = Fopen("perfstat.txt", "w")) == NULL)
     {
         return PS_FAILURE;
     }
 #  ifdef USE_HIGHRES_TIME
-    fprintf(sfd, "Key\tSign(usec)\tVerify\tEncrypt\tDecrypt\n");
+    Fprintf(sfd, "Key\tSign(usec)\tVerify\tEncrypt\tDecrypt\n");
 #  else
-    fprintf(sfd, "Key\tSign(msec)\tVerify\tEncrypt\tDecrypt\n");
+    Fprintf(sfd, "Key\tSign(msec)\tVerify\tEncrypt\tDecrypt\n");
 #  endif
 # endif /* STATS */
 
@@ -395,7 +404,7 @@ int main(int argc, char **argv)
     {
         _psTraceStr("Test %s...\n", keys[i].name);
 # ifdef STATS
-        fprintf(sfd, "%s", keys[i].name);
+        Fprintf(sfd, "%s", keys[i].name);
 # endif
         psRsaInitKey(misc, &privkey);
         if (psRsaParsePkcs1PrivKey(misc, keys[i].key, keys[i].len, &privkey) < 0)
@@ -444,19 +453,19 @@ int main(int argc, char **argv)
         _psTraceInt("(%d per sec)\n", PER_SEC(t));
 
 #  ifdef STATS
-        fprintf(sfd, TIME_STRING, t);
+        Fprintf(sfd, TIME_STRING, t);
 #  endif
 # endif /* SIGN_OP */
 
 # ifdef VERIFY_OP
         static const unsigned char sigdata[] = "Test message to be signed - at least 28 bytes";
-        memset(in, 0x0, keysize);
-        memcpy(in, sigdata, sizeof(sigdata));
+        Memset(in, 0x0, keysize);
+        Memcpy(in, sigdata, sizeof(sigdata));
         if (psRsaEncryptPriv(misc, &privkey, in, sizeof(sigdata), out, keysize, pkaInfo) < 0)
         {
             _psTrace("	FAILED VERIFY PREP\n");
         }
-        memset(in, 0x0, keysize);
+        Memset(in, 0x0, keysize);
 
         psGetTime(&start, NULL);
         /* coverity[swapped_arguments] */
@@ -465,14 +474,14 @@ int main(int argc, char **argv)
             _psTrace("	FAILED VERIFY OPERATION\n");
         }
         psGetTime(&end, NULL);
-        if (memcmp(in, sigdata, sizeof(sigdata)) != 0)
+        if (Memcmp(in, sigdata, sizeof(sigdata)) != 0)
         {
             _psTrace("	FAILED VERIFY VERIFY\n");
         }
         _psTraceInt(TIME_UNITS "/verify ", t = psDiffMsecs(start, end, NULL));
         _psTraceInt("(%d per sec)\n", PER_SEC(t));
 #  ifdef STATS
-        fprintf(sfd, TIME_STRING, t);
+        Fprintf(sfd, TIME_STRING, t);
 #  endif
 # endif /* VERIFY_OP */
 
@@ -510,7 +519,7 @@ int main(int argc, char **argv)
             t = psDiffMsecs(start, end, NULL) / keys[i].iter);
         _psTraceInt("(%d per sec)\n", PER_SEC(t));
 #  ifdef STATS
-        fprintf(sfd, TIME_STRING, t);
+        Fprintf(sfd, TIME_STRING, t);
 #  endif
 # endif /* ENCRYPT_OP */
 
@@ -520,13 +529,13 @@ int main(int argc, char **argv)
         {
             out = saveout;
         }
-        memset(in, 0x0, keysize);
-        memcpy(in, "hello", 5);
+        Memset(in, 0x0, keysize);
+        Memcpy(in, "hello", 5);
         if (psRsaEncryptPub(misc, &privkey, in, 5, out, keysize, pkaInfo) < 0)
         {
             _psTrace("	FAILED VERIFY PREP\n");
         }
-        memset(in, 0x0, keysize);
+        Memset(in, 0x0, keysize);
 
         psGetTime(&start, NULL);
         /* coverity[swapped_arguments] */
@@ -535,14 +544,14 @@ int main(int argc, char **argv)
             _psTrace("	FAILED DECRYPT OPERATION\n");
         }
         psGetTime(&end, NULL);
-        if (memcmp(in, "hello", 5) != 0)
+        if (Memcmp(in, "hello", 5) != 0)
         {
             _psTrace("	FAILED DECRYPT VERIFY\n");
         }
         _psTraceInt(TIME_UNITS "/decrypt ", t = psDiffMsecs(start, end, NULL));
         _psTraceInt("(%d per sec)\n", PER_SEC(t));
 #  ifdef STATS
-        fprintf(sfd, TIME_STRING "\n", t);
+        Fprintf(sfd, TIME_STRING "\n", t);
 #  endif
 # endif /* DECRYPT_OP */
 
@@ -553,7 +562,7 @@ int main(int argc, char **argv)
     }
 
 # ifdef STATS
-    fclose(sfd);
+    Fclose(sfd);
 # endif
 # ifdef WIN32
     _psTrace("Press any key to close");

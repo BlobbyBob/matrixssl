@@ -82,31 +82,32 @@ enum
 
 extern uint32_t getAsnTagLenUnsafe(const unsigned char *p);
 
-extern int32_t getAsnLength(const unsigned char **p, psSize_t size,
+extern int32_t getAsnLength(const unsigned char **p, psSizeL_t size,
                             psSize_t *valLen);
-extern int32_t getAsnLength32(const unsigned char **p, uint32_t size,
+extern int32_t getAsnLength32(const unsigned char **p, psSizeL_t size,
                               uint32_t *valLen, uint32_t indefinite);
-extern int32_t getAsnSequence(const unsigned char **pp, psSize_t len,
+extern int32_t getAsnSequence(const unsigned char **pp, psSizeL_t size,
                               psSize_t *seqlen);
-extern int32_t getAsnSequence32(const unsigned char **pp, uint32_t size,
-                                uint32_t *len, uint32_t indefinite);
-extern int32_t getAsnSet(const unsigned char **pp, psSize_t len,
+extern int32_t getAsnSequence32(const unsigned char **pp, psSizeL_t size,
+                                psSize32_t *len, uint32_t indefinite);
+extern int32_t getAsnSet(const unsigned char **pp,  psSizeL_t size,
                          psSize_t *setlen);
-extern int32_t getAsnSet32(const unsigned char **pp, uint32_t size,
-                           uint32_t *len, uint32_t indefinite);
-extern int32_t getAsnEnumerated(const unsigned char **pp, uint32_t len,
+extern int32_t getAsnSet32(const unsigned char **pp, psSizeL_t size,
+                           psSize32_t *len, uint32_t indefinite);
+extern int32_t getAsnEnumerated(const unsigned char **pp, psSizeL_t size,
                                 int32_t *val);
 
-extern int32_t getAsnInteger(const unsigned char **pp, uint32_t len,
+extern int32_t getAsnInteger(const unsigned char **pp, psSizeL_t size,
                              int32_t *val);
-extern int32_t getAsnAlgorithmIdentifier(const unsigned char **pp, uint32_t len,
+extern int32_t getAsnAlgorithmIdentifier(const unsigned char **pp, psSizeL_t size,
                                          int32_t *oi, psSize_t *paramLen);
-extern int32_t getAsnOID(const unsigned char **pp, uint32_t len, int32_t *oi,
-                         uint8_t checkForParams, psSize_t *paramLen);
+extern int32_t getAsnOID(const unsigned char **pp, psSizeL_t size,
+			 int32_t *oi,
+			 uint8_t checkForParams, psSize_t *paramLen);
 
 # define MAX_OID_LEN     16     /**< Maximum number of segments in OID */
 
-extern uint8_t asnParseOid(const unsigned char *der, psSize_t derlen,
+extern uint8_t asnParseOid(const unsigned char *der, psSizeL_t derlen,
                            uint32_t oid[MAX_OID_LEN]);
 
 

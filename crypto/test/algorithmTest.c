@@ -5,7 +5,7 @@
  *      Crypto harness to check algorithms against known inputs/outputs.
  */
 /*
- *      Copyright (c) 2013-2017 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 INSIDE Secure Corporation
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -33,12 +33,29 @@
 /******************************************************************************/
 
 #include "crypto/cryptoImpl.h"
-#include "core/psUtil.h"
+#include "psUtil.h"
 #include "hmac_test_vectors.h"
+#include "osdep_stdio.h"
+#include "osdep_string.h"
+#include "crypto/digest/sha256_standalone.h"
 
 #ifndef USE_SERVER_SIDE_SSL
 # define USE_SERVER_SIDE_SSL
 #endif
+
+/* Allow FAIL_IF() just like in cl's tests. */
+#define INTSTR2(x) #x
+#define INTSTR(x) INTSTR2(x)
+#define FAIL_IF(x)                                       \
+    do                                                   \
+    {                                                    \
+        if (x)                                           \
+        {                                                \
+            _psTraceStr("  FAILED (condition=%s)\n",     \
+                        #x" [line="INTSTR(__LINE__)"]"); \
+            return -1;                                   \
+        }                                                \
+    } while(0)
 
 /******************************************************************************/
 static int32 psPrngTests(void)
@@ -46,9 +63,9 @@ static int32 psPrngTests(void)
     int32 res;
     static unsigned char ch[70000];
 
-    _psTrace("	PRNG small random generation... ");
+    _psTrace("  PRNG small random generation... ");
 
-    memset(ch, 0, sizeof(ch));
+    Memset(ch, 0, sizeof(ch));
     res = psGetPrngLocked(ch, 3, NULL);
     if (res != 3 ||
         ch[0] + ch[1] + ch[2] < 6 ||     /* Probabilistic test */
@@ -67,9 +84,9 @@ static int32 psPrngTests(void)
     {
         int i, sum;
 
-        _psTrace("	PRNG large random generation... ");
+        _psTrace("      PRNG large random generation... ");
 
-        memset(ch, 0, sizeof(ch));
+        Memset(ch, 0, sizeof(ch));
         sum = 0;
         res = psGetPrngLocked(ch + 1, 65532, NULL);
         res += psGetPrngLocked(ch + 1 + 65532, (69998 - 65532), NULL);
@@ -94,6 +111,665 @@ static int32 psPrngTests(void)
 
     return res < 0 ? res : PS_SUCCESS;
 }
+
+#ifdef USE_HKDF
+static int32 psHkdfTests(void)
+{
+    int32_t rc;
+    unsigned char res[1024] = {0};
+    psSize_t resLen;
+
+#ifdef USE_HMAC_SHA256
+    /* Test case 1 */
+    _psTrace("\tTest case 1 from RFC 5869... ");
+    unsigned char ikm1[] =
+    {
+        0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b,
+        0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b
+    };
+    unsigned char salt1[] =
+    {
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b,
+        0x0c
+    };
+    unsigned char info1[] =
+    {
+        0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9
+    };
+    unsigned char prk1[] =
+    {
+        0x07, 0x77, 0x09, 0x36, 0x2c, 0x2e, 0x32, 0xdf, 0x0d, 0xdc, 0x3f, 0x0d,
+        0xc4, 0x7b, 0xba, 0x63, 0x90, 0xb6, 0xc7, 0x3b, 0xb5, 0x0f, 0x9c, 0x31,
+        0x22, 0xec, 0x84, 0x4a, 0xd7, 0xc2, 0xb3, 0xe5
+    };
+    unsigned char okm1[] =
+    {
+        0x3c, 0xb2, 0x5f, 0x25, 0xfa, 0xac, 0xd5, 0x7a, 0x90, 0x43, 0x4f, 0x64,
+        0xd0, 0x36, 0x2f, 0x2a, 0x2d, 0x2d, 0x0a, 0x90, 0xcf, 0x1a, 0x5a, 0x4c,
+        0x5d, 0xb0, 0x2d, 0x56, 0xec, 0xc4, 0xc5, 0xbf, 0x34, 0x00, 0x72, 0x08,
+        0xd5, 0xb8, 0x87, 0x18, 0x58, 0x65
+    };
+
+    rc = psHkdfExtract(HMAC_SHA256,
+            salt1, sizeof(salt1),
+            ikm1, sizeof(ikm1),
+            res, &resLen);
+    if (rc < 0)
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+    if (resLen != sizeof(prk1))
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+    if (Memcmp(res, prk1, sizeof(prk1)))
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+
+    rc = psHkdfExpand(HMAC_SHA256,
+            prk1,
+            sizeof(prk1),
+            info1,
+            sizeof(info1),
+            res,
+            sizeof(okm1));
+    if (rc < 0)
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+    if (Memcmp(res, okm1, sizeof(okm1)))
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+
+    _psTrace("PASSED\n");
+
+    /* Test case 2 */
+    _psTrace("\tTest case 2 from RFC 5869... ");
+    unsigned char ikm2[] =
+    {
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b,
+        0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+        0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23,
+        0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f,
+        0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x3b,
+        0x3c, 0x3d, 0x3e, 0x3f, 0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47,
+        0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f
+    };
+    unsigned char salt2[] =
+    {
+        0x60, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x6b,
+        0x6c, 0x6d, 0x6e, 0x6f, 0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77,
+        0x78, 0x79, 0x7a, 0x7b, 0x7c, 0x7d, 0x7e, 0x7f, 0x80, 0x81, 0x82, 0x83,
+        0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8a, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f,
+        0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9a, 0x9b,
+        0x9c, 0x9d, 0x9e, 0x9f, 0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7,
+        0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad, 0xae, 0xaf
+    };
+    unsigned char info2[] =
+    {
+        0xb0, 0xb1, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xbb,
+        0xbc, 0xbd, 0xbe, 0xbf, 0xc0, 0xc1, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7,
+        0xc8, 0xc9, 0xca, 0xcb, 0xcc, 0xcd, 0xce, 0xcf, 0xd0, 0xd1, 0xd2, 0xd3,
+        0xd4, 0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xda, 0xdb, 0xdc, 0xdd, 0xde, 0xdf,
+        0xe0, 0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xeb,
+        0xec, 0xed, 0xee, 0xef, 0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7,
+        0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff
+    };
+    unsigned char prk2[] =
+    {
+        0x06, 0xa6, 0xb8, 0x8c, 0x58, 0x53, 0x36, 0x1a, 0x06, 0x10, 0x4c, 0x9c,
+        0xeb, 0x35, 0xb4, 0x5c, 0xef, 0x76, 0x00, 0x14, 0x90, 0x46, 0x71, 0x01,
+        0x4a, 0x19, 0x3f, 0x40, 0xc1, 0x5f, 0xc2, 0x44
+    };
+    unsigned char okm2[] =
+    {
+        0xb1, 0x1e, 0x39, 0x8d, 0xc8, 0x03, 0x27, 0xa1, 0xc8, 0xe7, 0xf7, 0x8c,
+        0x59, 0x6a, 0x49, 0x34, 0x4f, 0x01, 0x2e, 0xda, 0x2d, 0x4e, 0xfa, 0xd8,
+        0xa0, 0x50, 0xcc, 0x4c, 0x19, 0xaf, 0xa9, 0x7c, 0x59, 0x04, 0x5a, 0x99,
+        0xca, 0xc7, 0x82, 0x72, 0x71, 0xcb, 0x41, 0xc6, 0x5e, 0x59, 0x0e, 0x09,
+        0xda, 0x32, 0x75, 0x60, 0x0c, 0x2f, 0x09, 0xb8, 0x36, 0x77, 0x93, 0xa9,
+        0xac, 0xa3, 0xdb, 0x71, 0xcc, 0x30, 0xc5, 0x81, 0x79, 0xec, 0x3e, 0x87,
+        0xc1, 0x4c, 0x01, 0xd5, 0xc1, 0xf3, 0x43, 0x4f, 0x1d, 0x87,
+    };
+
+    rc = psHkdfExtract(HMAC_SHA256,
+            salt2, sizeof(salt2),
+            ikm2, sizeof(ikm2),
+            res, &resLen);
+    if (rc < 0)
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+    if (resLen != sizeof(prk2))
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+    if (Memcmp(res, prk2, sizeof(prk2)))
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+    rc = psHkdfExpand(HMAC_SHA256,
+            prk2,
+            sizeof(prk2),
+            info2,
+            sizeof(info2),
+            res,
+            sizeof(okm2));
+    if (rc < 0)
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+    if (Memcmp(res, okm2, sizeof(okm2)))
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+    _psTrace("PASSED\n");
+
+    /* Test case 3 */
+    _psTrace("\tTest case 3 from RFC 5869... ");
+    unsigned char ikm3[] =
+    {
+        0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b,
+        0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b,
+    };
+    unsigned char salt3[] = {};
+    unsigned char info3[] = {};
+    unsigned char prk3[] =
+    {
+        0x19, 0xef, 0x24, 0xa3, 0x2c, 0x71, 0x7b, 0x16, 0x7f, 0x33, 0xa9, 0x1d,
+        0x6f, 0x64, 0x8b, 0xdf, 0x96, 0x59, 0x67, 0x76, 0xaf, 0xdb, 0x63, 0x77,
+        0xac, 0x43, 0x4c, 0x1c, 0x29, 0x3c, 0xcb, 0x04
+    };
+    unsigned char okm3[] =
+    {
+        0x8d, 0xa4, 0xe7, 0x75, 0xa5, 0x63, 0xc1, 0x8f, 0x71, 0x5f, 0x80, 0x2a,
+        0x06, 0x3c, 0x5a, 0x31, 0xb8, 0xa1, 0x1f, 0x5c, 0x5e, 0xe1, 0x87, 0x9e,
+        0xc3, 0x45, 0x4e, 0x5f, 0x3c, 0x73, 0x8d, 0x2d, 0x9d, 0x20, 0x13, 0x95,
+        0xfa, 0xa4, 0xb6, 0x1a, 0x96, 0xc8
+    };
+    rc = psHkdfExtract(HMAC_SHA256,
+            salt3, sizeof(salt3),
+            ikm3, sizeof(ikm3),
+            res, &resLen);
+    if (rc < 0)
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+    if (resLen != sizeof(prk3))
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+    if (Memcmp(res, prk3, sizeof(prk3)))
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+
+    rc = psHkdfExpand(HMAC_SHA256,
+            prk3,
+            sizeof(prk3),
+            info3,
+            sizeof(info3),
+            res,
+            sizeof(okm3));
+    if (rc < 0)
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+    if (Memcmp(res, okm3, sizeof(okm3)))
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+    _psTrace("PASSED\n");
+#endif // USE_HMAC_SHA256
+
+#ifdef USE_HMAC_SHA1
+    /* Test case 4 */
+    _psTrace("\tTest case 4 from RFC 5869... ");
+    unsigned char ikm4[] =
+    {
+        0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b
+    };
+    unsigned char salt4[] =
+    {
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a,
+        0x0b, 0x0c
+    };
+    unsigned char info4[] =
+    {
+        0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9
+    };
+    unsigned char prk4[] =
+    {
+        0x9b, 0x6c, 0x18, 0xc4, 0x32, 0xa7, 0xbf, 0x8f, 0x0e, 0x71,
+        0xc8, 0xeb, 0x88, 0xf4, 0xb3, 0x0b, 0xaa, 0x2b, 0xa2, 0x43
+    };
+    unsigned char okm4[] =
+    {
+        0x08, 0x5a, 0x01, 0xea, 0x1b, 0x10, 0xf3, 0x69, 0x33, 0x06,
+        0x8b, 0x56, 0xef, 0xa5, 0xad, 0x81, 0xa4, 0xf1, 0x4b, 0x82,
+        0x2f, 0x5b, 0x09, 0x15, 0x68, 0xa9, 0xcd, 0xd4, 0xf1, 0x55,
+        0xfd, 0xa2, 0xc2, 0x2e, 0x42, 0x24, 0x78, 0xd3, 0x05, 0xf3,
+        0xf8, 0x96
+    };
+    rc = psHkdfExtract(HMAC_SHA1,
+            salt4, sizeof(salt4),
+            ikm4, sizeof(ikm4),
+            res, &resLen);
+    if (rc < 0)
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+    if (resLen != sizeof(prk4))
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+    if (Memcmp(res, prk4, sizeof(prk4)))
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+
+    rc = psHkdfExpand(HMAC_SHA1,
+            prk4,
+            sizeof(prk4),
+            info4,
+            sizeof(info4),
+            res,
+            sizeof(okm4));
+    if (rc < 0)
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+    if (Memcmp(res, okm4, sizeof(okm4)))
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+
+    _psTrace("PASSED\n");
+
+    /* Test case 5 */
+    _psTrace("\tTest case 5 from RFC 5869... ");
+    unsigned char ikm5[] =
+    {
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b,
+        0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+        0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23,
+        0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f,
+        0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x3b,
+        0x3c, 0x3d, 0x3e, 0x3f, 0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47,
+        0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f
+    };
+    unsigned char salt5[] =
+    {
+        0x60, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x6b,
+        0x6c, 0x6d, 0x6e, 0x6f, 0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77,
+        0x78, 0x79, 0x7a, 0x7b, 0x7c, 0x7d, 0x7e, 0x7f, 0x80, 0x81, 0x82, 0x83,
+        0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8a, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f,
+        0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9a, 0x9b,
+        0x9c, 0x9d, 0x9e, 0x9f, 0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7,
+        0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad, 0xae, 0xaf
+    };
+    unsigned char info5[] =
+    {
+        0xb0, 0xb1, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xbb,
+        0xbc, 0xbd, 0xbe, 0xbf, 0xc0, 0xc1, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7,
+        0xc8, 0xc9, 0xca, 0xcb, 0xcc, 0xcd, 0xce, 0xcf, 0xd0, 0xd1, 0xd2, 0xd3,
+        0xd4, 0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xda, 0xdb, 0xdc, 0xdd, 0xde, 0xdf,
+        0xe0, 0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xeb,
+        0xec, 0xed, 0xee, 0xef, 0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7,
+        0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff
+    };
+    unsigned char prk5[] =
+    {
+        0x8a, 0xda, 0xe0, 0x9a, 0x2a, 0x30, 0x70, 0x59, 0x47, 0x8d, 0x30, 0x9b,
+        0x26, 0xc4, 0x11, 0x5a, 0x22, 0x4c, 0xfa, 0xf6
+    };
+    unsigned char okm5[] =
+    {
+        0x0b, 0xd7, 0x70, 0xa7, 0x4d, 0x11, 0x60, 0xf7, 0xc9, 0xf1, 0x2c, 0xd5,
+        0x91, 0x2a, 0x06, 0xeb, 0xff, 0x6a, 0xdc, 0xae, 0x89, 0x9d, 0x92, 0x19,
+        0x1f, 0xe4, 0x30, 0x56, 0x73, 0xba, 0x2f, 0xfe, 0x8f, 0xa3, 0xf1, 0xa4,
+        0xe5, 0xad, 0x79, 0xf3, 0xf3, 0x34, 0xb3, 0xb2, 0x02, 0xb2, 0x17, 0x3c,
+        0x48, 0x6e, 0xa3, 0x7c, 0xe3, 0xd3, 0x97, 0xed, 0x03, 0x4c, 0x7f, 0x9d,
+        0xfe, 0xb1, 0x5c, 0x5e, 0x92, 0x73, 0x36, 0xd0, 0x44, 0x1f, 0x4c, 0x43,
+        0x00, 0xe2, 0xcf, 0xf0, 0xd0, 0x90, 0x0b, 0x52, 0xd3, 0xb4,
+    };
+
+    rc = psHkdfExtract(HMAC_SHA1,
+            salt5, sizeof(salt5),
+            ikm5, sizeof(ikm5),
+            res, &resLen);
+    if (rc < 0)
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+    if (resLen != sizeof(prk5))
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+    if (Memcmp(res, prk5, sizeof(prk5)))
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+
+    rc = psHkdfExpand(HMAC_SHA1,
+            prk5,
+            sizeof(prk5),
+            info5,
+            sizeof(info5),
+            res,
+            sizeof(okm5));
+    if (rc < 0)
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+    if (Memcmp(res, okm5, sizeof(okm5)))
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+    _psTrace("PASSED\n");
+
+    /* Test case 6 */
+    _psTrace("\tTest case 6 from RFC 5869... ");
+    unsigned char ikm6[] =
+    {
+        0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b,
+        0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b,
+    };
+    unsigned char salt6[] = {};
+    unsigned char info6[] = {};
+    unsigned char prk6[] =
+    {
+        0xda, 0x8c, 0x8a, 0x73, 0xc7, 0xfa, 0x77, 0x28, 0x8e, 0xc6, 0xf5, 0xe7,
+        0xc2, 0x97, 0x78, 0x6a, 0xa0, 0xd3, 0x2d, 0x01,
+    };
+    unsigned char okm6[] =
+    {
+        0x0a, 0xc1, 0xaf, 0x70, 0x02, 0xb3, 0xd7, 0x61, 0xd1, 0xe5, 0x52, 0x98,
+        0xda, 0x9d, 0x05, 0x06, 0xb9, 0xae, 0x52, 0x05, 0x72, 0x20, 0xa3, 0x06,
+        0xe0, 0x7b, 0x6b, 0x87, 0xe8, 0xdf, 0x21, 0xd0, 0xea, 0x00, 0x03, 0x3d,
+        0xe0, 0x39, 0x84, 0xd3, 0x49, 0x18,
+    };
+    rc = psHkdfExtract(HMAC_SHA1,
+            salt6, sizeof(salt6),
+            ikm6, sizeof(ikm6),
+            res, &resLen);
+    if (rc < 0)
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+    if (resLen != sizeof(prk6))
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+    if (Memcmp(res, prk6, sizeof(prk6)))
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+
+    rc = psHkdfExpand(HMAC_SHA1,
+            prk6,
+            sizeof(prk6),
+            info6,
+            sizeof(info6),
+            res,
+            sizeof(okm6));
+    if (rc < 0)
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+    if (Memcmp(res, okm6, sizeof(okm6)))
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+    _psTrace("PASSED\n");
+
+    /* Test case 7 */
+    _psTrace("\tTest case 7 from RFC 5869... ");
+    unsigned char ikm7[] =
+    {
+        0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c,
+        0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c
+    };
+    unsigned char info7[] = {};
+    unsigned char prk7[] =
+    {
+        0x2a, 0xdc, 0xca, 0xda, 0x18, 0x77, 0x9e, 0x7c, 0x20, 0x77, 0xad, 0x2e,
+        0xb1, 0x9d, 0x3f, 0x3e, 0x73, 0x13, 0x85, 0xdd
+    };
+    unsigned char okm7[] =
+    {
+        0x2c, 0x91, 0x11, 0x72, 0x04, 0xd7, 0x45, 0xf3, 0x50, 0x0d, 0x63, 0x6a,
+        0x62, 0xf6, 0x4f, 0x0a, 0xb3, 0xba, 0xe5, 0x48, 0xaa, 0x53, 0xd4, 0x23,
+        0xb0, 0xd1, 0xf2, 0x7e, 0xbb, 0xa6, 0xf5, 0xe5, 0x67, 0x3a, 0x08, 0x1d,
+        0x70, 0xcc, 0xe7, 0xac, 0xfc, 0x48
+    };
+    rc = psHkdfExtract(HMAC_SHA1,
+            NULL, 0,
+            ikm7, sizeof(ikm7),
+            res, &resLen);
+    if (rc < 0)
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+    if (resLen != sizeof(prk7))
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+    if (Memcmp(res, prk7, sizeof(prk7)))
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+
+    rc = psHkdfExpand(HMAC_SHA1,
+            prk7,
+            sizeof(prk7),
+            info7,
+            sizeof(info7),
+            res,
+            sizeof(okm7));
+    if (rc < 0)
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+    if (Memcmp(res, okm7, sizeof(okm7)))
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+
+    _psTrace("PASSED\n");
+#endif // USE_HMAC_SHA1
+
+#ifdef USE_HMAC_384
+    /* Test case 8 */
+    _psTrace("\tSHA384 HKDF-Extract (RFC4231 case 3)... ");
+    unsigned char ikm8[] =
+    {
+        0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0xdd,
+        0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0xdd,
+        0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0xdd,
+        0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0xdd, 0xdd,
+        0xdd, 0xdd
+    };
+    unsigned char salt8[] =
+    {
+        0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa,
+        0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa
+    };
+    unsigned char prk8[] =
+    {
+        0x88, 0x06, 0x26, 0x08, 0xd3, 0xe6, 0xad, 0x8a, 0x0a, 0xa2, 0xac, 0xe0,
+        0x14, 0xc8, 0xa8, 0x6f, 0x0a, 0xa6, 0x35, 0xd9, 0x47, 0xac, 0x9f, 0xeb,
+        0xe8, 0x3e, 0xf4, 0xe5, 0x59, 0x66, 0x14, 0x4b, 0x2a, 0x5a, 0xb3, 0x9d,
+        0xc1, 0x38, 0x14, 0xb9, 0x4e, 0x3a, 0xb6, 0xe1, 0x01, 0xa3, 0x4f, 0x27
+    };
+    rc = psHkdfExtract(HMAC_SHA384,
+            salt8, sizeof(salt8),
+            ikm8, sizeof(ikm8),
+            res, &resLen);
+    if (rc < 0)
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+    if (resLen != sizeof(prk8))
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+    if (Memcmp(res, prk8, sizeof(prk8)))
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+    _psTrace("PASSED\n");
+#endif // USE_HMAC_384
+    return PS_SUCCESS;
+}
+
+static int32 psHkdfExpandLabelTests(void)
+{
+#ifdef USE_HMAC_SHA256
+    _psTrace("\t's hs traffic' test... ");
+    /*
+      This test vector is under the heading
+      "{server}  derive secret "tls13 s hs traffic":"
+      on page 4 of draft-ietf-tls-tls13-vectors-03.
+
+      Renamed the inputs for clarity.
+      PRK --> secret
+      hash --> transcript_hash
+      info --> This is not actually used in the test. This the HkdfLabel that
+      psHkdfExpandLabel should construct from the following input:
+      (secret, label == "s hs traffic", context == hash)).
+      output --> expect
+    */
+    unsigned char secret1[] =
+    {
+        0x79, 0x07, 0xc2, 0x82, 0x34, 0xf1, 0x6c, 0xa8, 0x71, 0xa4, 0x6b, 0xeb,
+        0x25, 0xda, 0x54, 0x7f, 0xdc, 0x8a, 0xab, 0x96, 0xd1, 0x4e, 0xef, 0xf8,
+        0x0f, 0x5b, 0x12, 0xf9, 0xad, 0x8a, 0xc9, 0xd6
+    };
+    unsigned char transcript_hash1[] =
+    {
+        0x2a, 0x63, 0xe9, 0x0b, 0x84, 0xe5, 0xc9, 0x79, 0x80, 0x56, 0x98, 0x41,
+        0x19, 0x3b, 0x80, 0x94, 0x22, 0x19, 0x36, 0x52, 0x19, 0xad, 0x23, 0x90,
+        0xb6, 0x80, 0x64, 0xc2, 0xae, 0xbb, 0x09, 0x69
+    };
+    const char *label1 = "s hs traffic";
+    unsigned char expect1[] =
+    {
+        0xa2, 0xc1, 0x53, 0x5b, 0x55, 0x26, 0x42, 0x8b, 0x49, 0xcb, 0xe6, 0xcc,
+        0x3c, 0x19, 0x23, 0x7c, 0x37, 0x4e, 0x94, 0xdb, 0x25, 0x6c, 0x96, 0x4d,
+        0x4d, 0x13, 0x76, 0xa9, 0xde, 0x1a, 0xc5, 0x12
+    };
+    unsigned char res[sizeof(expect1)] = {0};
+    int32_t rc;
+
+    rc = psHkdfExpandLabel(NULL,
+            HMAC_SHA256,
+            secret1,
+            sizeof(secret1),
+            label1,
+            strlen(label1),
+            transcript_hash1,
+            sizeof(transcript_hash1),
+            sizeof(expect1),
+            res);
+    if (rc < 0)
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+
+    if (Memcmp(res, expect1, sizeof(expect1)))
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+    _psTrace("PASSED\n");
+
+    psTrace("\t'finished' test... ");
+    unsigned char secret2[] =
+    {
+        0xa2, 0xc1, 0x53, 0x5b, 0x55, 0x26, 0x42, 0x8b, 0x49, 0xcb, 0xe6, 0xcc,
+        0x3c, 0x19, 0x23, 0x7c, 0x37, 0x4e, 0x94, 0xdb, 0x25, 0x6c, 0x96, 0x4d,
+        0x4d, 0x13, 0x76, 0xa9, 0xde, 0x1a, 0xc5, 0x12,
+    };
+    unsigned char transcript_hash2[] = {};
+
+    const char *label2 = "finished";
+    unsigned char expect2[] =
+    {
+        0xd2, 0x7d, 0x01, 0xab, 0xe2, 0xd9, 0xd6, 0x68, 0x98, 0xdc, 0x10, 0xf8,
+        0x5d, 0x92, 0x2f, 0xd6, 0xff, 0xf5, 0x1d, 0xb8, 0x80, 0xf4, 0xaf, 0x64,
+        0x52, 0xb7, 0x1c, 0x05, 0xc3, 0xfc, 0x42, 0x67
+    };
+
+    rc = psHkdfExpandLabel(NULL,
+            HMAC_SHA256,
+            secret2,
+            sizeof(secret2),
+            label2,
+            strlen(label2),
+            transcript_hash2,
+            sizeof(transcript_hash2),
+            sizeof(expect2),
+            res);
+    if (rc < 0)
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+
+    if (Memcmp(res, expect2, sizeof(expect2)))
+    {
+        _psTrace("FAILED\n");
+        return PS_FAILURE;
+    }
+
+    _psTrace("PASSED\n");
+#endif
+    return PS_SUCCESS;
+
+}
+#endif
 
 /******************************************************************************/
 #ifdef USE_AES
@@ -139,7 +815,7 @@ static int32 psAesTestBlock(void)
 
     for (i = 0; i < (int32) (sizeof(tests) / sizeof(tests[0])); i++)
     {
-        _psTraceInt("	AES-%d known vector test... ", tests[i].keylen * 8);
+        _psTraceInt("   AES-%d known vector test... ", tests[i].keylen * 8);
         if ((err = psAesInitBlockKey(&ekey, tests[i].key, tests[i].keylen, PS_AES_ENCRYPT))
             != PS_SUCCESS)
         {
@@ -155,10 +831,10 @@ static int32 psAesTestBlock(void)
         }
         psAesEncryptBlock(&ekey, tests[i].pt, tmp[0]);
         psAesDecryptBlock(&dkey, tmp[0], tmp[1]);
-        if (memcmp(tmp[0], tests[i].ct, 16) || memcmp(tmp[1], tests[i].pt, 16))
+        if (Memcmp(tmp[0], tests[i].ct, 16) || Memcmp(tmp[1], tests[i].pt, 16))
         {
             _psTraceInt("FAILED: mem compare failed\n", i);
-            if (memcmp(tmp[0], tests[i].ct, 16))
+            if (Memcmp(tmp[0], tests[i].ct, 16))
             {
                 psTraceCrypto("CT: ");
                 for (i = 0; i < 16; i++)
@@ -185,7 +861,7 @@ static int32 psAesTestBlock(void)
         Now see if we can encrypt all zero bytes 1000 times,
         decrypt and come back where we started
  */
-        _psTraceInt("	AES-%d wind/unwind test... ", tests[i].keylen * 8);
+        _psTraceInt("   AES-%d wind/unwind test... ", tests[i].keylen * 8);
         for (y = 0; y < 16; y++)
         {
             tmp[0][y] = 0;
@@ -265,7 +941,7 @@ static int32 psAesTestCBC(void)
 
     for (i = 0; i < (int32) (sizeof(tests) / sizeof(tests[0])); i++)
     {
-        _psTraceInt("	AES-CBC-%d known vector test... ", tests[i].keylen * 8);
+        _psTraceInt("   AES-CBC-%d known vector test... ", tests[i].keylen * 8);
         if ((err = psAesInitCBC(&eCtx, tests[i].iv, tests[i].key, tests[i].keylen,
                  PS_AES_ENCRYPT)) != PS_SUCCESS)
         {
@@ -281,10 +957,10 @@ static int32 psAesTestCBC(void)
         }
         psAesEncryptCBC(&eCtx, tests[i].pt, tmp[0], 16);
         psAesDecryptCBC(&dCtx, tmp[0], tmp[1], 16);
-        if (memcmp(tmp[0], tests[i].ct, 16) || memcmp(tmp[1], tests[i].pt, 16))
+        if (Memcmp(tmp[0], tests[i].ct, 16) || Memcmp(tmp[1], tests[i].pt, 16))
         {
             _psTraceInt("FAILED: mem compare failed\n", i);
-            if (memcmp(tmp[0], tests[i].ct, 16))
+            if (Memcmp(tmp[0], tests[i].ct, 16))
             {
                 psTraceCrypto("CT: ");
                 for (i = 0; i < 16; i++)
@@ -314,6 +990,165 @@ static int32 psAesTestCBC(void)
 }
 
 # ifdef USE_AES_GCM
+int32 psAesTestGCM2(void)
+{
+    int32 res = PS_SUCCESS;
+    int32_t rc;
+    psAesGcm_t ctx;
+    unsigned char nonce[12] = { 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+                                0x09, 0x10, 0x11, 0x12 };
+    unsigned char decrypted[256] = { 0 };
+    unsigned char tdata[] = {
+        't', 'e', 's', 't', 'd', 'a', 't', 'a',
+        't', 'e', 's', 't', 'd', 'a', 't', 'a',
+        't', 'e', 's', 't', 'd', 'a', 't', 'a',
+        't', 'e', 's', 't', 'd', 'a', 't', 'a'
+    };
+    unsigned char ct[64] = { 0 };
+    unsigned char key[] = {
+        '0', '1', '2', '3', '4', '5', '6', '7',
+        '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'
+    };
+    unsigned char aad[5] = { 0x17, 0x03, 0x03, 0xff, 0xff };
+    unsigned char kat_pt[256];
+    unsigned char kat_ct[256];
+    const unsigned char kat_key[] =
+    {
+        0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b,
+        0x2c, 0x2d, 0x2e, 0x2f, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37,
+        0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f
+    };
+    const unsigned char kat_nonce[] =
+    {
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c
+    };
+    const unsigned char kat_adata[] =
+    {
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b,
+        0x1c, 0x1d, 0x1e, 0x1f
+    };
+    const unsigned char kat_expect_ct[] =
+    {
+        0x82, 0xcb, 0x7c, 0xad, 0x6a, 0x6e, 0x31, 0x65, 0xbd, 0xe9, 0xca, 0x33,
+        0xd3, 0x53, 0x1a, 0x1c, 0xf0, 0x31, 0x16, 0x2d, 0xed, 0x88, 0xad, 0x66,
+        0x32, 0x99, 0x24, 0xff, 0xaa, 0x3d, 0x1a, 0x8d, 0x75, 0x23, 0x3a, 0x56,
+        0x6b, 0x24, 0xef, 0x9a, 0x9c, 0x53, 0x67, 0xed, 0x2e, 0x52, 0xcb, 0x0d,
+        0xe8, 0x19, 0xc4, 0x38, 0xee, 0xab, 0xfd, 0xd8, 0x5f, 0x09, 0xd6, 0x19,
+        0x8c, 0xf0, 0xd4, 0xd0, 0x35, 0xdf, 0x77, 0x81, 0x75, 0xe4, 0x77, 0xd1,
+        0x49, 0xa6, 0xea, 0x09, 0x03, 0x16, 0xf6, 0x77, 0x93, 0xe7, 0x64, 0xbc,
+        0x98, 0x8c, 0xd4, 0x44, 0xd2, 0x0f, 0x73, 0x16, 0x6c, 0x17, 0x7c, 0x54,
+        0xd9, 0xaf, 0x3b, 0x91, 0xda, 0x64, 0x7f, 0x63, 0x18, 0x04, 0xa7, 0x86,
+        0xf1, 0x84, 0x0f, 0xf4, 0xe9, 0xa1, 0xdb, 0xa5, 0x7f, 0x41, 0xf5, 0x6d,
+        0xa0, 0x8b, 0x65, 0x22, 0x1f, 0x35, 0x49, 0x55, 0xe1, 0x83, 0x83, 0x31,
+        0xf0, 0x69, 0x15, 0xb3, 0xd1, 0x15, 0x13, 0x01, 0x6b, 0x75, 0xf1, 0x7b,
+        0x0a, 0x66, 0x15, 0xd7, 0xfc, 0x8d, 0x45, 0x11, 0xf2, 0x16, 0x37, 0xc4,
+        0x92, 0x00, 0xa9, 0x6e, 0x79, 0xc0, 0xcb, 0xed, 0x50, 0x37, 0xfb, 0xb7,
+        0xcb, 0xeb, 0x2d, 0x06, 0xbe, 0xbc, 0x56, 0x09, 0xba, 0xd1, 0xca, 0xec,
+        0x96, 0x4b, 0xda, 0xa2, 0x18, 0xf7, 0x93, 0xca, 0xa8, 0x38, 0x09, 0x86,
+        0xbf, 0x24, 0xae, 0xe2, 0x4f, 0x9c, 0x9b, 0x8d, 0xf4, 0x43, 0xe1, 0xd6,
+        0x87, 0x99, 0x7e, 0x0a, 0xad, 0xa3, 0xe2, 0x08, 0x89, 0x9f, 0x9e, 0xd1,
+        0xf9, 0xb5, 0x47, 0x63, 0x0e, 0x39, 0xab, 0x09, 0x96, 0xfe, 0x2a, 0x5c,
+        0x70, 0xbd, 0xd9, 0x85, 0xe9, 0x3a, 0x10, 0x2c, 0xe8, 0x82, 0x8b, 0x8c,
+        0x7a, 0xff, 0x69, 0xad, 0xbd, 0xb3, 0x25, 0x76, 0x1d, 0x0c, 0x21, 0xd1,
+        0xa8, 0xf7, 0x12, 0x28
+    };
+    const unsigned char kat_expect_tag[] =
+    {
+        0xab, 0xfe, 0x16, 0xcf, 0x17, 0xae, 0x2c, 0xd3, 0x15, 0x72, 0x9f, 0x1c,
+        0x9d, 0xb2, 0xff, 0x6d
+    };
+    int i;
+
+    Printf("    AES-GCM pairwise test with AAD... ");
+
+    psAesInitGCM(&ctx, key, sizeof(key));
+    psAesReadyGCM(&ctx, nonce, aad, sizeof(aad));
+    psAesEncryptGCMImplicitIV(&ctx, tdata, ct, sizeof(tdata));
+    psAesGetGCMTag(&ctx, 16, ct + sizeof(tdata));
+    psAesClearGCM(&ctx);
+
+    psAesInitGCM(&ctx, key, sizeof(key));
+    psAesReadyGCM(&ctx, nonce, aad, sizeof(aad));
+    rc = psAesDecryptGCM(&ctx, ct, sizeof(tdata) + 16,
+            decrypted, sizeof(tdata));
+    if (rc < 0)
+    {
+        Printf("FAILED: psAesDecryptGCM failed\n");
+        res = PS_FAILURE;
+        abort();
+        goto out;
+    }
+    if (Memcmp(tdata, decrypted, sizeof(tdata)))
+    {
+        Printf("GCM enc/dec pairwise test failed\n");
+        res = PS_FAILURE;
+        abort();
+        goto out;
+    }
+    psAesClearGCM(&ctx);
+    Printf("PASSED\n");
+
+    Printf("    AES-GCM pairwise test with no AAD... ");
+
+    psAesInitGCM(&ctx, key, sizeof(key));
+    psAesReadyGCM(&ctx, nonce, NULL, 0);
+    psAesEncryptGCMImplicitIV(&ctx, tdata, ct, sizeof(tdata));
+    psAesGetGCMTag(&ctx, 16, ct + sizeof(tdata));
+    psAesClearGCM(&ctx);
+
+    psAesInitGCM(&ctx, key, sizeof(key));
+    psAesReadyGCM(&ctx, nonce, NULL, 0);
+    rc = psAesDecryptGCM(&ctx, ct, sizeof(tdata) + 16,
+            decrypted, sizeof(tdata));
+    if (rc < 0)
+    {
+        Printf("FAILED: psAesDecryptGCM failed\n");
+        res = PS_FAILURE;
+        abort();
+        goto out;
+    }
+    if (Memcmp(tdata, decrypted, sizeof(tdata)))
+    {
+        Printf("GCM enc/dec pairwise test failed\n");
+        res = PS_FAILURE;
+        abort();
+        goto out;
+    }
+    psAesClearGCM(&ctx);
+    Printf("PASSED\n");
+
+    Printf("    AES-GCM KAT with AAD... ");
+    for(i = 0; i < 256; i++)
+    {
+        kat_pt[i] = 0xff ^ i;
+    }
+    psAesInitGCM(&ctx, kat_key, sizeof(kat_key));
+    psAesReadyGCM(&ctx, kat_nonce, kat_adata, sizeof(kat_adata));
+    psAesEncryptGCMImplicitIV(&ctx, kat_pt, kat_ct, sizeof(kat_ct));
+    if (Memcmp(kat_ct, kat_expect_ct, sizeof(kat_expect_ct)))
+    {
+        Printf("GCM KAT failed\n");
+        res = PS_FAILURE;
+        abort();
+        goto out;
+    }
+    psAesGetGCMTag(&ctx, 16, kat_ct + 16);
+    if (Memcmp(kat_ct + 16, kat_expect_tag, sizeof(kat_expect_tag)))
+    {
+        Printf("GCM KAT failed\n");
+        res = PS_FAILURE;
+        abort();
+        goto out;
+    }
+
+    Printf("PASSED\n");
+
+out:
+    psAesClearGCM(&ctx);
+
+    return res;
+}
+
 int32 psAesTestGCM(void)
 {
     int32 res = PS_SUCCESS;
@@ -330,14 +1165,14 @@ int32 psAesTestGCM(void)
     unsigned char iv[12];
     static unsigned char taglen[3] = { 8, 12, 16 };
     static char *tagmsg[] = {
-        "	AES-GCM-%d known vector decrypt (taglen=8) test... ",
-        "	AES-GCM-%d known vector decrypt (taglen=12) test... ",
-        "	AES-GCM-%d known vector decrypt (taglen=16) test... ",
+        "       AES-GCM-%d known vector decrypt (taglen=8) test... ",
+        "       AES-GCM-%d known vector decrypt (taglen=12) test... ",
+        "       AES-GCM-%d known vector decrypt (taglen=16) test... ",
     };
     static char *tagmsg2[] = {
-        "	AES-GCM-%d known vector decrypt (taglen=8 invalid) test... ",
-        "	AES-GCM-%d known vector decrypt (taglen=12 invalid) test... ",
-        "	AES-GCM-%d known vector decrypt (taglen=16 invalid) test... ",
+        "       AES-GCM-%d known vector decrypt (taglen=8 invalid) test... ",
+        "       AES-GCM-%d known vector decrypt (taglen=12 invalid) test... ",
+        "       AES-GCM-%d known vector decrypt (taglen=16 invalid) test... ",
     };
 
     static struct
@@ -831,42 +1666,42 @@ int32 psAesTestGCM(void)
 #  endif /* USE_CL_GCM_GIV */
         if (i == 1)
         {
-            _psTraceInt("	AES-GCM-%d long known vector encrypt test... ", tests[i].keylen * 8);
+            _psTraceInt("       AES-GCM-%d long known vector encrypt test... ", tests[i].keylen * 8);
         }
         else
         {
-            _psTraceInt("	AES-GCM-%d known vector encrypt test... ", tests[i].keylen * 8);
+            _psTraceInt("       AES-GCM-%d known vector encrypt test... ", tests[i].keylen * 8);
         }
         psAesInitGCM(&eCtx, tests[i].key, tests[i].keylen);
         psAesReadyGCM(&eCtx, tests[i].iv, tests[i].aad, tests[i].aadlen);
         psAesEncryptGCM(&eCtx, tests[i].pt, ciphertext, tests[i].ptlen);
         psAesGetGCMTag(&eCtx, 16, tag);
-        if ((memcmp(ciphertext, tests[i].ct, tests[i].ptlen) != 0) ||
-            (memcmp(tag, tests[i].tag, 16) != 0))
+        if ((Memcmp(ciphertext, tests[i].ct, tests[i].ptlen) != 0) ||
+            (Memcmp(tag, tests[i].tag, 16) != 0))
         {
-            printf("FAILED: memcmp mismatch\n");
+            Printf("FAILED: memcmp mismatch\n");
             res = PS_FAILURE;
         }
         else
         {
-            printf("PASSED\n");
+            Printf("PASSED\n");
         }
 
         if (i == 1)
         {
-            _psTraceInt("	AES-GCM-%d long known vector random encrypt test... ", tests[i].keylen * 8);
+            _psTraceInt("       AES-GCM-%d long known vector random encrypt test... ", tests[i].keylen * 8);
         }
         else
         {
-            _psTraceInt("	AES-GCM-%d known vector random encrypt test... ", tests[i].keylen * 8);
+            _psTraceInt("       AES-GCM-%d known vector random encrypt test... ", tests[i].keylen * 8);
         }
-        memcpy(iv, tests[i].iv, 12);
+        Memcpy(iv, tests[i].iv, 12);
         psAesInitGCM(&eCtx, tests[i].key, tests[i].keylen);
         res |= psAesReadyGCMRandomIV(&eCtx, iv, tests[i].aad, tests[i].aadlen,
             NULL);
         if (res != PS_SUCCESS)
         {
-            memset(ciphertext_rand, 0, sizeof ciphertext_rand);
+            Memset(ciphertext_rand, 0, sizeof ciphertext_rand);
         }
         else
         {
@@ -888,10 +1723,10 @@ int32 psAesTestGCM(void)
         }
 
         if ((tests[i].ptlen >= 16 &&
-             memcmp(ciphertext_rand, tests[i].ct, tests[i].ptlen) == 0) ||
-            (memcmp(tag, tests[i].tag, 16) == 0))
+             Memcmp(ciphertext_rand, tests[i].ct, tests[i].ptlen) == 0) ||
+            (Memcmp(tag, tests[i].tag, 16) == 0))
         {
-            printf("FAILED: Random IV failed or not used.\n");
+            Printf("FAILED: Random IV failed or not used.\n");
             res = PS_FAILURE;
         }
         else
@@ -901,28 +1736,28 @@ int32 psAesTestGCM(void)
             if (psAesDecryptGCM2(&dCtx, ciphertext_rand, plaintext_rand,
                     tests[i].ptlen,
                     tag, 16) != PS_SUCCESS ||
-                memcmp(plaintext_rand, tests[i].pt, tests[i].ptlen) != 0)
+                Memcmp(plaintext_rand, tests[i].pt, tests[i].ptlen) != 0)
             {
-                printf("FAILED: psAesDecryptGCM2 failed\n");
+                Printf("FAILED: psAesDecryptGCM2 failed\n");
                 res = PS_FAILURE;
             }
             else
             {
 #  ifdef USE_VERBOSE_RANDOM_GCM
-                printf("PASSED [iv=%02x%02x%02x%02x%02x%02x"
+                Printf("PASSED [iv=%02x%02x%02x%02x%02x%02x"
                     "%02x%02x%02x%02x%02x%02x]\n",
                     iv[0], iv[1], iv[2], iv[3],
                     iv[4], iv[5], iv[6], iv[7],
                     iv[8], iv[9], iv[10], iv[11]);
 #  else
-                printf("PASSED\n");
+                Printf("PASSED\n");
 #  endif
             }
         }
         psAesClearGCM(&eCtx);
 
 #  ifndef USE_ONLY_DECRYPT_GCM_WITH_TAG
-        _psTraceInt("	AES-GCM-%d known vector decrypt (tagless) test... ", tests[i].keylen * 8);
+        _psTraceInt("   AES-GCM-%d known vector decrypt (tagless) test... ", tests[i].keylen * 8);
         psAesInitGCM(&dCtx, tests[i].key, tests[i].keylen);
         psAesReadyGCM(&dCtx, tests[i].iv, tests[i].aad, tests[i].aadlen);
 #   ifdef USE_LIBSODIUM_AES_GCM
@@ -930,97 +1765,97 @@ int32 psAesTestGCM(void)
         unsigned char *cipherTextAuthData;
         cipherTextAuthData = psMalloc(NULL, tests[i].ptlen + 16);
 
-        memcpy(cipherTextAuthData, tests[i].ct, tests[i].ptlen);
-        memcpy(cipherTextAuthData + tests[i].ptlen, tests[i].tag, 16);
+        Memcpy(cipherTextAuthData, tests[i].ct, tests[i].ptlen);
+        Memcpy(cipherTextAuthData + tests[i].ptlen, tests[i].tag, 16);
 
         if (psAesDecryptGCM(&dCtx, cipherTextAuthData, tests[i].ptlen + 16, plaintext, tests[i].ptlen) != PS_SUCCESS)
         {
-            printf("FAILED: authentication failed\n");
+            Printf("FAILED: authentication failed\n");
         }
-        else if (memcmp(plaintext, tests[i].pt, tests[i].ptlen) != 0)
+        else if (Memcmp(plaintext, tests[i].pt, tests[i].ptlen) != 0)
         {
-            printf("FAILED: data mismatch\n");
+            Printf("FAILED: data mismatch\n");
         }
         else
         {
-            printf("PASSED\n");
+            Printf("PASSED\n");
         }
         psFree(cipherTextAuthData, NULL);
 #   else
         psAesDecryptGCMtagless(&dCtx, tests[i].ct, plaintext, tests[i].ptlen);
-        memset(tag, 0x0, 16);
+        Memset(tag, 0x0, 16);
         psAesGetGCMTag(&dCtx, 16, tag);
-        if ((memcmp(plaintext, tests[i].pt, tests[i].ptlen) != 0) ||
-            (memcmp(tag, tests[i].tag, 16) != 0))
+        if ((Memcmp(plaintext, tests[i].pt, tests[i].ptlen) != 0) ||
+            (Memcmp(tag, tests[i].tag, 16) != 0))
         {
-            printf("FAILED: memcmp mismatch\n");
+            Printf("FAILED: memcmp mismatch\n");
             res = PS_FAILURE;
         }
         else
         {
-            printf("PASSED\n");
+            Printf("PASSED\n");
         }
 #   endif
         psAesClearGCM(&dCtx);
-        memset(tag, 0x0, 16);
-        memset(plaintext, 0x0, 32);
+        Memset(tag, 0x0, 16);
+        Memset(plaintext, 0x0, 32);
 #  endif /* !defined USE_ONLY_DECRYPT_GCM_WITH_TAG */
 
 #  ifndef USE_LIBSODIUM_AES_GCM
-        _psTraceInt("	AES-GCM-%d known vector decrypt2 test... ", tests[i].keylen * 8);
+        _psTraceInt("   AES-GCM-%d known vector decrypt2 test... ", tests[i].keylen * 8);
         psAesInitGCM(&dCtx, tests[i].key, tests[i].keylen);
         psAesReadyGCM(&dCtx, tests[i].iv, tests[i].aad, tests[i].aadlen);
         if (psAesDecryptGCM2(&dCtx, tests[i].ct, plaintext, tests[i].ptlen,
                 tests[i].tag, 16) != PS_SUCCESS ||
-            memcmp(plaintext, tests[i].pt, tests[i].ptlen) != 0)
+            Memcmp(plaintext, tests[i].pt, tests[i].ptlen) != 0)
         {
-            printf("FAILED: psAesDecryptGCM2 failed\n");
+            Printf("FAILED: psAesDecryptGCM2 failed\n");
             res = PS_FAILURE;
         }
         else
         {
-            printf("PASSED\n");
+            Printf("PASSED\n");
         }
 
         psAesClearGCM(&dCtx);
-        memset(plaintext, 0x0, 32);
+        Memset(plaintext, 0x0, 32);
 #  endif /* !defined USE_LIBSODIUM_AES_GCM */
 
         for (l = 0; l < (int32) sizeof(taglen); l++)
         {
             _psTraceInt(tagmsg[l], tests[i].keylen * 8);
-            memset(plaintext, 0x11, sizeof(plaintext));
-            memset(ciphertext_with_tag, 0x22, sizeof(ciphertext_with_tag));
-            memcpy(ciphertext_with_tag, tests[i].ct, tests[i].ptlen);
-            memcpy(ciphertext_with_tag + tests[i].ptlen, tests[i].tag, taglen[l]);
+            Memset(plaintext, 0x11, sizeof(plaintext));
+            Memset(ciphertext_with_tag, 0x22, sizeof(ciphertext_with_tag));
+            Memcpy(ciphertext_with_tag, tests[i].ct, tests[i].ptlen);
+            Memcpy(ciphertext_with_tag + tests[i].ptlen, tests[i].tag, taglen[l]);
             psAesInitGCM(&dCtx, tests[i].key, tests[i].keylen);
             psAesReadyGCM(&dCtx, tests[i].iv, tests[i].aad, tests[i].aadlen);
             if (psAesDecryptGCM(&dCtx, ciphertext_with_tag, tests[i].ptlen + taglen[l],
                     plaintext, tests[i].ptlen) == PS_SUCCESS)
             {
-                if (memcmp(plaintext, tests[i].pt, tests[i].ptlen) != 0)
+                if (Memcmp(plaintext, tests[i].pt, tests[i].ptlen) != 0)
                 {
-                    printf("FAILED: memcmp mismatch\n");
+                    Printf("FAILED: memcmp mismatch\n");
                     res = PS_FAILURE;
                 }
                 else
                 {
-                    printf("PASSED\n");
+                    Printf("PASSED\n");
                 }
             }
             else
             {
-                printf("FAILED: tag verify failure\n");
+                Printf("FAILED: tag verify failure\n");
                 res = PS_FAILURE;
             }
         }
         for (l = 0; l < (int32) sizeof(taglen); l++)
         {
             _psTraceInt(tagmsg2[l], tests[i].keylen * 8);
-            memset(plaintext, 0x11, sizeof(plaintext));
-            memset(ciphertext_with_tag, 0x22, sizeof(ciphertext_with_tag));
-            memcpy(ciphertext_with_tag, tests[i].ct, tests[i].ptlen);
-            memcpy(ciphertext_with_tag + tests[i].ptlen, tests[i].tag,
+            Memset(plaintext, 0x11, sizeof(plaintext));
+            Memset(ciphertext_with_tag, 0x22, sizeof(ciphertext_with_tag));
+            Memcpy(ciphertext_with_tag, tests[i].ct, tests[i].ptlen);
+            Memcpy(ciphertext_with_tag + tests[i].ptlen, tests[i].tag,
                 taglen[l]);
             ciphertext_with_tag[tests[i].ptlen + taglen[l] - 1]++;
             psAesInitGCM(&dCtx, tests[i].key, tests[i].keylen);
@@ -1039,11 +1874,11 @@ int32 psAesTestGCM(void)
                         ciphertext_with_tag + tests[i].ptlen,
                         taglen[l]) != PS_SUCCESS)
                 {
-                    printf("PASSED\n");
+                    Printf("PASSED\n");
                 }
                 else
                 {
-                    printf("FAILED: verify accepts invalid tag (%s)\n",
+                    Printf("FAILED: verify accepts invalid tag (%s)\n",
                         "psAesDecryptGCM2");
                     res = PS_FAILURE;
                 }
@@ -1051,7 +1886,7 @@ int32 psAesTestGCM(void)
             }
             else
             {
-                printf("FAILED: verify accepts invalid tag (%s)\n",
+                Printf("FAILED: verify accepts invalid tag (%s)\n",
                     "psAesDecryptGCM");
                 res = PS_FAILURE;
             }
@@ -1098,7 +1933,7 @@ int32 psAesTestCTR(void)
 
     for (x = 0; x < (int) (sizeof(tests) / sizeof(tests[0])); x++)
     {
-        _psTraceInt("	AES-CTR-%d known vector test... ", tests[x].keylen * 8);
+        _psTraceInt("   AES-CTR-%d known vector test... ", tests[x].keylen * 8);
         if ((err = psAesInitExCTR(&ctr, tests[x].IV, tests[x].key,
                  tests[x].keylen, CTR_COUNTER_BIG_ENDIAN | LTC_CTR_RFC3686,
                  PS_AES_ENCRYPT)) != PS_SUCCESS)
@@ -1108,7 +1943,7 @@ int32 psAesTestCTR(void)
         }
         psAesEncryptCTR(&ctr, (unsigned char *) tests[x].pt, buf,
             tests[x].msglen);
-        if (memcmp(buf, tests[x].ct, tests[x].msglen) != 0)
+        if (Memcmp(buf, tests[x].ct, tests[x].msglen) != 0)
         {
             _psTrace("FAILED:  memcmp\n");
         }
@@ -1185,14 +2020,14 @@ int32 psAesTestCmac(void)
 
     for (i = 0; i < (int32) (sizeof(tests) / sizeof(tests[0])); i++)
     {
-        _psTraceInt("	AES CMAC %d known vector test... ", tests[i].keylen * 8);
+        _psTraceInt("   AES CMAC %d known vector test... ", tests[i].keylen * 8);
         if ((err = psCmacGenerate(NULL, tests[i].key, tests[i].keylen,
                  tests[i].pt, tests[i].ptlen, cmac)) != PS_SUCCESS)
         {
             _psTraceInt("FAILED:  psCmacGenerate %d\n", err);
             return err;
         }
-        if (memcmp(cmac, tests[i].ct, 16) != 0)
+        if (Memcmp(cmac, tests[i].ct, 16) != 0)
         {
             _psTrace("FAILED:  memcmp\n");
         }
@@ -1250,7 +2085,7 @@ int32 psAesTestWrap(void)
 
     for (i = 0; i < (uint32_t) (sizeof(tests) / sizeof(tests[0])); i++)
     {
-        _psTraceInt("	AES KEY WRAP %d known vector test... ", tests[i].keylen * 8);
+        _psTraceInt("   AES KEY WRAP %d known vector test... ", tests[i].keylen * 8);
         if ((err = psAesWrap(tests[i].key, tests[i].keylen, tests[i].pt,
                  tests[i].ptlen, wrapped, &woutlen)) != PS_SUCCESS)
         {
@@ -1263,8 +2098,8 @@ int32 psAesTestWrap(void)
             _psTraceInt("FAILED:  psAesWrap %d\n", err);
             return err;
         }
-        if (memcmp(wrapped, tests[i].ct, woutlen) != 0 ||
-            memcmp(unwrapped, tests[i].pt, uoutlen) != 0)
+        if (Memcmp(wrapped, tests[i].ct, woutlen) != 0 ||
+            Memcmp(unwrapped, tests[i].pt, uoutlen) != 0)
         {
             _psTrace("FAILED:  memcmp\n");
         }
@@ -1289,9 +2124,9 @@ static psAesHmacPerf(void)
     aesTag = "AES-CBC";
 L_CBC_TIMING:
 # ifdef USE_AESNI_CRYPTO
-    printf("Timing %s with %d KiB of data (aes-ni)\n", aesTag, AES_KB);
+    Printf("Timing %s with %d KiB of data (aes-ni)\n", aesTag, AES_KB);
 # else
-    printf("Timing %s with %d KiB of data\n", aesTag, AES_KB);
+    Printf("Timing %s with %d KiB of data\n", aesTag, AES_KB);
 # endif
     buf = psMalloc(pool, 1024 + 20);
     for (keysize = 16; keysize <= 32; keysize += 16)
@@ -1301,10 +2136,10 @@ L_CBC_TIMING:
         {
             buf[i] = (unsigned char) (i & 0xFF);
         }
-        memset(iv, 0x1, 16);
-        memset(cbckey, 0x2, keysize);
-        memset(plaintext, 0x3, 16);
-        memset(hmackey, 0x4, 20);
+        Memset(iv, 0x1, 16);
+        Memset(cbckey, 0x2, keysize);
+        Memset(plaintext, 0x3, 16);
+        Memset(hmackey, 0x4, 20);
         hmackeylen = 20;
         psAesInit(&encryptCtx, iv, cbckey, keysize);
         psGetTime(&start, NULL);
@@ -1317,12 +2152,12 @@ L_CBC_TIMING:
             }
             if (psAesEncrypt(&encryptCtx, buf, buf, 1024) != 1024)
             {
-                printf("ERROR LINE %d\n", __LINE__);
+                Printf("ERROR LINE %d\n", __LINE__);
                 return PS_FAILURE;
             }
         }
         psGetTime(&end, NULL);
-        printf("%s: encrypt %u msecs\n", aesTag, psDiffMsecs(start, end, NULL));
+        Printf("%s: encrypt %u msecs\n", aesTag, psDiffMsecs(start, end, NULL));
         if (buf[0] == 0 && buf[1] == 1 && buf[2] == 2 && buf[3] == 3)
         {
             return PS_FAILURE;
@@ -1342,7 +2177,7 @@ L_CBC_TIMING:
             }
         }
         psGetTime(&end, NULL);
-        printf("%s: decrypt %u msecs\n", aesTag, psDiffMsecs(start, end, NULL));
+        Printf("%s: decrypt %u msecs\n", aesTag, psDiffMsecs(start, end, NULL));
     }
     psFree(buf, pool);
     if (useHmac == 0)
@@ -1386,11 +2221,11 @@ int32 psChacha20Poly1305IetfTest(void)
         int32 keylen, ptlen, aadlen;
         unsigned char key[TEST_KEY_LEN], iv[TEST_IV_LEN], pt[TEST_TEXT_MAXLEN], aad[TEST_AAD_MAXLEN], ct[TEST_TEXT_MAXLEN], tag[TEST_TAG_LEN];
     } tests[] = {
-       
+
         {
             TEST_KEY_LEN, 114, 12,
             {
-                0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 
+                0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87,
                 0x88, 0x89, 0x8a, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f,
                 0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97,
                 0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f },
@@ -1500,7 +2335,7 @@ int32 psChacha20Poly1305IetfTest(void)
 
     for (i = 0; i < (int32) (sizeof(tests) / sizeof(tests[0])); i++)
     {
-        _psTraceInt("	CHACHA20-POLY1305-%d "
+        _psTraceInt("   CHACHA20-POLY1305-%d "
             "IETF "
             "known vector encrypt test... ", tests[i].keylen * 8);
 
@@ -1510,24 +2345,24 @@ int32 psChacha20Poly1305IetfTest(void)
         sz2 = psChacha20Poly1305IetfEncrypt(&eCtx, tests[i].pt, tests[i].ptlen, tests[i].iv, tests[i].aad, tests[i].aadlen, ciphertext_tag);
 
         if (sz1 != tests[i].ptlen ||
-            memcmp(ciphertext, tests[i].ct, tests[i].ptlen) != 0 ||
-            memcmp(tag, tests[i].tag, TEST_TAG_LEN) != 0)
+            Memcmp(ciphertext, tests[i].ct, tests[i].ptlen) != 0 ||
+            Memcmp(tag, tests[i].tag, TEST_TAG_LEN) != 0)
         {
-            printf("FAILED: memcmp mismatch (psChacha20Poly1305IetfEncryptDetached)\n");
+            Printf("FAILED: memcmp mismatch (psChacha20Poly1305IetfEncryptDetached)\n");
         }
         else if (sz2 != tests[i].ptlen + TEST_TAG_LEN ||
-                 memcmp(ciphertext_tag, tests[i].ct, tests[i].ptlen) != 0 ||
-                 memcmp(ciphertext_tag + tests[i].ptlen, tests[i].tag, TEST_TAG_LEN) != 0)
+                 Memcmp(ciphertext_tag, tests[i].ct, tests[i].ptlen) != 0 ||
+                 Memcmp(ciphertext_tag + tests[i].ptlen, tests[i].tag, TEST_TAG_LEN) != 0)
         {
-            printf("FAILED: memcmp mismatch (psChacha20Poly1305IetfEncrypt)\n");
+            Printf("FAILED: memcmp mismatch (psChacha20Poly1305IetfEncrypt)\n");
         }
         else
         {
-            printf("PASSED\n");
+            Printf("PASSED\n");
         }
         psChacha20Poly1305IetfClear(&eCtx);
 
-        _psTraceInt("	CHACHA20-POLY1305-%d "
+        _psTraceInt("   CHACHA20-POLY1305-%d "
             "IETF "
             "known vector decrypt test... ", tests[i].keylen * 8);
         psChacha20Poly1305IetfInit(&dCtx, tests[i].key);
@@ -1536,8 +2371,8 @@ int32 psChacha20Poly1305IetfTest(void)
         unsigned char *cipherTextAuthData;
         cipherTextAuthData = psMalloc(NULL, tests[i].ptlen + TEST_TAG_LEN);
 
-        memcpy(cipherTextAuthData, tests[i].ct, tests[i].ptlen);
-        memcpy(cipherTextAuthData + tests[i].ptlen, tests[i].tag, TEST_TAG_LEN);
+        Memcpy(cipherTextAuthData, tests[i].ct, tests[i].ptlen);
+        Memcpy(cipherTextAuthData + tests[i].ptlen, tests[i].tag, TEST_TAG_LEN);
 
         sz1 = psChacha20Poly1305IetfDecrypt(
                 &dCtx,
@@ -1557,26 +2392,26 @@ int32 psChacha20Poly1305IetfTest(void)
                 tests[i].aadlen,
                 tests[i].tag,
                 plaintext2);
-    
+
         if (sz1 != tests[i].ptlen)
         {
-            printf("FAILED: authentication failed (psChacha20Poly1305IetfDecrypt)\n");
+            Printf("FAILED: authentication failed (psChacha20Poly1305IetfDecrypt)\n");
         }
-        else if (memcmp(plaintext, tests[i].pt, tests[i].ptlen) != 0)
+        else if (Memcmp(plaintext, tests[i].pt, tests[i].ptlen) != 0)
         {
-            printf("FAILED: data mismatch (psChacha20Poly1305IetfDecryptDetached)\n");
+            Printf("FAILED: data mismatch (psChacha20Poly1305IetfDecryptDetached)\n");
         }
         else if (sz2 != (psResSize_t) tests[i].ptlen)
         {
-            printf("FAILED: authentication failed (psChacha20Poly1305IetfDecryptDetached)\n");
+            Printf("FAILED: authentication failed (psChacha20Poly1305IetfDecryptDetached)\n");
         }
-        else if (memcmp(plaintext2, tests[i].pt, tests[i].ptlen) != 0)
+        else if (Memcmp(plaintext2, tests[i].pt, tests[i].ptlen) != 0)
         {
-            printf("FAILED: data mismatch (psChacha20Poly1305IetfDecryptDetached)\n");
+            Printf("FAILED: data mismatch (psChacha20Poly1305IetfDecryptDetached)\n");
         }
         else
         {
-            printf("PASSED\n");
+            Printf("PASSED\n");
         }
         psFree(cipherTextAuthData, NULL);
         psChacha20Poly1305IetfClear(&dCtx);
@@ -1672,16 +2507,16 @@ static int32 psDesTest(void)
         }
         if (cases[i].mode != 0)
         {
-            _psTraceInt("	DES known vector encrypt test %d... ", cases[i].num);
+            _psTraceInt("       DES known vector encrypt test %d... ", cases[i].num);
             psDesEncryptBlock(cases[i].txt, tmp, &des);
         }
         else
         {
-            _psTraceInt("	DES known vector encrypt test %d... ", cases[i].num);
+            _psTraceInt("       DES known vector encrypt test %d... ", cases[i].num);
             psDesDecryptBlock(cases[i].txt, tmp, &des);
         }
 
-        if (memcmp(cases[i].out, tmp, sizeof(tmp)) != 0)
+        if (Memcmp(cases[i].out, tmp, sizeof(tmp)) != 0)
         {
             _psTrace("FAILED:  memcmp\n");
             return -1;
@@ -1693,7 +2528,7 @@ static int32 psDesTest(void)
 
         /* now see if we can encrypt all zero bytes DES_ITER times,
            decrypt and come back where we started */
-        _psTrace("	DES wind/unwind test... ");
+        _psTrace("      DES wind/unwind test... ");
         for (y = 0; y < 8; y++)
         {
             tmp[y] = 0;
@@ -1721,7 +2556,7 @@ static int32 psDesTest(void)
 }
 #endif /* DES */
 
-#ifdef USE_PKCS5
+#if defined(USE_PKCS5) && defined(USE_HMAC_SHA1)
 int32 psPBKDF2(void)
 {
     int32 i;
@@ -1747,11 +2582,11 @@ int32 psPBKDF2(void)
 
     for (i = 0; i < (int32) (sizeof(tests) / sizeof(tests[0])); i++)
     {
-        _psTraceInt("	PBKDF2 known vector test %d... ", i + 1);
-        psPkcs5Pbkdf2(tests[i].pass, (uint32) strlen((char *) tests[i].pass),
-            tests[i].salt, (uint32) strlen((char *) tests[i].salt),
+        _psTraceInt("   PBKDF2 known vector test %d... ", i + 1);
+        psPkcs5Pbkdf2(tests[i].pass, (uint32) Strlen((char *) tests[i].pass),
+            tests[i].salt, (uint32) Strlen((char *) tests[i].salt),
             tests[i].rounds, key, tests[i].dkLen);
-        if (memcmp(key, tests[i].output, tests[i].dkLen) != 0)
+        if (Memcmp(key, tests[i].output, tests[i].dkLen) != 0)
         {
             _psTrace("FAILED\n");
         }
@@ -1804,13 +2639,13 @@ int32 psDes3Test(void)
 
     for (i = 0; i < (int32) (sizeof(tests) / sizeof(tests[0])); i++)
     {
-        _psTraceInt("	3DES CBC known vector test %d... ", i + 1);
+        _psTraceInt("   3DES CBC known vector test %d... ", i + 1);
         if (psDes3Init(&skey, tests[i].iv, tests[i].key) < 0)
         {
             return PS_FAILURE;
         }
         psDes3Encrypt(&skey, tests[i].pt, ct, DES3_BLOCKLEN);
-        if (memcmp(ct, tests[i].ct, DES3_BLOCKLEN) != 0)
+        if (Memcmp(ct, tests[i].ct, DES3_BLOCKLEN) != 0)
         {
             _psTrace("FAILED\n");
         }
@@ -1850,13 +2685,13 @@ int32 psArc4Test(void)
 
     for (i = 0; i < (int32) (sizeof(tests) / sizeof(tests[0])); i++)
     {
-        _psTraceInt("	RC4 known vector test %d... ", i + 1);
+        _psTraceInt("   RC4 known vector test %d... ", i + 1);
         if (psArc4Init(&skey, tests[i].key, tests[i].keylen) < 0)
         {
             return PS_FAILURE;
         }
         psArc4(&skey, tests[i].pt, ct, tests[i].ptlen);
-        if (memcmp(ct, tests[i].ct, tests[i].ptlen) != 0)
+        if (Memcmp(ct, tests[i].ct, tests[i].ptlen) != 0)
         {
             _psTrace("FAILED\n");
         }
@@ -1895,7 +2730,7 @@ int32 psIdeaTest(void)
 
     for (i = 0; i < (int32) (sizeof(tests) / sizeof(tests[0])); i++)
     {
-        _psTrace("	IDEA-CBC known vector test 1... ");
+        _psTrace("      IDEA-CBC known vector test 1... ");
         if ((err = psIdeaInit(&eCtx, tests[i].iv, tests[i].key))
             !=  PS_SUCCESS)
         {
@@ -1910,7 +2745,7 @@ int32 psIdeaTest(void)
         }
         psIdeaEncrypt(&eCtx, tests[i].pt, tmp[0], 16);
         /* psTraceBytes("IDEA CT", tmp[0], 16); */
-        if (memcmp(tmp[0], tests[i].ct, 16) != 0)
+        if (Memcmp(tmp[0], tests[i].ct, 16) != 0)
         {
             _psTrace("FAILED\n");
         }
@@ -1918,10 +2753,10 @@ int32 psIdeaTest(void)
         {
             _psTrace("PASSED\n");
         }
-        _psTrace("	IDEA-CBC known vector test 2... ");
+        _psTrace("      IDEA-CBC known vector test 2... ");
         psIdeaDecrypt(&dCtx, tmp[0], tmp[1], 16);
         /* psTraceBytes("IDEA PT", tmp[1], 16); */
-        if (memcmp(tmp[1], tests[i].pt, 16) != 0)
+        if (Memcmp(tmp[1], tests[i].pt, 16) != 0)
         {
             _psTrace("FAILED\n");
         }
@@ -1984,7 +2819,7 @@ int32 psSeedTest(void)
         psSeedInitKey(tests[x].key, 16, &skey);
         psSeedEncryptBlock(tests[x].pt, buf[0], &skey);
         psSeedDecryptBlock(buf[0], buf[1], &skey);
-        if (memcmp(buf[0], tests[x].ct, 16) || memcmp(buf[1], tests[x].pt, 16))
+        if (Memcmp(buf[0], tests[x].ct, 16) || Memcmp(buf[1], tests[x].pt, 16))
         {
             _psTraceInt("SEED failure: test %d failed\n", x);
             return -1;
@@ -1992,7 +2827,7 @@ int32 psSeedTest(void)
         psSeedClear(&skey);
     }
 # endif
-    _psTrace("	SEED unimplemented\n");
+    _psTrace("  SEED unimplemented\n");
 
     return PS_SUCCESS;
 }
@@ -2030,12 +2865,12 @@ int32  psSha1Test(void)
 
     for (i = 0; i < (int32) (sizeof(tests) / sizeof(tests[0])); i++)
     {
-        _psTraceInt("	SHA-1 known vector test %d... ", i + 1);
+        _psTraceInt("   SHA-1 known vector test %d... ", i + 1);
         psSha1PreInit(&md);
         psSha1Init(&md);
-        psSha1Update(&md, (unsigned char *) tests[i].msg, (uint32) strlen(tests[i].msg));
+        psSha1Update(&md, (unsigned char *) tests[i].msg, (uint32) Strlen(tests[i].msg));
         psSha1Final(&md, tmp);
-        if (memcmp(tmp, tests[i].hash, SHA1_HASHLEN) != 0)
+        if (Memcmp(tmp, tests[i].hash, SHA1_HASHLEN) != 0)
         {
             _psTrace("FAILED: mem compare failure\n");
             return -1;
@@ -2099,86 +2934,96 @@ int32 psSha256Test2(void)
         array3[i] = 21 + (i * 8192) % 227;
     }
 
-    memset(hash, 0, sizeof(hash));
+    Memset(hash, 0, sizeof(hash));
     psSha256PreInit(&md); /* Pre-init before first use. */
     psSha256Init(&md);
     psSha256Update(&md, array, 65536);
     psSha256Final(&md, hash);
 
-    if (memcmp(hash, expect, 32) != 0)
+    if (Memcmp(hash, expect, 32) != 0)
     {
-        abort();
+        Abort();
         _psTrace("FAILED: memcmp\n");
         return -1;
     }
 
     memset(hash, 0, sizeof(hash));
+    psSha256Standalone(array, 65536, hash);
+
+    if (Memcmp(hash, expect, 32) != 0)
+    {
+        _psTrace("FAILED: psSha256Standalone KAT mismatch.\n");
+        Abort();
+        return -1;
+    }
+
+    Memset(hash, 0, sizeof(hash));
     psSha256PreInit(&md2); /* Pre-init before first use. */
     psSha256Init(&md2);
     psSha256Update(&md2, array2, 65536);
     psSha256Final(&md2, hash);
 
-    if (memcmp(hash, expect2, 32) != 0)
+    if (Memcmp(hash, expect2, 32) != 0)
     {
-        abort();
+        Abort();
         _psTrace("FAILED: memcmp\n");
         return -1;
     }
 
-    memset(hash, 0, sizeof(hash));
+    Memset(hash, 0, sizeof(hash));
     psSha256PreInit(&md3); /* Pre-init before first use. */
     psSha256Init(&md3);
     psSha256Update(&md3, array3, 65536);
     psSha256Final(&md3, hash);
 
-    if (memcmp(hash, expect3, 32) != 0)
+    if (Memcmp(hash, expect3, 32) != 0)
     {
-        abort();
+        Abort();
         _psTrace("FAILED: memcmp\n");
         return -1;
     }
 
     /* Then perform hashes with two blocks and serially, using same context. */
-    memset(hash, 0, sizeof(hash));
+    Memset(hash, 0, sizeof(hash));
     psSha256Init(&md);
     psSha256Update(&md, array, 32768);
     psSha256Update(&md, array + 32768, 32768);
     psSha256Final(&md, hash);
 
-    if (memcmp(hash, expect, 32) != 0)
+    if (Memcmp(hash, expect, 32) != 0)
     {
-        _psTrace("FAILED: memcmp (two part)\n");
+        _psTrace("FAILED: Memcmp (two part)\n");
         return -1;
     }
 
-    memset(hash, 0, sizeof(hash));
+    Memset(hash, 0, sizeof(hash));
     psSha256Init(&md);
     psSha256Update(&md, array2, 32768);
     psSha256Update(&md, array2 + 32768, 32768);
     psSha256Final(&md, hash);
 
-    if (memcmp(hash, expect2, 32) != 0)
+    if (Memcmp(hash, expect2, 32) != 0)
     {
-        _psTrace("FAILED: memcmp (two part)\n");
+        _psTrace("FAILED: Memcmp (two part)\n");
         return -1;
     }
 
-    memset(hash, 0, sizeof(hash));
+    Memset(hash, 0, sizeof(hash));
     psSha256Init(&md);
     psSha256Update(&md, array3, 32768);
     psSha256Update(&md, array3 + 32768, 32768);
     psSha256Final(&md, hash);
 
-    if (memcmp(hash, expect3, 32) != 0)
+    if (Memcmp(hash, expect3, 32) != 0)
     {
-        _psTrace("FAILED: memcmp (two part)\n");
+        _psTrace("FAILED: Memcmp (two part)\n");
         return -1;
     }
 
     /* Try going back within the same context: First initialize and update
        and then initialize and update again. */
 
-    memset(hash, 0, sizeof(hash));
+    Memset(hash, 0, sizeof(hash));
     psSha256Init(&md);
     psSha256Update(&md, array, 32768);
     psSha256Init(&md);
@@ -2186,9 +3031,9 @@ int32 psSha256Test2(void)
     psSha256Update(&md, array3 + 32768, 32768);
     psSha256Final(&md, hash);
 
-    if (memcmp(hash, expect3, 32) != 0)
+    if (Memcmp(hash, expect3, 32) != 0)
     {
-        _psTrace("FAILED: memcmp (two part)\n");
+        _psTrace("FAILED: Memcmp (two part)\n");
         return -1;
     }
 
@@ -2202,25 +3047,25 @@ int32 psSha256Test2(void)
 
     psSha256Final(&md, hash);
 
-    if (memcmp(hash, expect, 32) != 0)
+    if (Memcmp(hash, expect, 32) != 0)
     {
-        _psTrace("FAILED: memcmp (single part; parallel contexts)\n");
+        _psTrace("FAILED: Memcmp (single part; parallel contexts)\n");
         return -1;
     }
 
     psSha256Final(&md2, hash);
 
-    if (memcmp(hash, expect2, 32) != 0)
+    if (Memcmp(hash, expect2, 32) != 0)
     {
-        _psTrace("FAILED: memcmp (single part; parallel contexts)\n");
+        _psTrace("FAILED: Memcmp (single part; parallel contexts)\n");
         return -1;
     }
 
     psSha256Final(&md3, hash);
 
-    if (memcmp(hash, expect3, 32) != 0)
+    if (Memcmp(hash, expect3, 32) != 0)
     {
-        _psTrace("FAILED: memcmp (single part; parallel contexts)\n");
+        _psTrace("FAILED: Memcmp (single part; parallel contexts)\n");
         return -1;
     }
 
@@ -2240,25 +3085,25 @@ int32 psSha256Test2(void)
 
     psSha256Final(&md, hash);
 
-    if (memcmp(hash, expect, 32) != 0)
+    if (Memcmp(hash, expect, 32) != 0)
     {
-        _psTrace("FAILED: memcmp (single part; parallel contexts)\n");
+        _psTrace("FAILED: Memcmp (single part; parallel contexts)\n");
         return -1;
     }
 
     psSha256Final(&md2, hash);
 
-    if (memcmp(hash, expect2, 32) != 0)
+    if (Memcmp(hash, expect2, 32) != 0)
     {
-        _psTrace("FAILED: memcmp (single part; parallel contexts)\n");
+        _psTrace("FAILED: Memcmp (single part; parallel contexts)\n");
         return -1;
     }
 
     psSha256Final(&md3, hash);
 
-    if (memcmp(hash, expect3, 32) != 0)
+    if (Memcmp(hash, expect3, 32) != 0)
     {
-        _psTrace("FAILED: memcmp (single part; parallel contexts)\n");
+        _psTrace("FAILED: Memcmp (single part; parallel contexts)\n");
         return -1;
     }
 
@@ -2289,25 +3134,25 @@ int32 psSha256Test2(void)
 
     psSha256Final(&md, hash);
 
-    if (memcmp(hash, expect, 32) != 0)
+    if (Memcmp(hash, expect, 32) != 0)
     {
-        _psTrace("FAILED: memcmp (single part; parallel contexts)\n");
+        _psTrace("FAILED: Memcmp (single part; parallel contexts)\n");
         return -1;
     }
 
     psSha256Final(&md2, hash);
 
-    if (memcmp(hash, expect2, 32) != 0)
+    if (Memcmp(hash, expect2, 32) != 0)
     {
-        _psTrace("FAILED: memcmp (single part; parallel contexts)\n");
+        _psTrace("FAILED: Memcmp (single part; parallel contexts)\n");
         return -1;
     }
 
     psSha256Final(&md3, hash);
 
-    if (memcmp(hash, expect3, 32) != 0)
+    if (Memcmp(hash, expect3, 32) != 0)
     {
-        _psTrace("FAILED: memcmp (single part; parallel contexts)\n");
+        _psTrace("FAILED: Memcmp (single part; parallel contexts)\n");
         return -1;
     }
 
@@ -2316,13 +3161,13 @@ int32 psSha256Test2(void)
     psSha256Update(&md, array3, 32768);
     psSha256Sync(&md, 0); /* Need to synchronize before it is allowed to
                              copy, zeroize or free md memory. */
-    memcpy(&md3, &md, sizeof(md3));
+    Memcpy(&md3, &md, sizeof(md3));
     psSha256Update(&md3, array3 + 32768, 32768);
     psSha256Final(&md3, hash);
 
-    if (memcmp(hash, expect3, 32) != 0)
+    if (Memcmp(hash, expect3, 32) != 0)
     {
-        _psTrace("FAILED: memcmp (single part; parallel contexts)\n");
+        _psTrace("FAILED: Memcmp (single part; parallel contexts)\n");
         return -1;
     }
 
@@ -2331,13 +3176,13 @@ int32 psSha256Test2(void)
     psSha256Update(&md, array2, 32768);
     psSha256Sync(&md, 0); /* Need to synchronize before it is allowed to
                              copy, zeroize or free md memory. */
-    memcpy(&md3, &md, sizeof(md3));
+    Memcpy(&md3, &md, sizeof(md3));
     psSha256Update(&md3, array2 + 32768, 32768);
     psSha256Final(&md3, hash);
 
-    if (memcmp(hash, expect2, 32) != 0)
+    if (Memcmp(hash, expect2, 32) != 0)
     {
-        _psTrace("FAILED: memcmp (single part; parallel contexts)\n");
+        _psTrace("FAILED: Memcmp (single part; parallel contexts)\n");
         return -1;
     }
 
@@ -2348,13 +3193,13 @@ int32 psSha256Test2(void)
     psSha256Sync(&md3, 0);
     psSha256Sync(&md, 0); /* Need to synchronize before it is allowed to
                              copy, zeroize or free md memory. */
-    memcpy(&md3, &md, sizeof(md3));
+    Memcpy(&md3, &md, sizeof(md3));
     psSha256Update(&md3, array2 + 32768, 32768);
     psSha256Final(&md3, hash);
 
-    if (memcmp(hash, expect2, 32) != 0)
+    if (Memcmp(hash, expect2, 32) != 0)
     {
-        _psTrace("FAILED: memcmp (single part; parallel contexts)\n");
+        _psTrace("FAILED: Memcmp (single part; parallel contexts)\n");
         return -1;
     }
 
@@ -2373,9 +3218,9 @@ int32 psSha256Test2(void)
     psSha256Update(&md3, array2 + 32768, 32768);
     psSha256Final(&md3, hash);
 
-    if (memcmp(hash, expect2, 32) != 0)
+    if (Memcmp(hash, expect2, 32) != 0)
     {
-        _psTrace("FAILED: memcmp (multi part; parallel contexts)\n");
+        _psTrace("FAILED: Memcmp (multi part; parallel contexts)\n");
         return -1;
     }
     psSha256Init(&md);
@@ -2394,9 +3239,9 @@ int32 psSha256Test2(void)
     psSha256Update(&md3, array2 + 32768, 32768);
     psSha256Final(&md3, hash);
 
-    if (memcmp(hash, expect2, 32) != 0)
+    if (Memcmp(hash, expect2, 32) != 0)
     {
-        _psTrace("FAILED: memcmp (multi part; parallel contexts)\n");
+        _psTrace("FAILED: Memcmp (multi part; parallel contexts)\n");
         return -1;
     }
     psSha256Init(&md);
@@ -2420,9 +3265,9 @@ int32 psSha256Test2(void)
     psSha256Update(&md3, array2 + 32768, 32768);
     psSha256Final(&md3, hash);
 
-    if (memcmp(hash, expect2, 32) != 0)
+    if (Memcmp(hash, expect2, 32) != 0)
     {
-        _psTrace("FAILED: memcmp (multi part; parallel contexts)\n");
+        _psTrace("FAILED: Memcmp (multi part; parallel contexts)\n");
         return -1;
     }
 
@@ -2431,7 +3276,7 @@ int32 psSha256Test2(void)
     psSha256Update(&md, array, 32768);
     psSha256Sync(&md, 0); /* Need to synchronize before it is allowed to
                              copy, zeroize or free md memory. */
-    memset(&md, 0, sizeof(md));
+    Memset(&md, 0, sizeof(md));
 
     /* Note: After memset it is needed to use some other contexts. */
     psSha256Init(&md2);
@@ -2448,9 +3293,9 @@ int32 psSha256Test2(void)
     psSha256Update(&md, array, 65536);
     psSha256Final(&md, hash);
 
-    if (memcmp(hash, expect, 32) != 0)
+    if (Memcmp(hash, expect, 32) != 0)
     {
-        _psTrace("FAILED: memcmp (memset in between)\n");
+        _psTrace("FAILED: Memcmp (memset in between)\n");
         return -1;
     }
 
@@ -2460,9 +3305,9 @@ int32 psSha256Test2(void)
 
     /* Sync is ok for zeroized memory not used as context and initialized
        or finalized context. */
-    memset(&md, 0, sizeof(md));
+    Memset(&md, 0, sizeof(md));
     psSha256Sync(&md, 0);
-    memset(&md, 0, sizeof(md));
+    Memset(&md, 0, sizeof(md));
     psSha256Init(&md);
     psSha256Sync(&md, 0);
     psSha256Init(&md);
@@ -2470,7 +3315,7 @@ int32 psSha256Test2(void)
     psSha256Final(&md, hash);
     psSha256Sync(&md, 0);
 
-    if (memcmp(hash, expect, 32) != 0)
+    if (Memcmp(hash, expect, 32) != 0)
     {
         _psTrace("FAILED: memcmp\n");
         return -1;
@@ -2535,18 +3380,18 @@ int32 psSha256Test(void)
 
     for (i = 0; i < (int32) (sizeof(tests) / sizeof(tests[0])); i++)
     {
-        _psTraceInt("	SHA-256 known vector test %d... ", i + 1);
+        _psTraceInt("   SHA-256 known vector test %d... ", i + 1);
         psSha256PreInit(&md);
         psSha256Init(&md);
         psSha256Update(&md, (unsigned char *) tests[i].msg,
-            (uint32) strlen(tests[i].msg));
+            (uint32) Strlen(tests[i].msg));
         if (tests[i].moreMsg != NULL)
         {
             psSha256Update(&md, (unsigned char *) tests[i].moreMsg,
-                (uint32) strlen(tests[i].moreMsg));
+                (uint32) Strlen(tests[i].moreMsg));
         }
         psSha256Final(&md, tmp);
-        if (memcmp(tmp, tests[i].hash, SHA256_HASHLEN) != 0)
+        if (Memcmp(tmp, tests[i].hash, SHA256_HASHLEN) != 0)
         {
             _psTrace("FAILED: memcmp\n");
             return -1;
@@ -2557,7 +3402,7 @@ int32 psSha256Test(void)
         }
     }
 
-    _psTrace("	SHA-256 robustness test... ");
+    _psTrace("  SHA-256 robustness test... ");
     if (psSha256Test2() == PS_SUCCESS)
     {
         _psTrace("PASSED\n");
@@ -2602,11 +3447,11 @@ int32 psSha224Test(void)
 
     for (i = 0; i < (int) (sizeof(tests) / sizeof(tests[0])); i++)
     {
-        _psTraceInt("	SHA-224 known vector test %d... ", i + 1);
+        _psTraceInt("   SHA-224 known vector test %d... ", i + 1);
         psSha224Init(&md);
-        psSha224Update(&md, (unsigned char *) tests[i].msg, (unsigned long) strlen(tests[i].msg));
+        psSha224Update(&md, (unsigned char *) tests[i].msg, (unsigned long) Strlen(tests[i].msg));
         psSha224Final(&md, tmp);
-        if (memcmp(tmp, tests[i].hash, 28) != 0)
+        if (Memcmp(tmp, tests[i].hash, 28) != 0)
         {
             _psTrace("FAILED: memcmp\n");
             return -1;
@@ -2656,12 +3501,12 @@ int32 psSha512Test(void)
 
     for (i = 0; i < (int) (sizeof(tests) / sizeof(tests[0])); i++)
     {
-        _psTraceInt("	SHA-512 known vector test %d... ", i + 1);
+        _psTraceInt("   SHA-512 known vector test %d... ", i + 1);
         psSha512PreInit(&md);
         psSha512Init(&md);
-        psSha512Update(&md, (unsigned char *) tests[i].msg, (uint32) strlen(tests[i].msg));
+        psSha512Update(&md, (unsigned char *) tests[i].msg, (uint32) Strlen(tests[i].msg));
         psSha512Final(&md, tmp);
-        if (memcmp(tmp, tests[i].hash, SHA512_HASHLEN) != 0)
+        if (Memcmp(tmp, tests[i].hash, SHA512_HASHLEN) != 0)
         {
             _psTrace("FAILED: memcmp\n");
             return -1;
@@ -2702,12 +3547,12 @@ int32 psSha384Test(void)
 
     for (i = 0; i < (int) (sizeof(tests) / sizeof(tests[0])); i++)
     {
-        _psTraceInt("	SHA-384 known vector test %d... ", i + 1);
+        _psTraceInt("   SHA-384 known vector test %d... ", i + 1);
         psSha384PreInit(&md);
         psSha384Init(&md);
-        psSha384Update(&md, (unsigned char *) tests[i].msg, (uint32) strlen(tests[i].msg));
+        psSha384Update(&md, (unsigned char *) tests[i].msg, (uint32) Strlen(tests[i].msg));
         psSha384Final(&md, tmp);
-        if (memcmp(tmp, tests[i].hash, SHA384_HASHLEN) != 0)
+        if (Memcmp(tmp, tests[i].hash, SHA384_HASHLEN) != 0)
         {
             _psTrace("FAILED: memcmp\n");
             return -1;
@@ -2759,12 +3604,12 @@ int32  psMd5Sha1Test(void)
 
     for (i = 0; i < (int32) (sizeof(tests) / sizeof(tests[0])); i++)
     {
-        _psTraceInt("	MD5SHA1 known vector test %d... ", i + 1);
+        _psTraceInt("   MD5SHA1 known vector test %d... ", i + 1);
         psMd5Sha1PreInit(&md);
         psMd5Sha1Init(&md);
-        psMd5Sha1Update(&md, (unsigned char *) tests[i].msg, (uint32) strlen(tests[i].msg));
+        psMd5Sha1Update(&md, (unsigned char *) tests[i].msg, (uint32) Strlen(tests[i].msg));
         psMd5Sha1Final(&md, tmp);
-        if (memcmp(tmp, tests[i].hash, 36) != 0)
+        if (Memcmp(tmp, tests[i].hash, 36) != 0)
         {
             _psTrace("FAILED: mem compare failure\n");
             return -1;
@@ -2818,7 +3663,7 @@ int32 psMd5Test(void)
 
     for (i = 0; tests[i].msg != NULL; i++)
     {
-        _psTraceInt("	MD5 known vector test %d... ", i + 1);
+        _psTraceInt("   MD5 known vector test %d... ", i + 1);
         psMd5PreInit(&md);
         if (psMd5Init(&md) < 0)
         {
@@ -2826,9 +3671,9 @@ int32 psMd5Test(void)
             return -1;
         }
         psMd5Update(&md, (unsigned char *) tests[i].msg,
-            (uint32) strlen(tests[i].msg));
+            (uint32) Strlen(tests[i].msg));
         psMd5Final(&md, tmp);
-        if (memcmp(tmp, tests[i].hash, MD5_HASHLEN) != 0)
+        if (Memcmp(tmp, tests[i].hash, MD5_HASHLEN) != 0)
         {
             _psTrace("FAILED: memcmp\n");
             return -1;
@@ -2877,12 +3722,12 @@ int32 psMd4Test(void)
 
     for (i = 0; i < (int32) (sizeof(cases) / sizeof(cases[0])); i++)
     {
-        _psTraceInt("	MD4 known vector test %d... ", i + 1);
+        _psTraceInt("   MD4 known vector test %d... ", i + 1);
         psMd4Init(&md);
         psMd4Update(&md, (unsigned char *) cases[i].input,
-            (uint32) strlen(cases[i].input));
+            (uint32) Strlen(cases[i].input));
         psMd4Final(&md, digest);
-        if (memcmp(digest, cases[i].digest, 16) != 0)
+        if (Memcmp(digest, cases[i].digest, 16) != 0)
         {
             _psTrace("FAILED: memcmp\n");
             return -1;
@@ -2929,11 +3774,11 @@ int32 psMd2Test(void)
 
     for (i = 0; i < (int32) (sizeof(tests) / sizeof(tests[0])); i++)
     {
-        _psTraceInt("	MD2 known vector test %d... ", i + 1);
+        _psTraceInt("   MD2 known vector test %d... ", i + 1);
         psMd2PreInit(&md);
         psMd2Init(&md);
         if (psMd2Update(&md, (unsigned char *) tests[i].msg,
-                (uint32) strlen(tests[i].msg)) < 0)
+                (uint32) Strlen(tests[i].msg)) < 0)
         {
             _psTrace("FAILED: psMd2Update\n");
             return -1;
@@ -2943,7 +3788,7 @@ int32 psMd2Test(void)
             _psTrace("FAILED: psMd2Final\n");
             return -1;
         }
-        if (memcmp(buf, tests[i].md, 16) != 0)
+        if (Memcmp(buf, tests[i].md, 16) != 0)
         {
             _psTrace("FAILED: memcmp\n");
             return -1;
@@ -2971,6 +3816,7 @@ typedef void pkaCmdInfo_t;
 #  include "../../testkeys/RSA/3072_RSA_KEY.h"
 #  include "../../testkeys/RSA/4096_RSA.h"
 #  include "../../testkeys/RSA/4096_RSA_KEY.h"
+#  include "../../testkeys/RSA/2048_RSA_PUB_pem.h"
 
 struct
 {
@@ -2983,6 +3829,122 @@ struct
     { 128, RSA1024KEY, RSA1024, sizeof(RSA1024KEY), sizeof(RSA1024) },
     { 256, RSA2048KEY, RSA2048, sizeof(RSA2048KEY), sizeof(RSA2048) },
     { 512, RSA4096KEY, RSA4096, sizeof(RSA4096KEY), sizeof(RSA4096) }
+};
+
+static unsigned char RSA2048KEY_E3[] =
+{
+  0x30, 0x82, 0x04, 0xa3, 0x02, 0x01, 0x00, 0x02, 0x82, 0x01, 0x01, 0x00,
+  0xb5, 0x7e, 0x18, 0xf8, 0x8e, 0xaa, 0xa2, 0x6f, 0x3a, 0xb4, 0xeb, 0xe8,
+  0xa4, 0xd3, 0x10, 0xa0, 0x60, 0x85, 0xc7, 0x7d, 0xe6, 0x4b, 0x75, 0x1d,
+  0x71, 0x12, 0x6a, 0xeb, 0x3d, 0x43, 0x74, 0x86, 0xb9, 0xa8, 0x50, 0x61,
+  0x9c, 0xa0, 0x3d, 0xeb, 0x56, 0x5e, 0xb2, 0xbc, 0xd2, 0x95, 0xd4, 0x5e,
+  0xd7, 0x18, 0x50, 0xa3, 0x5b, 0xc0, 0x92, 0x9d, 0xa0, 0x03, 0xac, 0x73,
+  0x62, 0xe9, 0x50, 0x47, 0x9c, 0xa8, 0x69, 0x7a, 0xe0, 0xb9, 0x1e, 0x36,
+  0x71, 0x8d, 0x05, 0x3c, 0x77, 0x12, 0x7a, 0x30, 0xab, 0x8f, 0x03, 0x5e,
+  0xb7, 0xea, 0x90, 0x55, 0xf8, 0xa1, 0x2f, 0xb3, 0x97, 0x33, 0xf2, 0x80,
+  0x30, 0x75, 0x4c, 0x90, 0x4f, 0x94, 0x04, 0x2a, 0x88, 0xfa, 0xcd, 0x00,
+  0x0b, 0x52, 0x50, 0x22, 0x04, 0x76, 0x88, 0xc5, 0xc4, 0x81, 0xf2, 0x19,
+  0x26, 0x0d, 0xb6, 0xfe, 0x96, 0x5e, 0x4b, 0x36, 0x67, 0x79, 0x3a, 0x11,
+  0x78, 0x64, 0xa5, 0xbb, 0xf4, 0xc4, 0x9f, 0x8a, 0xef, 0xa2, 0x3e, 0x23,
+  0x67, 0x46, 0xd9, 0x47, 0xd3, 0xcf, 0x5b, 0x9a, 0x9b, 0x38, 0xe9, 0x8c,
+  0xf2, 0xa2, 0x08, 0x6c, 0xbf, 0xfa, 0x01, 0x24, 0x97, 0xf4, 0x3a, 0x96,
+  0x9c, 0xd7, 0x56, 0xba, 0x3a, 0xa4, 0x4e, 0x18, 0x53, 0xa7, 0x7a, 0xe2,
+  0x11, 0x58, 0x9e, 0xa4, 0x05, 0xba, 0xf9, 0x2a, 0x20, 0x68, 0xb7, 0x25,
+  0x0b, 0xbe, 0xad, 0xb7, 0x97, 0x98, 0x87, 0xb9, 0xae, 0x46, 0x0d, 0x5a,
+  0x80, 0x01, 0xf8, 0x60, 0xca, 0x41, 0x9a, 0x00, 0x2f, 0x21, 0x0d, 0x14,
+  0x70, 0x73, 0xb9, 0xb0, 0x98, 0x70, 0x76, 0x4f, 0x23, 0x4f, 0x3c, 0x8c,
+  0x05, 0x34, 0xd6, 0x04, 0x7e, 0x01, 0x6b, 0x64, 0x90, 0xea, 0xe4, 0x3c,
+  0xbe, 0x0d, 0xa4, 0xed, 0x2e, 0xe9, 0xd4, 0x7b, 0x8a, 0xe1, 0xc5, 0x06,
+  0x6b, 0x8c, 0xa6, 0x53, 0x02, 0x01, 0x03, 0x02, 0x82, 0x01, 0x00, 0x78,
+  0xfe, 0xbb, 0x50, 0x5f, 0x1c, 0x6c, 0x4a, 0x27, 0x23, 0x47, 0xf0, 0x6d,
+  0xe2, 0x0b, 0x15, 0x95, 0xae, 0x84, 0xfe, 0x99, 0x87, 0xa3, 0x68, 0xf6,
+  0x0c, 0x47, 0x47, 0x7e, 0x2c, 0xf8, 0x59, 0xd1, 0x1a, 0xe0, 0x41, 0x13,
+  0x15, 0x7e, 0x9c, 0xe4, 0x3f, 0x21, 0xd3, 0x37, 0x0e, 0x8d, 0x94, 0x8f,
+  0x65, 0x8b, 0x17, 0x92, 0x80, 0x61, 0xbe, 0x6a, 0xad, 0x1d, 0xa2, 0x41,
+  0xf0, 0xe0, 0x2f, 0xbd, 0xc5, 0x9b, 0xa7, 0x40, 0x7b, 0x69, 0x79, 0xa1,
+  0x08, 0xae, 0x28, 0x4f, 0x61, 0xa6, 0xcb, 0x1d, 0x0a, 0x02, 0x3f, 0x25,
+  0x47, 0x0a, 0xe3, 0xfb, 0x16, 0x1f, 0xcd, 0x0f, 0x77, 0xf7, 0x00, 0x20,
+  0x4e, 0x33, 0x0a, 0xdf, 0xb8, 0x02, 0xc7, 0x05, 0xfc, 0x88, 0xaa, 0xb2,
+  0x36, 0xe0, 0x16, 0xad, 0xa4, 0x5b, 0x2e, 0x83, 0x01, 0x4c, 0x10, 0xc4,
+  0x09, 0x24, 0xa9, 0xb9, 0x94, 0x32, 0x23, 0x25, 0x8f, 0x56, 0x3d, 0x0e,
+  0xcf, 0xa3, 0x60, 0xfd, 0x19, 0xca, 0x22, 0x4e, 0x8b, 0xe1, 0x02, 0x4e,
+  0x7b, 0xd4, 0xb7, 0x0a, 0x67, 0x3d, 0x64, 0x85, 0x08, 0x45, 0x52, 0x0f,
+  0x50, 0x3b, 0x15, 0x8d, 0x87, 0x4d, 0x95, 0x7d, 0xb9, 0xb1, 0x10, 0x99,
+  0x21, 0xef, 0x23, 0xca, 0xfd, 0x2a, 0x94, 0xbe, 0x8a, 0xca, 0xa2, 0x0d,
+  0x32, 0x00, 0xc0, 0xf2, 0x47, 0x13, 0xa4, 0x83, 0xa6, 0x84, 0x12, 0xfc,
+  0x86, 0xfd, 0xb9, 0x3a, 0xbe, 0xbb, 0x3b, 0xc1, 0xbf, 0x88, 0x45, 0xba,
+  0x80, 0x5b, 0xf5, 0xdc, 0xfc, 0x57, 0x6f, 0x2d, 0xe2, 0x40, 0x41, 0xe5,
+  0x19, 0x71, 0xbc, 0x8d, 0xd2, 0xe3, 0x1e, 0x1e, 0x21, 0x5e, 0x0b, 0x50,
+  0xe8, 0xfd, 0x43, 0x62, 0xc2, 0x7d, 0xe9, 0xd1, 0x9d, 0xbc, 0x87, 0xfc,
+  0x74, 0xfc, 0xcf, 0xb3, 0x1d, 0xd5, 0x70, 0xcc, 0x04, 0x73, 0x25, 0xed,
+  0x40, 0x37, 0x2b, 0x02, 0x81, 0x81, 0x00, 0xda, 0x34, 0xb4, 0x0e, 0x0e,
+  0x9a, 0xf1, 0xba, 0xda, 0xe5, 0x4f, 0x70, 0xdf, 0x5c, 0xe3, 0x80, 0xb1,
+  0xcc, 0x85, 0xb8, 0x6c, 0xb2, 0x92, 0xbb, 0x5d, 0x63, 0x57, 0x02, 0x0f,
+  0xb2, 0xe6, 0x05, 0x26, 0x4d, 0x84, 0x2c, 0xc0, 0x67, 0x23, 0xd6, 0xae,
+  0xe5, 0x02, 0x67, 0xe6, 0xcf, 0x51, 0xc5, 0x40, 0xf5, 0xa8, 0x32, 0x52,
+  0xe4, 0xf6, 0x23, 0x52, 0x46, 0x96, 0x58, 0x8d, 0x8b, 0x27, 0xca, 0xc9,
+  0x44, 0x30, 0xc8, 0x98, 0x3a, 0x65, 0x56, 0x57, 0xed, 0x7a, 0xe7, 0x93,
+  0xf5, 0xa2, 0xcf, 0x11, 0x41, 0x66, 0xdd, 0xdc, 0x3b, 0x3a, 0x01, 0x9a,
+  0xa0, 0x4c, 0x58, 0x19, 0x3d, 0x9b, 0x36, 0x99, 0x31, 0xb0, 0xc9, 0x60,
+  0xb5, 0x6e, 0xc0, 0x8a, 0x71, 0x00, 0xd9, 0x33, 0x1d, 0x10, 0xef, 0x15,
+  0xbe, 0xb9, 0x1b, 0x8c, 0x32, 0x5c, 0x09, 0x10, 0x3b, 0x0b, 0x02, 0x0f,
+  0xb2, 0x43, 0x33, 0x02, 0x81, 0x81, 0x00, 0xd4, 0xed, 0x84, 0xa7, 0xd3,
+  0x92, 0x3e, 0xef, 0x9e, 0x38, 0xa0, 0xe6, 0x9a, 0x73, 0x89, 0x1f, 0x3f,
+  0xc0, 0x94, 0x7c, 0xd7, 0x81, 0xec, 0xc8, 0x76, 0x49, 0x2a, 0x8f, 0xcb,
+  0xf6, 0xc9, 0xc7, 0x45, 0x61, 0x88, 0x97, 0x9a, 0xf6, 0x8d, 0x27, 0x08,
+  0x3f, 0x6d, 0x9c, 0xa3, 0x59, 0x3c, 0x73, 0xf4, 0xe1, 0xa2, 0xbc, 0xaa,
+  0xa8, 0xa7, 0x5f, 0x48, 0x09, 0xc5, 0x5a, 0xcd, 0x63, 0xc9, 0x3d, 0xc7,
+  0xb0, 0x00, 0x59, 0x27, 0x40, 0x09, 0x89, 0xb3, 0xb9, 0x46, 0x0a, 0x54,
+  0x4b, 0xcb, 0xa0, 0xed, 0x85, 0xaf, 0xfb, 0x8e, 0x12, 0x72, 0xaf, 0xfe,
+  0x2d, 0x42, 0xbd, 0xaa, 0x76, 0x86, 0x6b, 0x5c, 0xeb, 0x7e, 0xb1, 0xab,
+  0x21, 0xeb, 0x5e, 0xdf, 0x6c, 0xad, 0xac, 0xa3, 0x61, 0x38, 0x81, 0xad,
+  0x9f, 0x70, 0x9a, 0x16, 0x0a, 0xb8, 0x49, 0x48, 0xa0, 0x0d, 0x4b, 0x77,
+  0xfa, 0x10, 0x61, 0x02, 0x81, 0x81, 0x00, 0x91, 0x78, 0x78, 0x09, 0x5f,
+  0x11, 0xf6, 0x7c, 0x91, 0xee, 0x34, 0xf5, 0xea, 0x3d, 0xed, 0x00, 0x76,
+  0x88, 0x59, 0x25, 0x9d, 0xcc, 0x61, 0xd2, 0x3e, 0x42, 0x3a, 0x01, 0x5f,
+  0xcc, 0x99, 0x58, 0xc4, 0x33, 0xad, 0x73, 0x2a, 0xef, 0x6d, 0x39, 0xc9,
+  0xee, 0x01, 0x9a, 0x99, 0xdf, 0x8b, 0xd8, 0xd5, 0xf9, 0x1a, 0xcc, 0x37,
+  0x43, 0x4e, 0xc2, 0x36, 0xd9, 0xb9, 0x90, 0x5e, 0x5c, 0xc5, 0x31, 0xdb,
+  0x82, 0xcb, 0x30, 0x65, 0x7c, 0x43, 0x8e, 0xe5, 0x48, 0xfc, 0x9a, 0x62,
+  0xa3, 0xc1, 0xdf, 0x60, 0xd6, 0x44, 0x93, 0xe8, 0x27, 0x7c, 0x01, 0x11,
+  0xc0, 0x32, 0xe5, 0x66, 0x29, 0x12, 0x24, 0x66, 0x21, 0x20, 0x86, 0x40,
+  0x78, 0xf4, 0x80, 0x5c, 0x4b, 0x55, 0xe6, 0x22, 0x13, 0x60, 0x9f, 0x63,
+  0xd4, 0x7b, 0x67, 0xb2, 0xcc, 0x3d, 0x5b, 0x60, 0x27, 0x5c, 0xac, 0x0a,
+  0x76, 0xd7, 0x77, 0x02, 0x81, 0x81, 0x00, 0x8d, 0xf3, 0xad, 0xc5, 0x37,
+  0xb6, 0xd4, 0x9f, 0xbe, 0xd0, 0x6b, 0x44, 0x66, 0xf7, 0xb0, 0xbf, 0x7f,
+  0xd5, 0xb8, 0x53, 0x3a, 0x56, 0x9d, 0xda, 0xf9, 0x86, 0x1c, 0x5f, 0xdd,
+  0x4f, 0x31, 0x2f, 0x83, 0x96, 0x5b, 0x0f, 0xbc, 0xa4, 0x5e, 0x1a, 0x05,
+  0x7f, 0x9e, 0x68, 0x6c, 0xe6, 0x28, 0x4d, 0x4d, 0xeb, 0xc1, 0xd3, 0x1c,
+  0x70, 0x6f, 0x94, 0xda, 0xb1, 0x2e, 0x3c, 0x88, 0xed, 0x30, 0xd3, 0xda,
+  0x75, 0x55, 0x90, 0xc4, 0xd5, 0x5b, 0xb1, 0x22, 0x7b, 0x84, 0x06, 0xe2,
+  0xdd, 0x32, 0x6b, 0x49, 0x03, 0xca, 0xa7, 0xb4, 0x0c, 0x4c, 0x75, 0x54,
+  0x1e, 0x2c, 0x7e, 0x71, 0xa4, 0x59, 0x9c, 0xe8, 0x9c, 0xff, 0x21, 0x1c,
+  0xc1, 0x47, 0x94, 0x94, 0xf3, 0x1e, 0x73, 0x17, 0x96, 0x25, 0xab, 0xc9,
+  0x14, 0xf5, 0xbc, 0x0e, 0xb1, 0xd0, 0x30, 0xdb, 0x15, 0x5e, 0x32, 0x4f,
+  0xfc, 0x0a, 0xeb, 0x02, 0x81, 0x81, 0x00, 0x87, 0xa9, 0xdc, 0x75, 0x36,
+  0x73, 0x1e, 0xac, 0x7d, 0xcc, 0x73, 0x64, 0x29, 0xca, 0xf3, 0x74, 0x08,
+  0xec, 0x25, 0x68, 0x2d, 0x9e, 0x8a, 0x78, 0x11, 0x6b, 0x0e, 0xef, 0xd1,
+  0xba, 0x10, 0x54, 0x06, 0xda, 0xf2, 0x41, 0xb1, 0xc2, 0xd3, 0x96, 0x70,
+  0x35, 0x87, 0xd9, 0x48, 0x62, 0x88, 0xd6, 0x5a, 0x86, 0xf4, 0x4d, 0x07,
+  0x02, 0x1b, 0xe3, 0xea, 0xc4, 0xf0, 0xb5, 0x0c, 0xa1, 0x3b, 0x2b, 0xe8,
+  0x7d, 0xa3, 0xe1, 0x84, 0xac, 0x0e, 0x6a, 0x19, 0xb0, 0xda, 0x05, 0xc8,
+  0xf5, 0x36, 0xbb, 0xec, 0x67, 0x10, 0x3a, 0xcf, 0x37, 0x31, 0x27, 0xfe,
+  0x34, 0x67, 0xcf, 0x3c, 0xc2, 0x69, 0xda, 0x05, 0xa0, 0xc8, 0xdd, 0x02,
+  0x01, 0x86, 0xa1, 0xf9, 0x05, 0xa2, 0x48, 0x82, 0x20, 0xe8, 0xbc, 0x07,
+  0x89, 0x82, 0x67, 0x38, 0x4d, 0x85, 0xcc, 0x43, 0x27, 0xad, 0x35, 0x8a,
+  0xb8, 0x11, 0x1a
+};
+
+struct
+{
+    psSize_t size;                  /* Size of public key exponent in bytes */
+    const unsigned char *key;       /* PKCS#1 key string */
+    const unsigned char *cert;      /* X.509 cert string */
+    psSize_t keysize;               /* Length of PKCS#1 key string */
+    psSize_t certsize;              /* Length of X.509 cert string */
+} rsae3[1] =
+{
+    { 256, RSA2048KEY_E3, NULL, sizeof(RSA2048KEY_E3), 0 }
 };
 
 static int32 psRsaEncryptTest(void)
@@ -3005,31 +3967,36 @@ static int32 psRsaEncryptTest(void)
          i < sizeof(rsa) / sizeof(rsa[0]) && rsa[i].size >= (MIN_RSA_BITS / 8);
          i++)
     {
-        _psTraceInt("	%d bit test...", rsa[i].size * 8);
+        _psTraceInt("   %d bit test...", rsa[i].size * 8);
 
         /* Start with getting both key halfs from the same source */
         if (psRsaInitKey(pool, &privkey) < 0)
         {
             return -1;
         }
+#ifdef USE_PRIVATE_KEY_PARSING
         if (psRsaParsePkcs1PrivKey(pool, rsa[i].key, rsa[i].keysize, &privkey) < 0)
         {
             return -1;
         }
+#else
+        _psTrace("RSA failure: private key parse not supported.\n");
+        return -1;
+#endif
         psRsaEncryptPub(pool, &privkey, in, sizeof(in), out, rsa[i].size, pkaInfo);
         psRsaDecryptPriv(pool, &privkey, out, rsa[i].size, decrypted,
             sizeof(decrypted), pkaInfo);
-        if (memcmp(decrypted, "hello", 5) != 0)
+        if (Memcmp(decrypted, "hello", 5) != 0)
         {
             _psTrace("RSA failure: mem compare failure 1\n");
             psRsaClearKey(&privkey);
             continue;
         }
         psRsaClearKey(&privkey);
-        memset(decrypted, 0x0, sizeof(decrypted));
-        memset(out, 0x0, sizeof(out));
+        Memset(decrypted, 0x0, sizeof(decrypted));
+        Memset(out, 0x0, sizeof(out));
 
-#  ifdef USE_CERT_PARSE
+#  if defined(USE_CERT_PARSE) && defined(USE_PRIVATE_KEY_PARSING)
         /* Get the public key from the cert */
         psRsaInitKey(pool, &privkey);
         psRsaParsePkcs1PrivKey(pool, rsa[i].key, rsa[i].keysize, &privkey);
@@ -3038,7 +4005,7 @@ static int32 psRsaEncryptTest(void)
             rsa[i].size, pkaInfo);
         psRsaDecryptPriv(pool, &privkey, out, rsa[i].size, decrypted,
             sizeof(decrypted), pkaInfo);
-        if (memcmp(decrypted, "hello", 5) != 0)
+        if (Memcmp(decrypted, "hello", 5) != 0)
         {
             psRsaClearKey(&privkey);
             psX509FreeCert(cert);
@@ -3047,14 +4014,76 @@ static int32 psRsaEncryptTest(void)
         }
         psRsaClearKey(&privkey);
         psX509FreeCert(cert);
-        memset(decrypted, 0x0, sizeof(decrypted));
-        memset(out, 0x0, sizeof(out));
+        Memset(decrypted, 0x0, sizeof(decrypted));
+        Memset(out, 0x0, sizeof(out));
 #  endif /* USE_CERT_PARSE */
 
         _psTrace(" PASSED\n");
 
     } /* key loop */
 
+    return PS_SUCCESS;
+}
+
+int32 psRsaSignE3Test(void)
+{
+#ifdef MIN_RSA_PUBLIC_EXPONENT
+#if MIN_RSA_PUBLIC_EXPONENT == 3
+    psPool_t *pool = NULL;
+    unsigned char in[32] = "helloworldhelloworldhelloworld1";
+    unsigned char out[512];
+    unsigned char decrypted[32];
+    psRsaKey_t privkey;
+    pkaCmdInfo_t *pkaInfo;
+
+    int32_t rc;
+    int i;
+
+    pkaInfo = NULL;
+
+    for (i = 0;
+         i < sizeof(rsae3) / sizeof(rsae3[0]) &&
+             rsae3[i].size >= (MIN_RSA_BITS / 8);
+         i++)
+    {
+        _psTraceInt("   %d bit test (e=3)...", rsae3[i].size * 8);
+
+        psRsaInitKey(pool, &privkey);
+#  ifdef USE_PRIVATE_KEY_PARSING
+        psRsaParsePkcs1PrivKey(pool, rsae3[i].key, rsae3[i].keysize, &privkey);
+#  else
+        return -1;
+#  endif
+        if (psRsaEncryptPriv(pool, &privkey, in, sizeof(in), out, rsae3[i].size,
+                pkaInfo) < 0)
+        {
+            psRsaClearKey(&privkey);
+            return PS_FAILURE;
+        }
+
+        rc = psRsaDecryptPub(pool, &privkey, out, rsae3[i].size, decrypted,
+            sizeof(decrypted), pkaInfo);
+        if (rc < 0)
+        {
+            _psTraceInt(" psRsaDecryptPub failure (%d)\n", rc);
+            psRsaClearKey(&privkey);
+            return PS_FAILURE;
+        }
+        if (Memcmp(decrypted, in, sizeof(in)) != 0)
+        {
+            _psTraceStr("RSA failure: mem compare failure (%s)\n",
+                (const char *) decrypted);
+            psRsaClearKey(&privkey);
+            return PS_FAILURE;
+        }
+
+        psRsaClearKey(&privkey);
+        _psTrace(" PASSED\n");
+
+    } /* key loop */
+
+#endif /* MIN_RSA_PUBLIC_EXPONENT == 3 */
+#endif /* defined MIN_RSA_PUBLIC_EXPONENT */
     return PS_SUCCESS;
 }
 
@@ -3077,10 +4106,14 @@ static int32 psRsaSignTest(void)
          i < sizeof(rsa) / sizeof(rsa[0]) && rsa[i].size >= (MIN_RSA_BITS / 8);
          i++)
     {
-        _psTraceInt("	%d bit test...", rsa[i].size * 8);
+        _psTraceInt("   %d bit test...", rsa[i].size * 8);
 
         psRsaInitKey(pool, &privkey);
+#  ifdef USE_PRIVATE_KEY_PARSING
         psRsaParsePkcs1PrivKey(pool, rsa[i].key, rsa[i].keysize, &privkey);
+#  else
+        return -1;
+#  endif
         if (psRsaEncryptPriv(pool, &privkey, in, sizeof(in), out, rsa[i].size,
                 pkaInfo) < 0)
         {
@@ -3096,7 +4129,7 @@ static int32 psRsaSignTest(void)
             psRsaClearKey(&privkey);
             return PS_FAILURE;
         }
-        if (memcmp(decrypted, in, sizeof(in)) != 0)
+        if (Memcmp(decrypted, in, sizeof(in)) != 0)
         {
             _psTraceStr("RSA failure: mem compare failure (%s)\n",
                 (const char *) decrypted);
@@ -3109,7 +4142,143 @@ static int32 psRsaSignTest(void)
 
     } /* key loop */
 
+    return psRsaSignE3Test();
+}
+
+static int32 psRsaKeyFormatTests(void)
+{
+    unsigned char tbs[] = { 'm', 'y', 't', 'b', 's' };
+    psSizeL_t tbsLen = sizeof(tbs);
+    unsigned char hashTbs[MAX_HASH_SIZE] = {0};
+    psSize_t hashTbsLen = sizeof(hashTbs);
+    /*
+      echo -n "mytbs" \
+      |openssl dgst -binary -sha256 \
+      |openssl rsautl -inkey testkeys/RSA/2048_RSA_KEY.pem -sign \
+      |xxd -i
+    */
+    unsigned char expectedSig[] =
+    {
+        0x27, 0x05, 0x37, 0x60, 0x71, 0x8f, 0x96, 0x9c, 0xbc, 0xc7, 0x29, 0x65,
+        0xf5, 0xc7, 0x8e, 0xf4, 0x94, 0x8d, 0x2f, 0x23, 0xca, 0x88, 0xd1, 0x68,
+        0x16, 0x6b, 0xbe, 0x5b, 0x1c, 0x6a, 0x39, 0x59, 0xd0, 0x14, 0x77, 0x9c,
+        0x68, 0x7a, 0xab, 0x9c, 0x59, 0x19, 0x34, 0xaa, 0xe8, 0x52, 0x85, 0xc6,
+        0xef, 0x1c, 0xbe, 0x91, 0x0e, 0xfc, 0x93, 0x4c, 0xdb, 0x96, 0x82, 0x72,
+        0x7b, 0xc0, 0xdd, 0x4e, 0xcb, 0xf7, 0x24, 0xcc, 0xce, 0x2c, 0x52, 0x7c,
+        0xc3, 0x41, 0x0c, 0x07, 0xa4, 0xe1, 0x84, 0x61, 0xc0, 0x9c, 0xde, 0xda,
+        0x1b, 0x9b, 0x98, 0x9d, 0xc3, 0x0b, 0xc2, 0x25, 0x32, 0x6a, 0x15, 0x0b,
+        0xcc, 0x0f, 0x7b, 0x04, 0x1f, 0x7b, 0xc0, 0x25, 0x1b, 0x14, 0xca, 0x57,
+        0x95, 0x35, 0x25, 0xd5, 0xce, 0x63, 0xe5, 0xd6, 0x15, 0x32, 0x96, 0xd0,
+        0x0d, 0x13, 0x9d, 0x83, 0x80, 0x1f, 0xec, 0xc6, 0x71, 0x42, 0xee, 0x89,
+        0xa8, 0x2a, 0xc3, 0x1b, 0x72, 0x1c, 0xbb, 0x11, 0x88, 0x9c, 0x22, 0xd2,
+        0x49, 0x2e, 0xba, 0x84, 0xe6, 0x29, 0x88, 0x49, 0x24, 0x55, 0xc3, 0x97,
+        0xca, 0x4b, 0x73, 0xcd, 0xea, 0x21, 0x1f, 0x14, 0xab, 0xd4, 0x22, 0xb3,
+        0x63, 0x21, 0x3a, 0x7e, 0x76, 0xd9, 0xb2, 0x9a, 0xf8, 0xad, 0x43, 0x2a,
+        0xa2, 0x50, 0x09, 0x29, 0xeb, 0x1c, 0x45, 0x61, 0xfd, 0xae, 0x30, 0x7e,
+        0x64, 0x7e, 0xf1, 0x2f, 0x49, 0xf0, 0xbd, 0x7a, 0xc4, 0x89, 0x2d, 0xea,
+        0xf6, 0xd2, 0xef, 0xc2, 0x27, 0xca, 0xeb, 0x08, 0x7a, 0x44, 0x73, 0xca,
+        0xa8, 0x34, 0x26, 0x63, 0x1d, 0x77, 0xd9, 0x92, 0x86, 0x7a, 0xdf, 0xe7,
+        0xac, 0xb2, 0x7d, 0xcc, 0x4c, 0x5f, 0xdc, 0x0e, 0x7f, 0x66, 0x42, 0x56,
+        0xb2, 0x65, 0xe1, 0x56, 0xdc, 0xfe, 0xe8, 0xfc, 0x59, 0x8e, 0x00, 0x2f,
+        0xac, 0x99, 0xac, 0xb4
+    };
+    unsigned char *sig = NULL;
+    psSize_t sigLen;
+    psPubKey_t privKey;
+    psPubKey_t pubKey;
+    int32_t rc;
+    psRes_t rc2;
+    psBool_t verifyOk;
+
+    /* Hash some data and sign the hash with 2048_RSA_KEY, then parse
+       2048_RSA_PUB from PEM and try to verify the signature. */
+
+    rc = psParseUnknownPrivKeyMem(NULL,
+            RSA2048KEY,
+            sizeof(RSA2048KEY),
+            NULL,
+            &privKey);
+    if (rc != PS_RSA)
+    {
+        _psTrace("psParseUnknownPrivKey failed\n");
+        goto out_fail;
+    }
+
+    rc = psComputeHashForSig(tbs,
+            tbsLen,
+            OID_SHA256_RSA_SIG,
+            hashTbs,
+            &hashTbsLen);
+    if (rc != PS_SUCCESS)
+    {
+        _psTrace("psComputeHashForSig failed\n");
+        goto out_fail;
+    }
+
+    rc = psSign(NULL,
+            &privKey,
+            OID_SHA256_RSA_SIG,
+            hashTbs,
+            hashTbsLen,
+            &sig,
+            &sigLen,
+            NULL);
+    if (rc != PS_SUCCESS)
+    {
+        _psTrace("psSign failed\n");
+        goto out_fail;
+    }
+
+    if (sigLen != sizeof(expectedSig))
+    {
+        _psTrace("psSign output sig has wrong len\n");
+        goto out_fail;
+    }
+    if (Memcmp(sig, expectedSig, sigLen))
+    {
+        _psTrace("psSign output sig is wrong\n");
+        goto out_fail;
+    }
+
+    psRsaInitKey(NULL, &pubKey.key.rsa);
+    rc = psRsaParsePubKeyMem(NULL,
+            RSA2048KEY_PUB_PEM,
+            sizeof(RSA2048KEY_PUB_PEM),
+            NULL,
+            &pubKey.key.rsa);
+    if (rc != PS_SUCCESS)
+    {
+        _psTrace("psRsaParsePubKeyMem failed\n");
+        goto out_fail;
+    }
+
+    pubKey.type = PS_RSA;
+
+    rc2 = psVerify(NULL,
+            tbs,
+            tbsLen,
+            sig,
+            sigLen,
+            &pubKey,
+            OID_SHA256_RSA_SIG,
+            &verifyOk,
+            NULL);
+    if (rc2 != PS_SUCCESS && !verifyOk)
+    {
+        _psTrace("psVerify failed\n");
+        goto out_fail;
+    }
+
+    psClearPubKey(&privKey);
+    psRsaClearKey(&pubKey.key.rsa);
+    psFree(sig, NULL);
+    _psTrace(" PASSED\n");
+
     return PS_SUCCESS;
+
+out_fail:
+    psFree(sig, NULL);
+    return PS_FAILURE;
 }
 # endif /* USE_PRIVATE_KEY_PARSING */
 
@@ -3303,7 +4472,7 @@ static int32 psRsaOaepVectorTest(void)
     outRsaE = psMalloc(pool, outLen);
     psRsaCrypt(pool, &key1, outOaep, outLen, outRsaE, &outLen, PS_PUBKEY, NULL);
 
-    if (memcmp(outRsaE, key1EncryptedResult, outLen) != 0)
+    if (Memcmp(outRsaE, key1EncryptedResult, outLen) != 0)
     {
         _psTrace("ERROR in encrypting key1 RSAES_OAEP vector test\n");
         ret = PS_FAILURE;
@@ -3313,11 +4482,11 @@ static int32 psRsaOaepVectorTest(void)
     outRsaD = psMalloc(pool, outLen);
     psRsaCrypt(pool, &key1, outRsaE, outLen, outRsaD, &outLen, PS_PRIVKEY, NULL);
 
-    memset(outOaep, 0x0, key1.size);
+    Memset(outOaep, 0x0, key1.size);
     psPkcs1OaepDecode(pool, outRsaD, outLen, NULL, 0, key1.size * CHAR_BIT, 0,
         outOaep, &outLen);
 
-    if ((outLen != sizeof(key1TestMsg)) || (memcmp(outOaep, key1TestMsg, outLen)
+    if ((outLen != sizeof(key1TestMsg)) || (Memcmp(outOaep, key1TestMsg, outLen)
                                             != 0))
     {
         _psTrace("ERROR in decrypting key1 RSAES_OAEP vector test\n");
@@ -3343,14 +4512,14 @@ static int32 psRsaOaepVectorTest(void)
     psPkcs1OaepDecode(pool, outRsaD, outLen, (const unsigned char *) "mylabel", 7,
         key1.size * CHAR_BIT, 1, outOaep, &outLen);
 
-    if (memcmp(outOaep, "Hello", outLen) != 0)
+    if (Memcmp(outOaep, "Hello", outLen) != 0)
     {
         _psTrace("ERROR in standard RSAES_OAEP vector test\n");
         ret = PS_FAILURE;
         goto LBL_ERR;
     }
 
-    _psTrace("	PASSED\n");
+    _psTrace("  PASSED\n");
     ret = PS_SUCCESS;
 LBL_ERR:
     pstm_clear(&key1.N);
@@ -3370,7 +4539,7 @@ LBL_ERR:
 
 /******************************************************************************/
 #  ifdef USE_PKCS1_PSS
-#   ifndef USE_PKCS1_PSS_VERIFY_ONLY /* Because PSS signing is used in this test. */
+#   ifndef USE_CL_RSA /* crypto-cl doesn't support the used API. */
 /* PSS-VEC.TXT from RSA PKCS#1 web page */
 static unsigned char key2N[] = {
     0xa5, 0x6e, 0x4a, 0x0e, 0x70, 0x10, 0x17, 0x58, 0x9a, 0x51, 0x87, 0xdc,
@@ -3589,7 +4758,7 @@ static int32 psRsaPssVectorTest(void)
     outLen = outLen16;
 
     /* Check against vector */
-    if (memcmp(outRsaE, key2sig, outLen) != 0)
+    if (Memcmp(outRsaE, key2sig, outLen) != 0)
     {
         _psTrace("ERROR in encrypting key1 RSASSA_PSS vector test\n");
         ret = PS_FAILURE;
@@ -3612,7 +4781,7 @@ static int32 psRsaPssVectorTest(void)
         goto LBL_ERR;
     }
 
-    _psTrace("	PASSED\n");
+    _psTrace("  PASSED\n");
     ret = PS_SUCCESS;
 
 LBL_ERR:
@@ -3629,7 +4798,7 @@ LBL_ERR:
     psFree(outRsaE, pool);
     return ret;
 }
-#   endif /* USE_PKCS1_PSS_VERIFY_ONLY */
+#   endif /* USE_CL_RSA */
 #  endif  /* USE_PKCS1_PSS */
 
 #endif    /* USE_RSA */
@@ -3664,11 +4833,11 @@ static int32 psHmacVectorTestSimple(void)
     };
     psSize_t keyLen = (uint16_t) sizeof(key1);
 
-    _psTraceInt("	SHA-1 known vector test %d... ", 1);
+    _psTraceInt("       SHA-1 known vector test %d... ", 1);
 
     /* Try single-call */
     rv = psHmacSha1(key1, keyLen, (unsigned char *) data1,
-        (uint32_t) strlen(data1), res2,
+        (uint32_t) Strlen(data1), res2,
         key1, &keyLen);
     if (rv != PS_SUCCESS)
     {
@@ -3676,7 +4845,7 @@ static int32 psHmacVectorTestSimple(void)
             (int) rv);
         return PS_FAILURE;
     }
-    if (memcmp(res1, res2, 20) != 0)
+    if (Memcmp(res1, res2, 20) != 0)
     {
         _psTrace("FAILED: Single-part HMAC KAT mismatch\n");
         return PS_FAILURE;
@@ -3684,7 +4853,7 @@ static int32 psHmacVectorTestSimple(void)
 
 #  ifdef USE_HMAC_TLS
     /* Try single-call */
-    memset(res2, 0, 20);
+    Memset(res2, 0, 20);
     rv = psHmacSha1Tls(key1, keyLen,
         (unsigned char *) data1, 2,
         (unsigned char *) data1 + 2, 4,
@@ -3699,7 +4868,7 @@ static int32 psHmacVectorTestSimple(void)
             (int) rv);
         return PS_FAILURE;
     }
-    else if (memcmp(res1, res2, 20) != 0)
+    else if (Memcmp(res1, res2, 20) != 0)
     {
         _psTrace("FAILED: Single-part HMAC KAT mismatch\n");
         return PS_FAILURE;
@@ -3708,9 +4877,9 @@ static int32 psHmacVectorTestSimple(void)
 
     /* Try init-update-finish */
     rv = psHmacSha1Init(&ctx, key1, keyLen);
-    psHmacSha1Update(&ctx, (unsigned char *) data1, (uint32_t) strlen(data1));
+    psHmacSha1Update(&ctx, (unsigned char *) data1, (uint32_t) Strlen(data1));
     (void) psHmacSha1Final(&ctx, res);
-    if (memcmp(res, res1, 20) != 0)
+    if (Memcmp(res, res1, 20) != 0)
     {
         _psTrace("FAILED: Init-Update-Finish HMAC KAT mismatch\n");
     }
@@ -3751,7 +4920,7 @@ static int test_hmac_vector(int32 size,
     /* Copy key, if it is short as short ones are not normally copied. */
     if (key_len <= 128)
     {
-        memcpy(key_out, key, key_len);
+        Memcpy(key_out, key, key_len);
         key = key_out;
     }
     key_length = (uint16_t) key_len;
@@ -3796,7 +4965,7 @@ static int test_hmac_vector(int32 size,
     }
 
 
-    equals = (rv == PS_SUCCESS && memcmp(dout, md_res, size) == 0);
+    equals = (rv == PS_SUCCESS && Memcmp(dout, md_res, size) == 0);
     if (equals != should_succeed)
     {
         _psTraceInt("FAILED: HMAC vector with %d bit key\n",
@@ -3804,7 +4973,7 @@ static int test_hmac_vector(int32 size,
         return PS_FAILURE;
     }
 
-    memset(md_res, 0, sizeof(md_res));
+    Memset(md_res, 0, sizeof(md_res));
 
 # ifdef USE_HMAC_SHA1
     if (size == 20)
@@ -3833,7 +5002,7 @@ static int test_hmac_vector(int32 size,
     }
 # endif /* USE_HMAC_SHA384 */
 
-    equals = (rv == PS_SUCCESS && memcmp(dout, md_res, size) == 0);
+    equals = (rv == PS_SUCCESS && Memcmp(dout, md_res, size) == 0);
     if (equals != should_succeed)
     {
         _psTraceInt("FAILED: HMAC vector with %d bit key (multipart op)\n",
@@ -3849,19 +5018,20 @@ static int test_hmac_vector(int32 size,
         return 1;
     }
 
-    memset(md_res, 0, sizeof(md_res));
+    Memset(md_res, 0, sizeof(md_res));
     if (din_len < 64)
     {
         int i;
+        /* use tmp to get enough allocation for din (-lasan) */
         unsigned char tmp[164];
-        memcpy(tmp, din, din_len);
+        Memcpy(tmp, din, din_len);
 
         for (i = 0; i < 100; i++)
         {
             rv = psHmacSha2Tls(key, key_len,
-                (unsigned char *) din, 8,
-                (unsigned char *) din + 8, 5,
-                (unsigned char *) din + 13, din_len - 13,
+                (unsigned char *) tmp, 8,
+                (unsigned char *) tmp + 8, 5,
+                (unsigned char *) tmp + 13, din_len - 13,
                 din_len - 13 + i, md_res, size);
 
             if (rv != size)
@@ -3872,7 +5042,7 @@ static int test_hmac_vector(int32 size,
                 return PS_FAILURE;
             }
 
-            if (memcmp(dout, md_res, size) != 0)
+            if (Memcmp(dout, md_res, size) != 0)
             {
                 _psTrace("FAILED: Single-part HMAC KAT mismatch\n");
                 return PS_FAILURE;
@@ -3894,7 +5064,7 @@ static int test_hmac_vector(int32 size,
             (int) rv);
         return PS_FAILURE;
     }
-    if (memcmp(dout, md_res, size) != 0)
+    if (Memcmp(dout, md_res, size) != 0)
     {
         _psTrace("FAILED: Single-part HMAC KAT mismatch\n");
         return PS_FAILURE;
@@ -4691,19 +5861,19 @@ static int32 psHmacVectorTestsSimultaneous(void)
     psHmacSha1Final(&ctx2, md2);
     psHmacSha1Final(&ctx3, md3);
 
-    if (memcmp(md1, hmac_sha1_vector14_out,
+    if (Memcmp(md1, hmac_sha1_vector14_out,
             sizeof(hmac_sha1_vector14_out)) != 0)
     {
         _psTrace("FAILED (hmac_sha1_vector14)\n");
         return PS_FAILURE;
     }
-    if (memcmp(md2, hmac_sha1_vector16_out,
+    if (Memcmp(md2, hmac_sha1_vector16_out,
             sizeof(hmac_sha1_vector16_out)) != 0)
     {
         _psTrace("FAILED (hmac_sha1_vector16)\n");
         return PS_FAILURE;
     }
-    if (memcmp(md3, hmac_sha1_vector20_out,
+    if (Memcmp(md3, hmac_sha1_vector20_out,
             sizeof(hmac_sha1_vector20_out)) != 0)
     {
         _psTrace("FAILED (hmac_sha1_vector20)\n");
@@ -4723,28 +5893,28 @@ static int32 psHmacVectorTests(void)
     res = psHmacVectorTestSimple();
 # endif /* USE_HMAC_SHA1 */
 
-    _psTraceInt("	SHA-1 known vector test %d... ", 2);
+    _psTraceInt("       SHA-1 known vector test %d... ", 2);
 # ifdef USE_HMAC_SHA1
     res |= psHmacVectorTestsSHA1();
 # else
     _psTrace("SKIPPED.\n");
 # endif /* USE_HMAC_SHA1 */
 
-    _psTraceInt("	SHA-256 known vector test %d... ", 1);
+    _psTraceInt("       SHA-256 known vector test %d... ", 1);
 # ifdef USE_HMAC_SHA256
     res |= psHmacVectorTestsSHA256();
 # else
     _psTrace("SKIPPED.\n");
 # endif /* USE_HMAC_SHA256 */
 
-    _psTraceInt("	SHA-384 known vector test %d... ", 1);
+    _psTraceInt("       SHA-384 known vector test %d... ", 1);
 # ifdef USE_HMAC_SHA384
     res |= psHmacVectorTestsSHA384();
 # else
     _psTrace("SKIPPED.\n");
 # endif /* USE_HMAC_SHA384 */
 
-    _psTrace("	Simultaneous hmac contexts... ");
+    _psTrace("  Simultaneous hmac contexts... ");
 # ifdef USE_HMAC_SHA1
     res |= psHmacVectorTestsSimultaneous();
 # else
@@ -4763,6 +5933,10 @@ static int32 psHmacVectorTests(void)
 
 # include "../../testkeys/EC/256_EC.h"
 # include "../../testkeys/EC/256_EC_KEY.h"
+# include "../../testkeys/EC/384_EC.h"
+# include "../../testkeys/EC/384_EC_KEY.h"
+# include "../../testkeys/EC/521_EC.h"
+# include "../../testkeys/EC/521_EC_KEY.h"
 
 static int32_t ecdh_kat(unsigned char *alice_priv,
     size_t alice_priv_len,
@@ -4823,7 +5997,7 @@ static int32_t ecdh_kat(unsigned char *alice_priv,
         goto L_FAIL;
     }
 
-    if (memcmp(got_secret, expected_secret, secret_len))
+    if (Memcmp(got_secret, expected_secret, secret_len))
     {
         _psTrace("KAT failed\n");
         rc = PS_FAIL;
@@ -4876,7 +6050,7 @@ static int32_t ecdh_p256_kat(void)
         0x71, 0x1f, 0x8c, 0x90, 0xa4, 0x7f, 0x8b, 0xf4
     };
 
-    _psTrace("	P-256 ECDH known-answer test...");
+    _psTrace("  P-256 ECDH known-answer test...");
     rc = ecdh_kat(alice_priv, sizeof(alice_priv),
         bob_pub, sizeof(bob_pub),
         secret, sizeof(secret),
@@ -4929,7 +6103,7 @@ static int32_t ecdh_p384_kat(void)
         0x68, 0x88, 0xfa, 0xfd, 0x08, 0x52, 0xe3, 0x2e, 0x04, 0x59, 0xe7, 0xe7
     };
 
-    _psTrace("	P-384 ECDH known-answer test...");
+    _psTrace("  P-384 ECDH known-answer test...");
 
     rc = ecdh_kat(alice_priv, sizeof(alice_priv),
         bob_pub, sizeof(bob_pub),
@@ -4996,7 +6170,7 @@ static int32_t ecdh_p521_kat(void)
         0x5a, 0xf6, 0x5c, 0x20, 0x5f, 0x49
     };
 
-    _psTrace("	P-521 ECDH known-answer test...");
+    _psTrace("  P-521 ECDH known-answer test...");
 
     rc = ecdh_kat(alice_priv, sizeof(alice_priv),
         bob_pub, sizeof(bob_pub),
@@ -5038,7 +6212,7 @@ static int32_t psEccPairwiseTest(void)
     {
         goto L_FAIL;
     }
-    _psTraceStr("	%s Key Exchange...", curve->name);
+    _psTraceStr("       %s Key Exchange...", curve->name);
     if (psEccGenKey(pool, &k1, curve, NULL) < 0)
     {
         goto L_FAIL;
@@ -5096,7 +6270,7 @@ static int32_t psEccPairwiseTest(void)
     }
     _psTrace(" PASSED\n");
 
-    _psTraceStr("	%s Signature Validation...", curve->name);
+    _psTraceStr("       %s Signature Validation...", curve->name);
 
     /* Generate some random bytes to sign */
     if (psGetEntropy(in, curve->size, NULL) < 0)
@@ -5192,6 +6366,86 @@ L_FAIL:
     return rc;
 }
 
+static int32_t psEccTestParsePriv(void)
+{
+    psPool_t *pool = NULL;
+    psEccKey_t *key1;
+    psEccKey_t key2, key3;
+    int32_t rc;
+
+    /*************************************************************/
+    _psTrace("  P-256 psEccNewKey + psEccParsePrivKey...");
+
+    rc = psEccNewKey(pool,
+            &key1,
+            NULL);
+    if (rc != PS_SUCCESS)
+    {
+        goto fail;
+    }
+
+    rc = psEccParsePrivKey(pool,
+            EC256KEY,
+            sizeof(EC256KEY),
+            key1,
+            NULL);
+    if (rc != PS_SUCCESS)
+    {
+        goto fail;
+    }
+
+    psEccDeleteKey(&key1);
+
+    _psTrace(" PASSED\n");
+
+    /*************************************************************/
+    _psTrace("  P-256 psEccInitKey + psEccParsePrivKey...");
+
+    rc = psEccInitKey(pool,
+            &key2,
+            NULL);
+    if (rc != PS_SUCCESS)
+    {
+        goto fail;
+    }
+
+    rc = psEccParsePrivKey(pool,
+            EC256KEY,
+            sizeof(EC256KEY),
+            &key2,
+            NULL);
+    if (rc != PS_SUCCESS)
+    {
+        goto fail;
+    }
+
+    psEccClearKey(&key2);
+
+    _psTrace(" PASSED\n");
+
+    /*************************************************************/
+    _psTrace("  P-256 uninitialized key + psEccParsePrivKey...");
+
+    rc = psEccParsePrivKey(pool,
+            EC256KEY,
+            sizeof(EC256KEY),
+            &key3,
+            NULL);
+    if (rc != PS_SUCCESS)
+    {
+        goto fail;
+    }
+
+    psEccClearKey(&key3);
+
+    _psTrace(" PASSED\n");
+    return PS_SUCCESS;
+
+fail:
+    _psTrace(" FAILED\n");
+    return rc;
+}
+
 static int32_t psEccTest(void)
 {
     int32_t rc;
@@ -5222,11 +6476,407 @@ static int32_t psEccTest(void)
         return rc;
     }
 
+    rc = psEccTestParsePriv();
+    if (rc != PS_SUCCESS)
+    {
+        return rc;
+    }
+
     return PS_SUCCESS;
 }
 #endif /* USE_ECC */
 
 /******************************************************************************/
+
+#if defined(USE_X25519)
+static int32 psDhX25519Test(void)
+{
+    psRes_t rv;
+    const unsigned char alice_priv_key[PS_DH_X25519_PRIVATE_KEY_BYTES] =
+    {
+        0x77, 0x07, 0x6d, 0x0a, 0x73, 0x18, 0xa5, 0x7d,
+        0x3c, 0x16, 0xc1, 0x72, 0x51, 0xb2, 0x66, 0x45,
+        0xdf, 0x4c, 0x2f, 0x87, 0xeb, 0xc0, 0x99, 0x2a,
+        0xb1, 0x77, 0xfb, 0xa5, 0x1d, 0xb9, 0x2c, 0x2a
+    };
+    const unsigned char alice_pub_key[PS_DH_X25519_PUBLIC_KEY_BYTES] =
+    {
+        0x85, 0x20, 0xf0, 0x09, 0x89, 0x30, 0xa7, 0x54,
+        0x74, 0x8b, 0x7d, 0xdc, 0xb4, 0x3e, 0xf7, 0x5a,
+        0x0d, 0xbf, 0x3a, 0x0d, 0x26, 0x38, 0x1a, 0xf4,
+        0xeb, 0xa4, 0xa9, 0x8e, 0xaa, 0x9b, 0x4e, 0x6a
+    };
+    const unsigned char bob_priv_key[PS_DH_X25519_PRIVATE_KEY_BYTES] =
+    {
+        0x5d, 0xab, 0x08, 0x7e, 0x62, 0x4a, 0x8a, 0x4b,
+        0x79, 0xe1, 0x7f, 0x8b, 0x83, 0x80, 0x0e, 0xe6,
+        0x6f, 0x3b, 0xb1, 0x29, 0x26, 0x18, 0xb6, 0xfd,
+        0x1c, 0x2f, 0x8b, 0x27, 0xff, 0x88, 0xe0, 0xeb
+    };
+    const unsigned char bob_pub_key[PS_DH_X25519_PUBLIC_KEY_BYTES] =
+    {
+        0xde, 0x9e, 0xdb, 0x7d, 0x7b, 0x7d, 0xc1, 0xb4,
+        0xd3, 0x5b, 0x61, 0xc2, 0xec, 0xe4, 0x35, 0x37,
+        0x3f, 0x83, 0x43, 0xc8, 0x5b, 0x78, 0x67, 0x4d,
+        0xad, 0xfc, 0x7e, 0x14, 0x6f, 0x88, 0x2b, 0x4f
+    };
+    const unsigned char shared[PS_DH_X25519_SHARED_SECRET_BYTES] =
+    {
+        0x4a, 0x5d, 0x9d, 0x5b, 0xa4, 0xce, 0x2d, 0xe1,
+        0x72, 0x8e, 0x3b, 0xf4, 0x80, 0x35, 0x0f, 0x25,
+        0xe0, 0x7e, 0x21, 0xc9, 0x47, 0xd1, 0x9e, 0x33,
+        0x76, 0xf0, 0x9b, 0x3c, 0x1e, 0x16, 0x17, 0x42
+    };
+    const unsigned char v9[PS_DH_X25519_PUBLIC_KEY_BYTES] = { 9, /* 0, ... */ };
+    unsigned char alice_new_priv_key[PS_DH_X25519_PRIVATE_KEY_BYTES];
+    unsigned char alice_new_pub_key[PS_DH_X25519_PUBLIC_KEY_BYTES];
+    unsigned char alice_old_pub_key[PS_DH_X25519_PUBLIC_KEY_BYTES];
+    unsigned char bob_new_priv_key[PS_DH_X25519_PRIVATE_KEY_BYTES];
+    unsigned char bob_new_pub_key[PS_DH_X25519_PUBLIC_KEY_BYTES];
+    unsigned char shared_alice[PS_DH_X25519_SHARED_SECRET_BYTES];
+    unsigned char shared_bob[PS_DH_X25519_SHARED_SECRET_BYTES];
+
+    /* Use RFC 7748 6.1. test vector as KAT. */
+    _psTrace("  DH X25519 KAT (RFC 7748 6.1)...");
+    rv = psDhX25519GenSharedSecret(bob_pub_key, alice_priv_key, shared_alice);
+    if (rv == PS_DISABLED_FEATURE_FAIL)
+    {
+        _psTrace(" SKIPPED (X25519 not available)\n");
+        goto next_test;
+    }
+    FAIL_IF(rv != PS_SUCCESS);
+    rv = psDhX25519GenSharedSecret(alice_pub_key, bob_priv_key, shared_bob);
+    FAIL_IF(rv != PS_SUCCESS);
+    FAIL_IF(memcmp(shared, shared_alice, PS_DH_X25519_SHARED_SECRET_BYTES) != 0);
+    FAIL_IF(memcmp(shared, shared_bob, PS_DH_X25519_SHARED_SECRET_BYTES) != 0);
+
+    rv = psDhX25519GenSharedSecret(v9, alice_priv_key, alice_old_pub_key);
+    FAIL_IF(rv != PS_SUCCESS);
+    FAIL_IF(memcmp(alice_pub_key, alice_old_pub_key,
+                   PS_DH_X25519_PUBLIC_KEY_BYTES) != 0);
+
+    _psTrace(" PASSED\n");
+next_test:
+    /* Ephemeral key agreement: new keys and secrets. */
+    _psTrace("  DH X25519 Ephemeral Key Agreement (pair-wise test)...");
+    rv = psDhX25519GenKey(alice_new_priv_key, alice_new_pub_key);
+    if (rv == PS_DISABLED_FEATURE_FAIL)
+    {
+        _psTrace(" SKIPPED (X25519 not available)\n");
+        goto dh_x25519_not_avail;
+    }
+    FAIL_IF(rv != PS_SUCCESS);
+    rv = psDhX25519GenKey(bob_new_priv_key, bob_new_pub_key);
+    FAIL_IF(rv != PS_SUCCESS);
+    rv = psDhX25519GenSharedSecret(bob_new_pub_key, alice_new_priv_key,
+                                   shared_alice);
+    FAIL_IF(rv != PS_SUCCESS);
+    rv = psDhX25519GenSharedSecret(alice_new_pub_key, bob_new_priv_key,
+                                   shared_bob);
+    FAIL_IF(rv != PS_SUCCESS);
+    FAIL_IF(memcmp(shared_bob, shared_alice,
+                   PS_DH_X25519_SHARED_SECRET_BYTES) != 0);
+
+    _psTrace(" PASSED\n");
+dh_x25519_not_avail:
+    return 0;
+}
+#endif /* USE_X25519 */
+#ifdef USE_ED25519
+static int32 psEd25519Test(void)
+{
+    /* Test vector 1 from RFC 8032 */
+    unsigned char privKey1[] =
+    {
+        0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60, 0xba, 0x84, 0x4a, 0xf4,
+        0x92, 0xec, 0x2c, 0xc4, 0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19,
+        0x70, 0x3b, 0xac, 0x03, 0x1c, 0xae, 0x7f, 0x60
+    };
+    unsigned char pubKey1[] =
+    {
+        0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7, 0xd5, 0x4b, 0xfe, 0xd3,
+        0xc9, 0x64, 0x07, 0x3a, 0x0e, 0xe1, 0x72, 0xf3, 0xda, 0xa6, 0x23, 0x25,
+        0xaf, 0x02, 0x1a, 0x68, 0xf7, 0x07, 0x51, 0x1a
+    };
+    /* message1 is empty */
+    unsigned char expected_sig1[] =
+    {
+        0xe5, 0x56, 0x43, 0x00, 0xc3, 0x60, 0xac, 0x72, 0x90, 0x86, 0xe2, 0xcc,
+        0x80, 0x6e, 0x82, 0x8a, 0x84, 0x87, 0x7f, 0x1e, 0xb8, 0xe5, 0xd9, 0x74,
+        0xd8, 0x73, 0xe0, 0x65, 0x22, 0x49, 0x01, 0x55, 0x5f, 0xb8, 0x82, 0x15,
+        0x90, 0xa3, 0x3b, 0xac, 0xc6, 0x1e, 0x39, 0x70, 0x1c, 0xf9, 0xb4, 0x6b,
+        0xd2, 0x5b, 0xf5, 0xf0, 0x59, 0x5b, 0xbe, 0x24, 0x65, 0x51, 0x41, 0x43,
+        0x8e, 0x7a, 0x10, 0x0b
+    };
+    /* Test vector 2 from RFC 8032 */
+    unsigned char privKey2[] =
+    {
+        0x4c, 0xcd, 0x08, 0x9b, 0x28, 0xff, 0x96, 0xda, 0x9d, 0xb6, 0xc3, 0x46,
+        0xec, 0x11, 0x4e, 0x0f, 0x5b, 0x8a, 0x31, 0x9f, 0x35, 0xab, 0xa6, 0x24,
+        0xda, 0x8c, 0xf6, 0xed, 0x4f, 0xb8, 0xa6, 0xfb
+
+    };
+    unsigned char pubKey2[] =
+    {
+        0x3d, 0x40, 0x17, 0xc3, 0xe8, 0x43, 0x89, 0x5a, 0x92, 0xb7, 0x0a, 0xa7,
+        0x4d, 0x1b, 0x7e, 0xbc, 0x9c, 0x98, 0x2c, 0xcf, 0x2e, 0xc4, 0x96, 0x8c,
+        0xc0, 0xcd, 0x55, 0xf1, 0x2a, 0xf4, 0x66, 0x0c
+    };
+    unsigned char message2[] =
+    {
+        0x72
+    };
+    unsigned char expected_sig2[] =
+    {
+        0x92, 0xa0, 0x09, 0xa9, 0xf0, 0xd4, 0xca, 0xb8, 0x72, 0x0e, 0x82, 0x0b,
+        0x5f, 0x64, 0x25, 0x40, 0xa2, 0xb2, 0x7b, 0x54, 0x16, 0x50, 0x3f, 0x8f,
+        0xb3, 0x76, 0x22, 0x23, 0xeb, 0xdb, 0x69, 0xda, 0x08, 0x5a, 0xc1, 0xe4,
+        0x3e, 0x15, 0x99, 0x6e, 0x45, 0x8f, 0x36, 0x13, 0xd0, 0xf1, 0x1d, 0x8c,
+        0x38, 0x7b, 0x2e, 0xae, 0xb4, 0x30, 0x2a, 0xee, 0xb0, 0x0d, 0x29, 0x16,
+        0x12, 0xbb, 0x0c, 0x00
+    };
+    /* Pairwise test with the keypair from test vector 2 and a random
+       message. */
+    unsigned char tbs3[] =
+    {
+        0x09, 0xfc, 0xad, 0x40, 0x52, 0xf5, 0xd1, 0x6b, 0x42, 0x14, 0x96, 0xe2,
+        0x7e, 0xb5, 0x4b, 0xae, 0x46, 0x54, 0xce, 0xff, 0x9d, 0x26, 0x04, 0xb7,
+        0x1c, 0x10, 0xd1, 0x59, 0xfb, 0x02, 0xcd, 0xab, 0x4e, 0x93, 0x6c, 0x10,
+        0x54, 0x54, 0xc8, 0xfa, 0x57, 0xe9, 0x15, 0xcd, 0x41, 0xdf, 0x5b, 0x69,
+        0x8b, 0x26, 0x54, 0x31, 0xaf, 0xe2, 0x6e, 0x8e, 0xf2, 0x73, 0x76, 0xc6,
+        0x77, 0xaa, 0x3f, 0x93, 0x03, 0x9c, 0x83, 0x1a, 0x1f, 0xaf, 0xd4, 0x59,
+        0x2a, 0x20, 0x27, 0xac, 0x76, 0xe8, 0x96, 0x5f, 0xfe, 0xa0, 0xde, 0x69,
+        0xa4, 0xb5, 0x26, 0x26, 0x1d, 0x06, 0x13, 0xe0, 0x48, 0xe8, 0xf0, 0x6c,
+        0xae, 0x6b, 0x67, 0xf3, 0xa8, 0x3a, 0x66, 0xed, 0xec, 0x4c, 0xbe, 0x51,
+        0xbe, 0x93, 0x2f, 0x04, 0xd0, 0x3e, 0xf2, 0x22, 0xee, 0x35, 0x03, 0x4e,
+    };
+    unsigned char privKey4[] =
+    {
+        0xd8, 0xe9, 0x76, 0xb2, 0x3f, 0x1f, 0xf7, 0x88, 0x75, 0xf5, 0xdd, 0xf8,
+        0x7a, 0xc6, 0x49, 0x30, 0x6e, 0xe9, 0x9f, 0xcb, 0x9d, 0x1e, 0x2b, 0xc0,
+        0x18, 0xef, 0xbb, 0x75, 0x89, 0xe6, 0x77, 0x67
+    };
+    unsigned char pubKey4[] =
+    {
+        0x1a, 0x30, 0x88, 0x18, 0x47, 0x2f, 0x97, 0xda, 0x04, 0xf4, 0xa4, 0xe3,
+        0xbd, 0x6c, 0x0c, 0x16, 0xb9, 0x48, 0xc1, 0xd1, 0x42, 0xd7, 0x8e, 0x92,
+        0x84, 0xa0, 0x74, 0x2a, 0x43, 0x9e, 0x0e, 0x29
+    };
+    /* Another test key pair. */
+    unsigned char privKey5[] =
+    {
+        0x30, 0x52, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70,
+        0x04, 0x22, 0x04, 0x20, 0xd8, 0xe9, 0x76, 0xb2, 0x3f, 0x1f, 0xf7, 0x88,
+        0x75, 0xf5, 0xdd, 0xf8, 0x7a, 0xc6, 0x49, 0x30, 0x6e, 0xe9, 0x9f, 0xcb,
+        0x9d, 0x1e, 0x2b, 0xc0, 0x18, 0xef, 0xbb, 0x75, 0x89, 0xe6, 0x77, 0x67,
+        0xa1, 0x22, 0x04, 0x20, 0x1a, 0x30, 0x88, 0x18, 0x47, 0x2f, 0x97, 0xda,
+        0x04, 0xf4, 0xa4, 0xe3, 0xbd, 0x6c, 0x0c, 0x16, 0xb9, 0x48, 0xc1, 0xd1,
+        0x42, 0xd7, 0x8e, 0x92, 0x84, 0xa0, 0x74, 0x2a, 0x43, 0x9e, 0x0e, 0x29
+    };
+    unsigned char privKey5Bytes[] =
+    {
+        0xd8, 0xe9, 0x76, 0xb2, 0x3f, 0x1f, 0xf7, 0x88, 0x75, 0xf5, 0xdd, 0xf8,
+        0x7a, 0xc6, 0x49, 0x30, 0x6e, 0xe9, 0x9f, 0xcb, 0x9d, 0x1e, 0x2b, 0xc0,
+        0x18, 0xef, 0xbb, 0x75, 0x89, 0xe6, 0x77, 0x67
+    };
+    unsigned char pubKey5[] =
+    {
+        0x1a, 0x30, 0x88, 0x18, 0x47, 0x2f, 0x97, 0xda, 0x04, 0xf4, 0xa4, 0xe3,
+        0xbd, 0x6c, 0x0c, 0x16, 0xb9, 0x48, 0xc1, 0xd1, 0x42, 0xd7, 0x8e, 0x92,
+        0x84, 0xa0, 0x74, 0x2a, 0x43, 0x9e, 0x0e, 0x29
+    };
+    unsigned char tbs5[] =
+    {
+        0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+        0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+        0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+        0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+        0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+        0x20, 0x20, 0x20, 0x20, 0x54, 0x4c, 0x53, 0x20, 0x31, 0x2e, 0x33, 0x2c,
+        0x20, 0x73, 0x65, 0x72, 0x76, 0x65, 0x72, 0x20, 0x43, 0x65, 0x72, 0x74,
+        0x69, 0x66, 0x69, 0x63, 0x61, 0x74, 0x65, 0x56, 0x65, 0x72, 0x69, 0x66,
+        0x79, 0x00, 0x81, 0xe0, 0xfe, 0xde, 0xee, 0xce, 0xbe, 0xa4, 0x43, 0xa0,
+        0xc2, 0x51, 0x8f, 0x0b, 0x9b, 0xe4, 0x61, 0x68, 0xea, 0xc7, 0x9c, 0x8a,
+        0x1c, 0xb3, 0x6e, 0x49, 0xfe, 0xf9, 0x51, 0xbe, 0x95, 0x58
+    };
+    /* This is the first example private key in section 7 in
+       draft-ietf-curdle-pkix-08. It is of type OneAsymmetricKey. */
+    unsigned char myPrivKeyBuf[] =
+    {
+        0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70,
+        0x04, 0x22, 0x04, 0x20, 0xd4, 0xee, 0x72, 0xdb, 0xf9, 0x13, 0x58, 0x4a,
+        0xd5, 0xb6, 0xd8, 0xf1, 0xf7, 0x69, 0xf8, 0xad, 0x3a, 0xfe, 0x7c, 0x28,
+        0xcb, 0xf1, 0xd4, 0xfb, 0xe0, 0x97, 0xa8, 0x8f, 0x44, 0x75, 0x58, 0x42
+    };
+    unsigned char myPrivKeyBytes[] =
+    {
+        /* 0x04, 0x20, */
+        0xd4, 0xee, 0x72, 0xdb, 0xf9, 0x13, 0x58, 0x4a, 0xd5, 0xb6, 0xd8, 0xf1,
+        0xf7, 0x69, 0xf8, 0xad, 0x3a, 0xfe, 0x7c, 0x28, 0xcb, 0xf1, 0xd4, 0xfb,
+        0xe0, 0x97, 0xa8, 0x8f, 0x44, 0x75, 0x58, 0x42
+    };
+    /* This is the second example private key from section 7 in the
+       above mentioned draft. Includes a pub key and the params.*/
+    unsigned char myPrivKeyBuf2[] =
+    {
+        0x30, 0x72, 0x02, 0x01, 0x01, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70,
+        0x04, 0x22, 0x04, 0x20, 0xd4, 0xee, 0x72, 0xdb, 0xf9, 0x13, 0x58, 0x4a,
+        0xd5, 0xb6, 0xd8, 0xf1, 0xf7, 0x69, 0xf8, 0xad, 0x3a, 0xfe, 0x7c, 0x28,
+        0xcb, 0xf1, 0xd4, 0xfb, 0xe0, 0x97, 0xa8, 0x8f, 0x44, 0x75, 0x58, 0x42,
+        0xa0, 0x1f, 0x30, 0x1d, 0x06, 0x0a, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d,
+        0x01, 0x09, 0x09, 0x14, 0x31, 0x0f, 0x0c, 0x0d, 0x43, 0x75, 0x72, 0x64,
+        0x6c, 0x65, 0x20, 0x43, 0x68, 0x61, 0x69, 0x72, 0x73, 0x81, 0x21, 0x00,
+        0x19, 0xbf, 0x44, 0x09, 0x69, 0x84, 0xcd, 0xfe, 0x85, 0x41, 0xba, 0xc1,
+        0x67, 0xdc, 0x3b, 0x96, 0xc8, 0x50, 0x86, 0xaa, 0x30, 0xb6, 0xb6, 0xcb,
+        0x0c, 0x5c, 0x38, 0xad, 0x70, 0x31, 0x66, 0xe1
+    };
+
+    unsigned char sig[512] = {0};
+    unsigned char *vlSig;
+    psSizeL_t sigLen;
+    psSize_t sigLenPsSize;
+    int32_t rc;
+    psPubKey_t myPrivKey;
+    psCurve25519Key_t myEd25519PrivKey;
+    psBool_t verifyResult;
+
+    _psTrace("  Ed25519 signature KAT (RFC 8032, test vector 1)...");
+    rc = psEd25519Sign(NULL, 0,
+            sig, &sigLen,
+            privKey1,
+            pubKey1);
+    FAIL_IF(rc != PS_SUCCESS);
+    FAIL_IF(sigLen != sizeof(expected_sig1));
+    FAIL_IF(Memcmp(sig, expected_sig1, sigLen));
+    _psTrace(" PASSED\n");
+
+    _psTrace("  Ed25519 verification (RFC 8032, test vector 1)...");
+    rc = psEd25519Verify(sig,
+            NULL, 0,
+            pubKey1);
+    FAIL_IF(rc != PS_SUCCESS);
+    _psTrace(" PASSED\n");
+
+    _psTrace("  Ed25519 signature KAT (RFC 8032, test vector 2)...");
+    rc = psEd25519Sign(message2, sizeof(message2),
+            sig, &sigLen,
+            privKey2,
+            pubKey2);
+    FAIL_IF(rc != PS_SUCCESS);
+    FAIL_IF(sigLen != sizeof(expected_sig2));
+    FAIL_IF(Memcmp(sig, expected_sig2, sigLen));
+    _psTrace(" PASSED\n");
+
+    _psTrace("  Ed25519 verification (RFC 8032, test vector 2)...");
+    rc = psEd25519Verify(sig,
+            message2, sizeof(message2),
+            pubKey2);
+    FAIL_IF(rc != PS_SUCCESS);
+    _psTrace(" PASSED\n");
+
+    _psTrace("  Ed25519 pairwise test...");
+    rc = psEd25519Sign(tbs3, sizeof(tbs3),
+            sig, &sigLen,
+            privKey2,
+            pubKey2);
+    FAIL_IF(rc != PS_SUCCESS);
+    FAIL_IF(sigLen != 64);
+    rc = psEd25519Verify(sig,
+            tbs3, sizeof(tbs3),
+            pubKey2);
+    FAIL_IF(rc != PS_SUCCESS);
+    _psTrace(" PASSED\n");
+
+    _psTrace("  Ed25519 pairwise test 2...");
+    rc = psEd25519Sign(tbs3, sizeof(tbs3),
+            sig, &sigLen,
+            privKey4,
+            pubKey4);
+    FAIL_IF(rc != PS_SUCCESS);
+    FAIL_IF(sigLen != 64);
+    rc = psEd25519Verify(sig,
+            tbs3, sizeof(tbs3),
+            pubKey4);
+    FAIL_IF(rc != PS_SUCCESS);
+    _psTrace(" PASSED\n");
+
+    _psTrace("  Ed25519 private key parsing (psEd25519ParsePrivKey)...");
+    rc = psEd25519ParsePrivKey(NULL,
+            myPrivKeyBuf,
+            sizeof(myPrivKeyBuf),
+            &myEd25519PrivKey);
+    FAIL_IF(rc != PS_SUCCESS);
+    FAIL_IF(Memcmp(myEd25519PrivKey.priv, myPrivKeyBytes, 32));
+    _psTrace(" PASSED\n");
+
+    _psTrace("  Ed25519 private key parsing (incl. pubkey and params)...");
+    rc = psParseUnknownPrivKeyMem(NULL,
+            myPrivKeyBuf2,
+            sizeof(myPrivKeyBuf2),
+            NULL,
+            &myPrivKey);
+    FAIL_IF(rc != 3);
+    FAIL_IF(myPrivKey.type != PS_ED25519);
+    _psTrace(" PASSED\n");
+
+    _psTrace("  Ed25519 pairwise test with psSign and psVerify...");
+    rc = psSign(NULL,
+            &myPrivKey,
+            OID_ED25519_KEY_ALG,
+            tbs5,
+            sizeof(tbs5),
+            &vlSig,
+            &sigLenPsSize,
+            NULL);
+    FAIL_IF(rc != PS_SUCCESS);
+    FAIL_IF(sigLenPsSize != 64);
+    rc = psVerify(NULL,
+            tbs5,
+            sizeof(tbs5),
+            vlSig,
+            sigLenPsSize,
+            &myPrivKey,
+            OID_ED25519_KEY_ALG,
+            &verifyResult,
+            NULL);
+    FAIL_IF(rc != PS_SUCCESS);
+    FAIL_IF(verifyResult != PS_TRUE);
+    psFree(vlSig, NULL);
+    _psTrace(" PASSED\n");
+
+    _psTrace("  Ed25519 key parse + pairwise test...");
+    rc = psEd25519ParsePrivKey(NULL,
+            privKey5,
+            sizeof(privKey5),
+            &myEd25519PrivKey);
+    FAIL_IF(rc != PS_SUCCESS);
+    Memcpy(myEd25519PrivKey.pub, pubKey5, sizeof(pubKey5));
+    rc = psEd25519Sign(tbs5, sizeof(tbs5),
+            sig, &sigLen,
+            myEd25519PrivKey.priv,
+            myEd25519PrivKey.pub);
+    FAIL_IF(rc != PS_SUCCESS);
+    FAIL_IF(sigLen != 64);
+    rc = psEd25519Verify(sig,
+            tbs5, sizeof(tbs5),
+            myEd25519PrivKey.pub);
+    FAIL_IF(rc != PS_SUCCESS);
+    Memcpy(myEd25519PrivKey.priv, privKey5Bytes, sizeof(privKey5Bytes));
+    rc = psEd25519Sign(tbs5, sizeof(tbs5),
+            sig, &sigLen,
+            myEd25519PrivKey.priv,
+            myEd25519PrivKey.pub);
+    FAIL_IF(rc != PS_SUCCESS);
+    FAIL_IF(sigLen != 64);
+    rc = psEd25519Verify(sig,
+            tbs5, sizeof(tbs5),
+            myEd25519PrivKey.pub);
+    FAIL_IF(rc != PS_SUCCESS);
+    _psTrace(" PASSED\n");
+
+    return PS_SUCCESS;
+}
+#endif /* USE_ED25519 */
 
 /******************************************************************************/
 
@@ -5246,6 +6896,7 @@ static test_t tests[] = {
 # endif
 # ifdef USE_AES_GCM
     { psAesTestGCM,           "***** AES-GCM TESTS *****"                                                                  },
+    { psAesTestGCM2,           "***** AES-GCM TESTS 2 *****"                                                                  },
 # endif
 # ifdef USE_AES_WRAP
     { psAesTestWrap,          "***** AES WRAP TEST *****"                                                                  },
@@ -5383,6 +7034,13 @@ static test_t tests[] = {
 #endif
       , "***** RSA SIGN TESTS *****" },
 
+#if defined(USE_RSA) && defined(USE_PEM_DECODE)
+    { psRsaKeyFormatTests
+#else
+    { NULL
+#endif
+      , "***** RSA KEY FORMAT TESTS *****" },
+
 #if defined(USE_PKCS1_OAEP) && !defined(USE_HARDWARE_CRYPTO_PKA)
     { psRsaOaepVectorTest
 #else
@@ -5390,7 +7048,7 @@ static test_t tests[] = {
 #endif
       , "***** RSA RSAES_OAEP TESTS *****" },
 
-#if defined(USE_PKCS1_PSS) && !defined(USE_PKCS1_PSS_VERIFY_ONLY) && !defined(USE_HARDWARE_CRYPTO_PKA)
+#if defined(USE_PKCS1_PSS) && !defined(USE_CL_RSA) && !defined(USE_HARDWARE_CRYPTO_PKA)
     { psRsaPssVectorTest
 #else
     { NULL
@@ -5410,7 +7068,32 @@ static test_t tests[] = {
     { NULL
       , "***** PRF2 TESTS *****" },
 
-    { NULL,                   ""                                                                                           }
+#ifdef USE_HKDF
+    { psHkdfTests
+#else
+    { NULL
+#endif
+      , "***** HKDF TESTS *****" },
+
+#ifdef USE_HKDF
+    { psHkdfExpandLabelTests
+#else
+    { NULL
+#endif
+      , "***** HKDF-EXPAND-LABEL TESTS *****" },
+
+#ifdef USE_X25519
+      { psDhX25519Test,         "***** DH X25519 TESTS *****" },
+#else
+      { NULL,                   "***** DH X25519 TESTS *****" },
+#endif /* USE_X25519 */
+#ifdef USE_ED25519
+      { psEd25519Test,         "***** Ed25519 TESTS *****" },
+#else
+      { NULL,                   "***** Ed25519 TESTS *****" },
+#endif /* USE_X25519 */
+
+    { NULL,                     "" }
 };
 
 /******************************************************************************/
@@ -5421,6 +7104,40 @@ static test_t tests[] = {
 int main(int argc, char **argv)
 {
     int32 i;
+    int l;
+    int32_t num_fail = 0;
+    int32_t num_succ = 0;
+    int32_t num_test = 0;
+    int32_t rc;
+
+    if (argc > 1)
+    {
+        if (!Strcmp(argv[1], "--list"))
+        {
+            Printf("Tests:\n");
+            for (i = 0; *tests[i].name; i++)
+            {
+                Printf("%s\n", tests[i].name);
+            }
+            return 0;
+        }
+        for(l = 1; l < argc; l++)
+        {
+            for (i = 0; *tests[i].name; i++)
+            {
+                if (Strstr(tests[i].name, argv[l]))
+                {
+                    break;
+                }
+            }
+            if (!*tests[i].name)
+            {
+                Fprintf(stderr, "Test not found: %s\n", argv[l]);
+                Fprintf(stderr, "Usage: %s [--list | test...]\n", argv[0]);
+                exit(1);
+            }
+        }
+    }
 
     if (psCryptoOpen(PSCRYPTO_CONFIG) < PS_SUCCESS)
     {
@@ -5430,23 +7147,52 @@ int main(int argc, char **argv)
 
     for (i = 0; *tests[i].name; i++)
     {
+        for(l = 1; argc > 1 && l < argc; l++)
+        {
+            if (Strstr(tests[i].name, argv[l]))
+            {
+                break;
+            }
+        }
+        if (l == argc && argc > 1)
+        {
+            continue;
+        }
+
         if (tests[i].fn)
         {
             _psTraceStr("%s\n", tests[i].name);
-            tests[i].fn();
+            rc = tests[i].fn();
+            if (rc == PS_SUCCESS)
+            {
+                num_succ++;
+            }
+            else
+            {
+                num_fail++;
+            }
+            num_test++;
         }
         else
         {
             _psTraceStr("%s: SKIPPED\n", tests[i].name);
         }
     }
-    printf("Finishing...\n");
+    Printf("Finishing...\n");
     psCryptoClose();
+
+    _psTraceInt(" %d failures", num_fail);
+    _psTraceInt(" in %d tests\n", num_test);
 
 #ifdef WIN32
     _psTrace("Press any key to close");
     getchar();
 #endif
 
-    return 0;
+    if (num_fail == 0)
+    {
+        _psTrace("All OK!\n");
+        return 0;
+    }
+    return EXIT_FAILURE;
 }

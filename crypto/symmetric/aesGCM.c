@@ -68,7 +68,7 @@ int32_t psAesInitGCM(psAesGcm_t *ctx,
     int32_t rc;
     unsigned char blockIn[16] = { 0 };
 
-    memset(ctx, 0x0, sizeof(psAesGcm_t));
+    Memset(ctx, 0x0, sizeof(psAesGcm_t));
     /* GCM always uses AES in ENCRYPT block mode, even for decrypt */
     rc = psAesInitBlockKey(&ctx->key, key, keylen, PS_AES_ENCRYPT);
     if (rc < 0)
@@ -102,13 +102,13 @@ void psAesReadyGCM(psAesGcm_t *ctx,
 {
     psGhashInit(ctx, ctx->gInit);
     /* Save aside first counter for final use */
-    memset(ctx->IV, 0, 16);
-    memcpy(ctx->IV, IV, 12);
+    Memset(ctx->IV, 0, 16);
+    Memcpy(ctx->IV, IV, 12);
     ctx->IV[15] = 1;
 
     /* Set up crypto counter starting at nonce || 2 */
-    memset(ctx->EncCtr, 0, 16);
-    memcpy(ctx->EncCtr, IV, 12);
+    Memset(ctx->EncCtr, 0, 16);
+    Memcpy(ctx->EncCtr, IV, 12);
     ctx->EncCtr[15] = 2;
 
     psGhashUpdate(ctx, aad, aadLen, GHASH_DATATYPE_AAD);
@@ -432,7 +432,7 @@ static void flf_blocker(psAesGcm_t *ctx, const unsigned char *Data_p,
             uint32 BytesProcess = min((uint32) DataCount,
                 FLFBLOCKSIZE - ctx->InputBufferCount);
 
-            memcpy(ctx->Input.Buffer
+            Memcpy(ctx->Input.Buffer
                 + ctx->InputBufferCount, Data_p, BytesProcess);
             DataCount -= BytesProcess;
             ctx->InputBufferCount += BytesProcess;
@@ -447,14 +447,14 @@ static void psGhashInit(psAesGcm_t *ctx,
 {
     uint32 *Key_p = (uint32 *) ctx->Hash_SubKey;
 
-    memset(&ctx->ProcessedBitCount, 0x0,
+    Memset(&ctx->ProcessedBitCount, 0x0,
         sizeof(ctx->ProcessedBitCount));
     ctx->InputBufferCount = 0;
     Key_p[0] = FL_GET_BE32(*(FL_UInt32_BE_UNA_t *) GHASHKey_p);
     Key_p[1] = FL_GET_BE32(*(FL_UInt32_BE_UNA_t *) (GHASHKey_p + 4));
     Key_p[2] = FL_GET_BE32(*(FL_UInt32_BE_UNA_t *) (GHASHKey_p + 8));
     Key_p[3] = FL_GET_BE32(*(FL_UInt32_BE_UNA_t *) (GHASHKey_p + 12));
-    memset(ctx->TagTemp, 0x0, 16);
+    Memset(ctx->TagTemp, 0x0, 16);
 }
 
 static void psGhashUpdate(psAesGcm_t *ctx, const unsigned char *data,

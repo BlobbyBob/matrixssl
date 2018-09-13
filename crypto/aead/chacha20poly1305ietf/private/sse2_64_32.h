@@ -4,7 +4,7 @@
 #include "common.h"
 
 #ifdef HAVE_INTRIN_H
-# include <intrin.h>
+# include "osdep_intrin.h"
 #endif
 
 #if defined(HAVE_EMMINTRIN_H) && \
@@ -12,7 +12,7 @@
       defined(_M_X64) || defined(_M_AMD64))
 
 # include <emmintrin.h>
-# include <stdint.h>
+# include "osdep_stdint.h"
 
 # ifndef _mm_set_epi64x
 #  define _mm_set_epi64x(Q0, Q1) sodium__mm_set_epi64x((Q0), (Q1))

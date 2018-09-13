@@ -45,7 +45,7 @@
  */
 
 # ifdef USE_AESNI_AES_BLOCK
-#  include <stdio.h>
+#  include "osdep_stdio.h"
 #  include <emmintrin.h>
 typedef struct __attribute__((aligned(16)))
 {

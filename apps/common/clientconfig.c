@@ -65,7 +65,7 @@ static const char* example_file_path(const char* filepath)
 {
     const char* ret_filepath = filepath;
     unsigned char *tmp_buf;
-    int32 tmp_buf_len;
+    psSizeL_t tmp_buf_len;
     int32 rc;
 
     rc = psGetFileBuf(NULL, filepath, &tmp_buf, &tmp_buf_len);
@@ -93,7 +93,7 @@ static const char* example_file_path(const char* filepath)
 }
 #endif /* EXAMPLE_FILE_KEYS */
 
-void clientconfigInitialize()
+void clientconfigInitialize(void)
 {
     g_clientconfig.ca_file = NULL;
     g_clientconfig.default_ca_file = NULL;
@@ -105,17 +105,23 @@ void clientconfigInitialize()
 # ifdef EXAMPLE_RSA_KEYS
     g_clientconfig.cert_file = example_file_path(rsaCertFile);
     g_clientconfig.privkey_file = example_file_path(rsaPrivkeyFile);
+#  if defined(USE_RSA) && defined(USE_IDENTITY_CERTIFICATES)
     g_clientconfig.load_key = &loadRsaKeysFromFile;
+#  endif
     g_clientconfig.loadKeysFromMemory = 0;
 # elif defined(EXAMPLE_EC_KEYS)
     g_clientconfig.cert_file = example_file_path(ecCertFile);
     g_clientconfig.privkey_file = example_file_path(ecPrivkeyFile);
+#  if defined(USE_ECC) && defined(USE_IDENTITY_CERTIFICATES)
     g_clientconfig.load_key = &loadECDH_ECDSAKeysFromFile;
+#  endif
     g_clientconfig.loadKeysFromMemory = 0;
 # elif defined(EXAMPLE_ECDH_RSA_KEYS)
     g_clientconfig.cert_file = example_file_path(ecdhRsaCertFile);
     g_clientconfig.privkey_file = example_file_path(ecdhRsaPrivkeyFile);
+#  if defined(USE_ECC) && defined(USE_IDENTITY_CERTIFICATES)
     g_clientconfig.load_key = &loadECDHRsaKeysFromFile;
+#  endif
     g_clientconfig.loadKeysFromMemory = 0;
 # elif defined(USE_PSK_CIPHER_SUITE)
     g_clientconfig.load_key = &loadPreSharedKeys;
@@ -125,11 +131,11 @@ void clientconfigInitialize()
 # ifdef USE_HEADER_KEYS
     g_clientconfig.cert_file = NULL;
     g_clientconfig.privkey_file = NULL;
-#  if defined(ID_RSA)
+#  if defined(ID_RSA) && defined(USE_RSA) && defined(USE_IDENTITY_CERTIFICATES)
     g_clientconfig.load_key = &loadRsaExampleKeys;
-#  elif defined(ID_ECDH_RSA)
+#  elif defined(ID_ECDH_RSA) && defined(USE_ECC) && defined(USE_IDENTITY_CERTIFICATES)
     g_clientconfig.load_key = &loadECDHRsaExampleKeys;
-#  elif defined(ID_ECDH_ECDSA)
+#  elif defined(ID_ECDH_ECDSA) && defined(USE_ECC) && defined(USE_IDENTITY_CERTIFICATES)
     g_clientconfig.load_key = &loadECDH_ECDSAExampleKeys;
 #  elif defined(USE_PSK_CIPHER_SUITE)
     g_clientconfig.load_key = &loadPreSharedKeys;
@@ -140,13 +146,13 @@ void clientconfigInitialize()
     buildCAStringFromFiles(&g_clientconfig.default_ca_file);
 }
 
-void clientconfigFree()
+void clientconfigFree(void)
 {
     psFree((char*)g_clientconfig.default_ca_file, NULL);
     g_clientconfig.default_ca_file = NULL;
 }
 
-void clientconfigUseFileKeys()
+void clientconfigUseFileKeys(void)
 {
     /* Do not overwrite load_key if not loaded from memory */
     if (g_clientconfig.loadKeysFromMemory) {
@@ -155,7 +161,7 @@ void clientconfigUseFileKeys()
     }
 }
 
-const char *clientconfigGetTrustedCA()
+const char *clientconfigGetTrustedCA(void)
 {
     if (g_clientconfig.ca_file) {
         return g_clientconfig.ca_file;
@@ -186,7 +192,8 @@ int32 clientconfigLoadKeys(sslKeys_t *keys)
     /* Additionally always load PSK keys unless they are already loaded
      */
     if (g_clientconfig.load_key != &loadPreSharedKeys &&
-        g_clientconfig.load_key != &loadExamplePreSharedKeys)
+        g_clientconfig.load_key != &loadExamplePreSharedKeys &&
+        g_clientconfig.loadPreSharedKeys)
     {
         rc = loadPreSharedKeys(keys);
 

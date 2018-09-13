@@ -66,7 +66,7 @@ int32 psYarrowStart(psYarrow_t *ctx)
         return PS_ARG_FAIL;
     }
     /* zero the memory used */
-    memset(ctx->pool, 0, sizeof(ctx->pool));
+    Memset(ctx->pool, 0, sizeof(ctx->pool));
     ctx->blocklen = AESBLOCKSIZE;
 
     return PS_SUCCESS;
@@ -208,7 +208,7 @@ uint32 psYarrowRead(unsigned char *out, uint32 outlen, psYarrow_t *ctx)
     uint32 len;
 
     /* put out in predictable state first */
-    memset(out, 0x0, outlen);
+    Memset(out, 0x0, outlen);
 
     len = outlen;
     pt = ct = out;

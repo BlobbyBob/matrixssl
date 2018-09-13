@@ -33,8 +33,6 @@
 /******************************************************************************/
 
 #include "app.h"
-/* Currently this example uses _psTrace for tracing, so osdep.h is needed: */
-#include "core/osdep.h"
 #include "core/psUtil.h"
 
 /* #define TEST */
@@ -84,8 +82,9 @@ int32 httpBasicParse(httpConn_t *cp, unsigned char *buf, uint32 len,
         {
             return HTTPS_ERROR;
         }
-        cp->parsebuf = realloc(cp->parsebuf, l + cp->parsebuflen);
-        memcpy(cp->parsebuf + cp->parsebuflen, tmp, l);
+        cp->parsebuf = (unsigned char *)Realloc(cp->parsebuf,
+                                                l + cp->parsebuflen);
+        Memcpy(cp->parsebuf + cp->parsebuflen, tmp, l);
         cp->parsebuflen += l;
         /* Parse the data out of the saved buffer first */
         c = cp->parsebuf;
@@ -111,21 +110,21 @@ L_PARSE_LINE:
         {
 /*
             if ((c + 1) != end) {
-                _psTrace("HTTP data parsing not supported, ignoring.\n");
+                psTrace("HTTP data parsing not supported, ignoring.\n");
             }
  */
             if (cp->parsebuf != NULL)
             {
-                free(cp->parsebuf); cp->parsebuf = NULL;
+                Free(cp->parsebuf); cp->parsebuf = NULL;
                 cp->parsebuflen = 0;
                 if (len != 0)
                 {
-                    _psTrace("HTTP data parsing not supported, ignoring.\n");
+                    psTrace("HTTP data parsing not supported, ignoring.\n");
                 }
             }
             if (trace)
             {
-                _psTrace("RECV COMPLETE HTTP MESSAGE\n");
+                psTrace("RECV COMPLETE HTTP MESSAGE\n");
             }
             return HTTPS_COMPLETE;
         }
@@ -136,21 +135,21 @@ L_PARSE_LINE:
         if (cp->parsebuf == NULL && (l = (int32) (end - tmp)) > 0)
         {
             cp->parsebuflen = l;
-            cp->parsebuf = malloc(cp->parsebuflen);
+            cp->parsebuf = (unsigned char *)Malloc(cp->parsebuflen);
             psAssert(cp->parsebuf != NULL);
-            memcpy(cp->parsebuf, tmp, cp->parsebuflen);
+            Memcpy(cp->parsebuf, tmp, cp->parsebuflen);
         }
         return HTTPS_PARTIAL;
     }
     *(c - 1) = '\0';    /* Replace \r with \0 just for printing */
     if (trace)
     {
-        _psTraceStr("RECV PARSED: [%s]\n", (char *) tmp);
+        psTraceStr("RECV PARSED: [%s]\n", (char *) tmp);
     }
     /* Finished parsing the saved buffer, now start parsing from incoming buf */
     if (cp->parsebuf != NULL)
     {
-        free(cp->parsebuf); cp->parsebuf = NULL;
+        Free(cp->parsebuf); cp->parsebuf = NULL;
         cp->parsebuflen = 0;
         c = buf;
         end = c + len;
@@ -161,7 +160,7 @@ L_PARSE_LINE:
     }
     goto L_PARSE_LINE;
 
-    return HTTPS_ERROR;
+    /* This line if unreachable. */
 }
 
 /******************************************************************************/

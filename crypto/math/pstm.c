@@ -38,7 +38,7 @@
 #include "../cryptoImpl.h"
 #include "pstmnt.h"
 
-#include <ctype.h> /* toupper() */
+#include "osdep_ctype.h" /* Toupper() */
 
 #if defined(USE_MATRIX_RSA) || defined(USE_MATRIX_ECC) || defined(USE_MATRIX_DH) || defined(USE_CL_RSA) || defined(USE_CL_DH) || defined(USE_QUICK_ASSIST_RSA) || defined(USE_QUICK_ASSIST_ECC)
 
@@ -582,7 +582,8 @@ int32_t pstm_add_d(psPool_t *pool, const pstm_int *a, pstm_digit b, pstm_int *c)
 }
 
 # endif /* defined USE_ECC || defined USE_DH || defined USE_CERT_GEN */
-# ifdef USE_ECC
+
+# if defined(USE_ECC) || defined(USE_CERT_GEN)
 
 /* chars used in radix (base) conversions */
 const static unsigned char pstm_s_rmap[64] =
@@ -603,7 +604,8 @@ const static unsigned char pstm_s_rmap[64] =
 int32_t pstm_read_radix(psPool_t *pool, pstm_int *a,
     const char *buf, psSize_t len, uint8_t radix)
 {
-    int32_t y, neg;
+    int32_t y;
+    uint8_t neg;
     unsigned char ch;
 
     /* make sure the radix is ok */
@@ -634,7 +636,7 @@ int32_t pstm_read_radix(psPool_t *pool, pstm_int *a,
             numbers like 1AB and 1ab to represent the same value [e.g. in hex].
          */
         ch = ((radix < 36) ?
-              (unsigned char) toupper((unsigned char) *buf) :
+              (unsigned char) Toupper((unsigned char) *buf) :
               (unsigned char) *buf);
         for (y = 0; y < 64; y++)
         {
@@ -667,7 +669,7 @@ int32_t pstm_read_radix(psPool_t *pool, pstm_int *a,
     }
     return PS_SUCCESS;
 }
-# endif /* USE_ECC */
+# endif /* USE_ECC || USE_CERT_GEN */
 
 /******************************************************************************/
 
@@ -703,6 +705,12 @@ uint16_t pstm_unsigned_bin_size(const pstm_int *a)
     return size / 8 + ((size & 7) != 0 ? 1 : 0);
 }
 
+uint16_t pstm_unsigned_bin_size_nullsafe(const pstm_int *a)
+{
+    psSize_t size = a ? pstm_count_bits(a) : 0;
+
+    return size / 8 + ((size & 7) != 0 ? 1 : 0);
+}
 /******************************************************************************/
 /**
     a = b, where b is a single digit.
@@ -2061,6 +2069,10 @@ int32_t pstm_exptmod(psPool_t *pool, const pstm_int *G, const pstm_int *X,
     case 2048:
     case 3072:
     case 4096:
+#ifdef USE_LARGE_DH_GROUPS
+    case 6144:
+    case 8192:
+#endif
         break;
     default:
         psTraceIntCrypto("pstm_exptmod prime size failed: %hu\n", x);
@@ -2069,16 +2081,22 @@ int32_t pstm_exptmod(psPool_t *pool, const pstm_int *G, const pstm_int *X,
 #  ifdef USE_CONSTANT_TIME_MODEXP
     if (P->dp[0] & 1)
     {
+#ifdef USE_LARGE_DH_GROUPS
+        pstmnt_word Base[1024 / sizeof(pstmnt_word)];
+        pstmnt_word Mod[1024 / sizeof(pstmnt_word)];
+        pstmnt_word Temp[1024 / sizeof(pstmnt_word) * 7 + 1];
+#else
         pstmnt_word Base[512 / sizeof(pstmnt_word)];
         pstmnt_word Mod[512 / sizeof(pstmnt_word)];
         pstmnt_word Temp[512 / sizeof(pstmnt_word) * 7 + 1];
+#endif
         pstmnt_word mp = pstmnt_neg_small_inv(pstmnt_const_ptr(P));
 
 
-        memset(Base, 0, sizeof(Base));
+        Memset(Base, 0, sizeof(Base));
         if (G->used <= P->used)
         {
-            memcpy(Base, pstmnt_const_ptr(G), pstmnt_size_bytes(G));
+            Memcpy(Base, pstmnt_const_ptr(G), pstmnt_size_bytes(G));
         }
         else
         {
@@ -2090,7 +2108,7 @@ int32_t pstm_exptmod(psPool_t *pool, const pstm_int *G, const pstm_int *X,
                 return err;
             }
             err = pstm_mod(pool, G, P, &tmp_int);
-            memcpy(Base, pstmnt_const_ptr(&tmp_int),
+            Memcpy(Base, pstmnt_const_ptr(&tmp_int),
                 pstmnt_size_bytes(&tmp_int));
             pstm_clear(&tmp_int);
             if (err != PSTM_OKAY)
@@ -2098,7 +2116,7 @@ int32_t pstm_exptmod(psPool_t *pool, const pstm_int *G, const pstm_int *X,
                 return err;
             }
         }
-        memcpy(Mod, pstmnt_const_ptr(P), pstmnt_size_bytes(P));
+        Memcpy(Mod, pstmnt_const_ptr(P), pstmnt_size_bytes(P));
 
         Y->used = P->used;
         if (Y->used > Y->alloc)
@@ -2532,6 +2550,31 @@ int32_t pstm_to_unsigned_bin(psPool_t *pool, const pstm_int *a, unsigned char *b
     pstm_reverse(b, x);
     pstm_clear(&t);
     return PS_SUCCESS;
+}
+
+/* Wrapper for pstm_to_unsigned_bin that handles allocation too. */
+unsigned char *pstm_to_unsigned_bin_alloc(psPool_t *pool, const pstm_int *a)
+{
+    uint32 size;
+    unsigned char *buf;
+    int32_t res;
+
+    if (a == NULL)
+    {
+        return NULL;
+    }
+    size = pstm_unsigned_bin_size(a);
+    buf = psMalloc(pool, size);
+    if (buf != NULL)
+    {
+        res = pstm_to_unsigned_bin(pool, a, buf);
+        if (res < 0)
+        {
+            psFree(buf, pool);
+            buf = NULL;
+        }
+    }
+    return buf;
 }
 
 /******************************************************************************/

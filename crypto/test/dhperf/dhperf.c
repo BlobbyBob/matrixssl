@@ -31,7 +31,11 @@
  *      http://www.gnu.org/copyleft/gpl.html
  */
 /******************************************************************************/
+#ifndef _POSIX_C_SOURCE
+# define _POSIX_C_SOURCE 200112L
+#endif
 
+#include "osdep_stdio.h"
 #include "crypto/cryptoImpl.h"
 
 #ifdef USE_DH
@@ -163,8 +167,7 @@ int main(int argc, char **argv)
         psGetTime(&start, NULL);
         while (iter < keys[i].iter)
         {
-            if (psDhGenKeyInts(pool, dhParams.size, &dhParams.p, &dhParams.g,
-                    &dhKeyPriv, NULL) < 0)
+            if (psDhGenKeyParams(pool, &dhParams, &dhKeyPriv, NULL) < 0)
             {
                 _psTrace("	FAILED OPERATION\n");
             }
@@ -181,16 +184,14 @@ int main(int argc, char **argv)
         if (p == NULL || g == NULL)
         {
             _psTrace("	DH parameters could not be used\n");
-            fprintf(stderr, "FAIL: DH parameters did not work.\n");
+            Fprintf(stderr, "FAIL: DH parameters did not work.\n");
             exit(1);
         }
-        if (psDhGenKeyInts(misc, dhParams.size, &dhParams.p, &dhParams.g,
-                &dhKeyPriv, NULL) < 0)
+        if (psDhGenKeyParams(misc, &dhParams, &dhKeyPriv, NULL) < 0)
         {
             _psTrace("	FAILED OPERATION\n");
         }
-        if (psDhGenKeyInts(misc, dhParams.size, &dhParams.p, &dhParams.g,
-                &dhKeyPub, NULL) < 0)
+        if (psDhGenKeyParams(misc, &dhParams, &dhKeyPub, NULL) < 0)
         {
             _psTrace("	FAILED OPERATION\n");
         }
@@ -199,8 +200,8 @@ int main(int argc, char **argv)
         psGetTime(&start, NULL);
         while (iter < keys[i].iter)
         {
-            if (psDhGenSharedSecret(pool, &dhKeyPriv, &dhKeyPub, p, pLen,
-                    out, &outLen, NULL) < 0)
+            if (psDhGenSharedSecretParams(pool, &dhKeyPriv, &dhKeyPub,
+                                          &dhParams, out, &outLen, NULL) < 0)
             {
                 _psTrace("	FAILED OPERATION\n");
             }
@@ -231,13 +232,12 @@ int main(int argc, char **argv)
 #else
 
 /* Stub main */
-# include <stdio.h>
+# include "osdep_stdio.h"
 
 int main(int argc, char **argv)
 {
-    printf("USE_DH not defined.\n");
+    Printf("USE_DH not defined.\n");
     return 0;
 }
 
 #endif /* USE_DH */
-

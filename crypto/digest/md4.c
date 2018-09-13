@@ -199,7 +199,7 @@ void psMd4Update(psMd4_t *md, const unsigned char *buf, uint32_t len)
     while (len > 0)
     {
         n = min(len, (64 - md->curlen));
-        memcpy(md->buf + md->curlen, buf, (size_t) n);
+        Memcpy(md->buf + md->curlen, buf, (size_t) n);
         md->curlen  += n;
         buf             += n;
         len             -= n;
@@ -291,7 +291,7 @@ int32_t psMd4Final(psMd4_t *md, unsigned char *out)
     {
         STORE32L(md->state[i], out + (4 * i));
     }
-    memset(md, 0x0, sizeof(psMd4_t));
+    Memset(md, 0x0, sizeof(psMd4_t));
     return PS_SUCCESS;
 }
 

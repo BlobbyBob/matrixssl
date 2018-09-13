@@ -106,6 +106,7 @@ typedef struct
     pstm_int g;     /* The Generator/Base value */
     psPool_t *pool;
     psSize_t size;  /* Size of 'p' in bytes */
+    psSize_t x_bitlen; /* Recommended size of private key in bits (optional). */
 } psDhParams_t;
 
 typedef struct

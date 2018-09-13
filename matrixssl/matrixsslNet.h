@@ -6,20 +6,34 @@
 /*****************************************************************************
 * Copyright (c) 2017 INSIDE Secure Oy. All Rights Reserved.
 *
-* This confidential and proprietary software may be used only as authorized
-* by a licensing agreement from INSIDE Secure.
+* The latest version of this code is available at http://www.matrixssl.org
 *
-* The entire notice above must be reproduced on all authorized copies that
-* may only be made to the extent permitted by a licensing agreement from
-* INSIDE Secure.
+* This software is open source; you can redistribute it and/or modify
+* it under the terms of the GNU General Public License as published by
+* the Free Software Foundation; either version 2 of the License, or
+* (at your option) any later version.
+*
+* This General Public License does NOT permit incorporating this software
+* into proprietary programs.  If you are unable to comply with the GPL, a
+* commercial license for this software may be purchased from INSIDE at
+* http://www.insidesecure.com/
+*
+* This program is distributed in WITHOUT ANY WARRANTY; without even the
+* implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+* See the GNU General Public License for more details.
+*
+* You should have received a copy of the GNU General Public License
+* along with this program; if not, write to the Free Software
+* Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+* http://www.gnu.org/copyleft/gpl.html
 *****************************************************************************/
 
 #ifndef INCLUDE_GUARD_MATRIXSSLNET_H
 #define INCLUDE_GUARD_MATRIXSSLNET_H
 
-#include "core/coreApi.h"
+#include "coreApi.h"
 #include "matrixssl/matrixsslApi.h"
-#include <stdbool.h>
+#include "osdep_stdbool.h"
 
 #ifdef USE_PS_NETWORKING
 
@@ -37,6 +51,7 @@ typedef struct matrixSslInteract
     unsigned char ch2[2];
     int32 prev_rc;
     int32 last_encoded_pt_bytes;
+    unsigned char last_alert_level;
     psBool_t handshake_complete;
     psBool_t send_close_notify;
     /* State variables for processing input as TLS records. */
@@ -74,6 +89,7 @@ int32 matrixSslInteractPeek(matrixSslInteract_t *i,
 int32 matrixSslInteractWrite(matrixSslInteract_t *i,
                              const unsigned char *target,
                              size_t length);
+int matrixSslInteractRemoveFd(matrixSslInteract_t *i);
 void matrixSslInteractClose(matrixSslInteract_t *i);
 void matrixSslInteractCloseErr(matrixSslInteract_t *i, int32 status);
 int32 matrixSslInteractSendCloseNotify(matrixSslInteract_t *i);

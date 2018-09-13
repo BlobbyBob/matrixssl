@@ -6,29 +6,44 @@
 /*****************************************************************************
 * Copyright (c) 2017 INSIDE Secure Oy. All Rights Reserved.
 *
-* This confidential and proprietary software may be used only as authorized
-* by a licensing agreement from INSIDE Secure.
+* The latest version of this code is available at http://www.matrixssl.org
 *
-* The entire notice above must be reproduced on all authorized copies that
-* may only be made to the extent permitted by a licensing agreement from
-* INSIDE Secure.
+* This software is open source; you can redistribute it and/or modify
+* it under the terms of the GNU General Public License as published by
+* the Free Software Foundation; either version 2 of the License, or
+* (at your option) any later version.
+*
+* This General Public License does NOT permit incorporating this software
+* into proprietary programs.  If you are unable to comply with the GPL, a
+* commercial license for this software may be purchased from INSIDE at
+* http://www.insidesecure.com/
+*
+* This program is distributed in WITHOUT ANY WARRANTY; without even the
+* implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+* See the GNU General Public License for more details.
+*
+* You should have received a copy of the GNU General Public License
+* along with this program; if not, write to the Free Software
+* Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+* http://www.gnu.org/copyleft/gpl.html
 *****************************************************************************/
 
 #define _GNU_SOURCE
-#include "core/coreApi.h"
+#include "coreApi.h"
 #include "matrixssl/matrixsslImpl.h"
 #include "matrixsslNet.h"
 #include "matrixsslSocket.h"
 
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <string.h>
+#include "osdep_stdio.h"
+#include "osdep_unistd.h"
+#include "osdep_sys_types.h"
+#include "osdep_sys_socket.h"
+#include "osdep_string.h"
 
 #define USE_MATRIX_NET_DEBUG
 #undef DEBUGF                /* Protect against possible multiple definition. */
 #ifdef USE_MATRIX_NET_DEBUG
-# define DEBUGF(...) printf(__VA_ARGS__)
+# define DEBUGF(...) Printf(__VA_ARGS__)
 #else
 # define DEBUGF(...) do {} while (0)
 #endif
@@ -39,13 +54,14 @@
 # define FLAG_TLS_1_0 (1 << 10)
 # define FLAG_TLS_1_1 (1 << 11)
 # define FLAG_TLS_1_2 (1 << 12)
+# define FLAG_TLS_1_3 (1 << 13)
 
 static psSocketFunctions_t psSocketFunctionsTLS;
 
 static const int ciphers_default = 1;
 static const psCipher16_t cipherlist_default[] = { 47 };
 
-# define logMessage(l, t, ...) do { printf(#l " " #t ": " __VA_ARGS__); printf("\n"); } while (0) /* Log_Verbose, TAG, "Wrote %d bytes", transferred */
+# define logMessage(l, t, ...) do { Printf(#l " " #t ": " __VA_ARGS__); Printf("\n"); } while (0) /* Log_Verbose, TAG, "Wrote %d bytes", transferred */
 
 # ifdef USE_CLIENT_SIDE_SSL
 /* The MatrixSSL certificate validation callback. */
@@ -93,6 +109,10 @@ static void set_tls_options_version(sslSessOpts_t *options_p, int tls)
     {
         options_p->versionFlag |= SSL_FLAGS_TLS_1_2;
     }
+    if ((tls & FLAG_TLS_1_3) || tls == 0)
+    {
+        options_p->versionFlag |= SSL_FLAGS_TLS_1_3_DRAFT_23;
+    }
 }
 
 static int init_client_tls(psSocket_t *sock, const char *capath, int tls)
@@ -106,7 +126,7 @@ static int init_client_tls(psSocket_t *sock, const char *capath, int tls)
     const char *host = (const char *) node_global;
     int32 (*ssl_cert_auth_cb)(ssl_t *ssl, psX509Cert_t *cert, int32 alert);
 
-    memset(&options, 0x0, sizeof(sslSessOpts_t));
+    Memset(&options, 0x0, sizeof(sslSessOpts_t));
     set_tls_options_version(&options, tls);
 
     if (matrixSslOpen() < 0)
@@ -147,7 +167,7 @@ static int init_client_tls(psSocket_t *sock, const char *capath, int tls)
     }
 
     matrixSslNewHelloExtension(&extension, NULL);
-    matrixSslCreateSNIext(NULL, (unsigned char *) host, (uint32) strlen(host),
+    matrixSslCreateSNIext(NULL, (unsigned char *) host, (uint32) Strlen(host),
         &ext, &extLen);
     if (ext)
     {
@@ -198,7 +218,7 @@ static int32 do_tls_handshake_socket(matrixSslInteract_t *msi_p, int32 rc)
             DEBUGF("wait for data from peer\n");
             FD_ZERO(&fds);
             FD_SET(sockfd, &fds);
-            select(sockfd + 1, &fds, NULL, NULL, NULL);
+            Select(sockfd + 1, &fds, NULL, NULL, NULL);
         }
         else if (rc ==  MATRIXSSL_REQUEST_SEND ||
                  msi_p->send_len_left > 0)
@@ -206,7 +226,7 @@ static int32 do_tls_handshake_socket(matrixSslInteract_t *msi_p, int32 rc)
             DEBUGF("wait for sending data to peer\n");
             FD_ZERO(&fds);
             FD_SET(sockfd, &fds);
-            select(sockfd + 1, NULL, &fds, NULL, NULL);
+            Select(sockfd + 1, NULL, &fds, NULL, NULL);
         }
 /*              if (rc != 0) */
         DEBUGF("hs rc code: %d\n", rc);
@@ -356,7 +376,7 @@ static ssize_t psWriteTLS(psSocket_t *sock, const void *buf, size_t len)
     if (rc > PS_SUCCESS)
     {
         /* Continue handling. */
-        abort();
+        Abort();
     }
     sock->extra.tls->nested_call = 0;
     return len; /* All len bytes sent. */
@@ -396,62 +416,59 @@ read_data_left:
 
     /* Perform interaction with ssl, including sending and reception of
        packets. */
-interact_again:
-    sock->extra.tls->nested_call = 1;
-    rc = matrixSslInteract(&(sock->extra.tls->msi), can_write, can_read);
-    DEBUGF("Got rc: %d\n", rc);
-    if (rc == MATRIXSSL_RECEIVED_ALERT)
-    {
-        sock->extra.tls->nested_call = 0;
-        DEBUGF("Unexpected alert\n");
-        return PS_FAILURE;
-    }
-    else if (matrixSslInteractReadLeft(&(sock->extra.tls->msi)))
-    {
-        sock->extra.tls->nested_call = 0;
-        goto read_data_left;
-    }
-    sock->extra.tls->nested_call = 0;
-    if (rc == MATRIXSSL_REQUEST_SEND ||
-        rc == MATRIXSSL_REQUEST_RECV)
-    {
 
-        int sockfd = psSocketGetFd(sock);
-        int process_more;
-        fd_set fds;
-        FD_ZERO(&fds);
-        FD_SET(sockfd, &fds);
-        /* set can_read and can_write according to requested direction. */
-
-        can_read = rc == MATRIXSSL_REQUEST_RECV;
-        can_write = rc == MATRIXSSL_REQUEST_SEND;
-        /* Wait for input or being able to output. */
-        process_more = select(sockfd + 1,
-            can_read ? &fds : NULL,
-            can_write ? &fds : NULL,
-            NULL, NULL);
-        if (process_more == 1)
+    while (1)
+    {
+        sock->extra.tls->nested_call = 1;
+        rc = matrixSslInteract(&(sock->extra.tls->msi), can_write, can_read);
+        DEBUGF("Got rc: %d\n", rc);
+        if (rc == MATRIXSSL_RECEIVED_ALERT)
         {
-            goto interact_again;
+            sock->extra.tls->nested_call = 0;
+            DEBUGF("Unexpected alert\n");
+            return PS_FAILURE;
+        }
+        else if (matrixSslInteractReadLeft(&(sock->extra.tls->msi)))
+        {
+            sock->extra.tls->nested_call = 0;
+            goto read_data_left;
+        }
+        sock->extra.tls->nested_call = 0;
+        if (rc == MATRIXSSL_REQUEST_SEND ||
+            rc == MATRIXSSL_REQUEST_RECV)
+        {
+            int sockfd = psSocketGetFd(sock);
+            int process_more;
+            fd_set fds;
+            FD_ZERO(&fds);
+            FD_SET(sockfd, &fds);
+            /* set can_read and can_write according to requested direction. */
+
+            can_read = rc == MATRIXSSL_REQUEST_RECV;
+            can_write = rc == MATRIXSSL_REQUEST_SEND;
+            /* Wait for input or being able to output. */
+            process_more = Select(sockfd + 1,
+                                  can_read ? &fds : NULL,
+                                  can_write ? &fds : NULL,
+                                  NULL, NULL);
+            if (process_more == 1)
+            {
+                continue;
+            }
+        }
+        else if (rc == MATRIXSSL_REQUEST_CLOSE)
+        {
+            return 0;
+        }
+        else if (rc == MATRIXSSL_NET_DISCONNECTED)
+        {
+            return 0;
+        }
+        else if (rc < 0)
+        {
+            return rc;
         }
     }
-    else if (rc == MATRIXSSL_REQUEST_CLOSE)
-    {
-        return 0;
-    }
-    else if (rc == MATRIXSSL_NET_DISCONNECTED)
-    {
-        return 0;
-    }
-    else if (rc < 0)
-    {
-        return rc;
-    }
-
-    /* Nothing to return, so we wait for more data (blocking). */
-    rc = MATRIXSSL_REQUEST_RECV;
-    goto interact_again;
-    return 0;
 }
 
 int psGetaddrinfoTLS(const char *node, const char *service,
@@ -475,7 +492,7 @@ const psSocketFunctions_t *psGetSocketFunctionsTLS(void)
         return NULL;
     }
 
-    memcpy(&new, orig, sizeof(psSocketFunctions_t));
+    Memcpy(&new, orig, sizeof(psSocketFunctions_t));
     /* Replace IO related functionality.
        Sockets themselves work identically (blocking, using fd, etc.) */
     new.psSocket = &psSocketTLS;
@@ -489,7 +506,7 @@ const psSocketFunctions_t *psGetSocketFunctionsTLS(void)
        the data is not invalidated during overwriting exactly the same bytes.
      */
     new.psGetaddrinfo = &psGetaddrinfoTLS;
-    memmove(&psSocketFunctionsTLS, &new, sizeof(psSocketFunctions_t));
+    Memmove(&psSocketFunctionsTLS, &new, sizeof(psSocketFunctions_t));
     return &psSocketFunctionsTLS;
 }
 

@@ -8,7 +8,7 @@
  *      and handshake hashing.
  */
 /*
- *      Copyright (c) 2013-2017 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 INSIDE Secure Corporation
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -56,10 +56,10 @@ static int32_t genKeyBlock(ssl_t *ssl)
     uint32 reqKeyLen;
     int32_t rc = PS_FAIL;
 
-    memcpy(msSeed, LABEL_KEY_BLOCK, LABEL_SIZE);
-    memcpy(msSeed + LABEL_SIZE, ssl->sec.serverRandom,
+    Memcpy(msSeed, LABEL_KEY_BLOCK, LABEL_SIZE);
+    Memcpy(msSeed + LABEL_SIZE, ssl->sec.serverRandom,
         SSL_HS_RANDOM_SIZE);
-    memcpy(msSeed + LABEL_SIZE + SSL_HS_RANDOM_SIZE,
+    Memcpy(msSeed + LABEL_SIZE + SSL_HS_RANDOM_SIZE,
         ssl->sec.clientRandom, SSL_HS_RANDOM_SIZE);
 
     /* We must generate enough key material to fill the various keys */
@@ -207,10 +207,10 @@ int32_t tlsDeriveKeys(ssl_t *ssl)
     master_secret = PRF(pre_master_secret, "master secret",
         client_random + server_random);
  */
-    memcpy(msSeed, LABEL_MASTERSEC, LABEL_SIZE);
-    memcpy(msSeed + LABEL_SIZE, ssl->sec.clientRandom,
+    Memcpy(msSeed, LABEL_MASTERSEC, LABEL_SIZE);
+    Memcpy(msSeed + LABEL_SIZE, ssl->sec.clientRandom,
         SSL_HS_RANDOM_SIZE);
-    memcpy(msSeed + LABEL_SIZE + SSL_HS_RANDOM_SIZE,
+    Memcpy(msSeed + LABEL_SIZE + SSL_HS_RANDOM_SIZE,
         ssl->sec.serverRandom, SSL_HS_RANDOM_SIZE);
 
 #  ifdef USE_TLS_1_2
@@ -302,8 +302,8 @@ int32_t tlsExtendedDeriveKeys(ssl_t *ssl)
     master_secret = PRF(pre_master_secret, "extended master secret",
         session_hash);
  */
-    memcpy(msSeed, LABEL_EXT_MASTERSEC, LABEL_EXT_SIZE);
-    memcpy(msSeed + LABEL_EXT_SIZE, hash, outLen);
+    Memcpy(msSeed, LABEL_EXT_MASTERSEC, LABEL_EXT_SIZE);
+    Memcpy(msSeed + LABEL_EXT_SIZE, hash, outLen);
 
 #  ifdef USE_TLS_1_2
     if (ssl->flags & SSL_FLAGS_TLS_1_2)
@@ -356,6 +356,63 @@ int32_t tlsExtendedDeriveKeys(ssl_t *ssl)
 }
 
 #  ifdef USE_SHA_MAC
+
+#    ifdef USE_HMAC_TLS
+#     ifdef USE_HMAC_TLS_LUCKY13_COUNTERMEASURE
+/*
+  Lucky13 countermeasure needs to perform more work than necessary
+  to mask the timing side-channel. We shall take the additional dummy
+  data from the end of the real input buffer in order to make cache
+  timing analysis harder. This function computes the max amount of
+  data that can be read after the plaintext.
+*/
+
+static
+uint32_t computeLucky13WorkAmount(ssl_t *ssl,
+        int32 mode,
+        uint32_t ptLen)
+{
+    uint32_t macLen, ivLen, padLen, extraWorkLen;
+
+    /* Lucky13 countermeasure only needed when decrypting. */
+    if (mode != HMAC_VERIFY)
+    {
+        return ptLen;
+    }
+
+    /*
+      Note: ssl->cipher->{macSize,ivSize} are the corresponding
+      values for the negotiated cipher. During renegotiation,
+      the negotiated cipher may be different than the currently
+      active cipher.
+    */
+    macLen = ssl->deMacSize;
+    ivLen = ssl->deIvSize;
+    padLen = ssl->rec.len - macLen - ivLen - ptLen - 1;
+
+    /* Should not get here unless we're using a block cipher. */
+    psAssert(macLen > 0);
+
+# ifdef DEBUG_LUCKY13
+    Printf("record len : %d\n", ssl->rec.len);
+    Printf("ivLen: %u\n", ivLen);
+    Printf("ptLen: %u\n", ptLen);
+    Printf("macLen: %u\n", macLen);
+    Printf("padLen: %u\n", padLen);
+    Printf("adding: %u\n", macLen + padLen);
+# endif
+
+    /*
+      The input buffer has at least MAClen + padding len
+      extra bytes after the plaintext. The minimum amount is the
+      exact amount when this is the final record in the buffer.
+*/
+    extraWorkLen = macLen + padLen;
+    return ptLen + extraWorkLen;
+}
+#     endif
+#    endif
+
 #   ifdef USE_SHA1
 /******************************************************************************/
 /*
@@ -403,28 +460,55 @@ int32_t tlsHMACSha1(ssl_t *ssl, int32 mode, unsigned char type,
         if (mode == HMAC_CREATE)
         {
             seq = dtls_seq;
-            memcpy(dtls_seq, ssl->epoch, 2);
-            memcpy(dtls_seq + 2, ssl->rsn, 6);
+            Memcpy(dtls_seq, ssl->epoch, 2);
+            Memcpy(dtls_seq + 2, ssl->rsn, 6);
         }
         else     /* HMAC_VERIFY */
         {
             seq = dtls_seq;
-            memcpy(dtls_seq, ssl->rec.epoch, 2);
-            memcpy(dtls_seq + 2, ssl->rec.rsn, 6);
+            Memcpy(dtls_seq, ssl->rec.epoch, 2);
+            Memcpy(dtls_seq + 2, ssl->rec.rsn, 6);
         }
     }
 #    endif /* USE_DTLS */
 
+    /*
+      ssl->rec.len = length of TLSCiphertext (outer record) contents
+      len = length of TLSCompressed.fragment. For block ciphers,
+            len = rec.len - len(IV) - len(MAC) - len(padding) - 1.
+
+      When using the NULL cipher, TLSCiphertext == TLSCompressed.
+      When not using compression, TLSCompressed == TLSPlaintext.
+
+      RFC 5246, 6.2.3.1: The MAC is generated as:
+      MAC(MAC_write_key, seq_num +
+                            TLSCompressed.type +
+                            TLSCompressed.version +
+                            TLSCompressed.length +
+                            TLSCompressed.fragment);
+
+      So the total amount of bytes to MAC is:
+      8 (64-bit sequence number)
+      +5 (TLSCompressed header)
+      +len (TLSCompressed.fragment)
+
+      When not using compression, TLSCompressed.fragment is the
+      same as TLSPlaintext.fragment. Thus, the maximum number
+      of bytes to MAC, when not using compression, is
+      16384 + 8 + 5 = 16397.
+
+      The Lucky thirteen name comes from the fact that 8 + 5 = 13.
+    */
     tmp[0] = type;
     tmp[1] = majVer;
     tmp[2] = minVer;
     tmp[3] = (len & 0xFF00) >> 8;
     tmp[4] = len & 0xFF;
+
 #    ifdef USE_HMAC_TLS
 #     ifdef USE_HMAC_TLS_LUCKY13_COUNTERMEASURE
-    /* Lucky13 counter measure is only used when receiving record.
-       Decrement 4 bytes of header from amount of ssl->rec to process. */
-    alt_len = mode == HMAC_CREATE || ssl->rec.len < len + 4? len : ssl->rec.len - 4;
+    /* Lucky13 countermeasure is only used on the decryption side. */
+    alt_len = computeLucky13WorkAmount(ssl, mode, len);
 #     else
     alt_len = len;
 #     endif
@@ -502,14 +586,14 @@ int32_t tlsHMACSha2(ssl_t *ssl, int32 mode, unsigned char type,
         if (mode == HMAC_CREATE)
         {
             seq = dtls_seq;
-            memcpy(dtls_seq, ssl->epoch, 2);
-            memcpy(dtls_seq + 2, ssl->rsn, 6);
+            Memcpy(dtls_seq, ssl->epoch, 2);
+            Memcpy(dtls_seq + 2, ssl->rsn, 6);
         }
         else     /* HMAC_VERIFY */
         {
             seq = dtls_seq;
-            memcpy(dtls_seq, ssl->rec.epoch, 2);
-            memcpy(dtls_seq + 2, ssl->rec.rsn, 6);
+            Memcpy(dtls_seq, ssl->rec.epoch, 2);
+            Memcpy(dtls_seq + 2, ssl->rec.rsn, 6);
         }
     }
 #    endif /* USE_DTLS */
@@ -522,9 +606,8 @@ int32_t tlsHMACSha2(ssl_t *ssl, int32 mode, unsigned char type,
 
 #    ifdef USE_HMAC_TLS
 #     ifdef USE_HMAC_TLS_LUCKY13_COUNTERMEASURE
-    /* Lucky13 counter measure is only used when receiving record.
-       Decrement 4 bytes of header from amount of ssl->rec to process. */
-    alt_len = mode == HMAC_CREATE || ssl->rec.len < len + 4? len : ssl->rec.len - 4;
+    /* Lucky13 countermeasure is only used on the decryption side. */
+    alt_len = computeLucky13WorkAmount(ssl, mode, len);
 #     else
     alt_len = len;
 #     endif
@@ -687,6 +770,10 @@ int32 sslActivateReadCipher(ssl_t *ssl)
     ssl->decrypt = ssl->cipher->decrypt;
     ssl->verifyMac = ssl->cipher->verifyMac;
     ssl->nativeDeMacSize = ssl->cipher->macSize;
+# ifdef USE_CHACHA20_POLY1305_IETF_CIPHER_SUITE
+    ssl->activeReadCipher = ssl->cipher;
+# endif
+
     if (ssl->extFlags.truncated_hmac)
     {
         if (ssl->cipher->macSize > 0)   /* Only for HMAC-based ciphers */
@@ -707,14 +794,14 @@ int32 sslActivateReadCipher(ssl_t *ssl)
 /*
     Reset the expected incoming sequence number for the new suite
  */
-    memset(ssl->sec.remSeq, 0x0, sizeof(ssl->sec.remSeq));
+    Memset(ssl->sec.remSeq, 0x0, sizeof(ssl->sec.remSeq));
 
     if (ssl->cipher->ident != SSL_NULL_WITH_NULL_NULL)
     {
         /* Sanity */
-        if (ssl->sec.rMACptr == NULL)
+        if (ssl->sec.rKeyptr == NULL && ssl->sec.rMACptr == NULL)
         {
-            psTraceInfo("sslActivateReadCipher sanity fail\n");
+            psTraceErrr("sslActivateReadCipher sanity fail\n");
             return PS_FAILURE;
         }
         ssl->flags |= SSL_FLAGS_READ_SECURE;
@@ -744,9 +831,16 @@ int32 sslActivateReadCipher(ssl_t *ssl)
 /*
         Copy the newly activated read keys into the live buffers
  */
-        memcpy(ssl->sec.readMAC, ssl->sec.rMACptr, ssl->deMacSize);
-        memcpy(ssl->sec.readKey, ssl->sec.rKeyptr, ssl->cipher->keySize);
-        memcpy(ssl->sec.readIV, ssl->sec.rIVptr, ssl->cipher->ivSize);
+        if (ssl->sec.rMACptr)
+            Memcpy(ssl->sec.readMAC, ssl->sec.rMACptr, ssl->deMacSize);
+        if (ssl->sec.rKeyptr)
+            Memcpy(ssl->sec.readKey, ssl->sec.rKeyptr, ssl->cipher->keySize);
+        if (ssl->sec.rIVptr)
+            Memcpy(ssl->sec.readIV, ssl->sec.rIVptr, ssl->cipher->ivSize);
+# ifdef DEBUG_TLS_MAC
+        psTracePrintTlsKeys(ssl);
+# endif /* DEBUG_TLS_MAC */
+
 /*
         set up decrypt contexts
  */
@@ -755,7 +849,7 @@ int32 sslActivateReadCipher(ssl_t *ssl)
             if (ssl->cipher->init(&(ssl->sec), INIT_DECRYPT_CIPHER,
                     ssl->cipher->keySize) < 0)
             {
-                psTraceInfo("Unable to initialize read cipher suite\n");
+                psTraceErrr("Unable to initialize read cipher suite\n");
                 return PS_FAILURE;
             }
         }
@@ -777,10 +871,10 @@ int32 sslActivateWriteCipher(ssl_t *ssl)
             ssl->oenNativeHmacSize = ssl->nativeEnMacSize;
             ssl->oenBlockSize = ssl->enBlockSize;
             ssl->oenIvSize = ssl->enIvSize;
-            memcpy(ssl->owriteMAC, ssl->sec.writeMAC, ssl->enMacSize);
-            memcpy(&ssl->oencryptCtx, &ssl->sec.encryptCtx,
+            Memcpy(ssl->owriteMAC, ssl->sec.writeMAC, ssl->enMacSize);
+            Memcpy(&ssl->oencryptCtx, &ssl->sec.encryptCtx,
                 sizeof(psCipherContext_t));
-            memcpy(ssl->owriteIV, ssl->sec.writeIV, ssl->cipher->ivSize);
+            Memcpy(ssl->owriteIV, ssl->sec.writeIV, ssl->cipher->ivSize);
         }
     }
 # endif /* USE_DTLS */
@@ -788,6 +882,10 @@ int32 sslActivateWriteCipher(ssl_t *ssl)
     ssl->encrypt = ssl->cipher->encrypt;
     ssl->generateMac = ssl->cipher->generateMac;
     ssl->nativeEnMacSize = ssl->cipher->macSize;
+# ifdef USE_CHACHA20_POLY1305_IETF_CIPHER_SUITE
+    ssl->activeWriteCipher = ssl->cipher;
+# endif
+
     if (ssl->extFlags.truncated_hmac)
     {
         if (ssl->cipher->macSize > 0)   /* Only for HMAC-based ciphers */
@@ -808,7 +906,7 @@ int32 sslActivateWriteCipher(ssl_t *ssl)
 /*
     Reset the outgoing sequence number for the new suite
  */
-    memset(ssl->sec.seq, 0x0, sizeof(ssl->sec.seq));
+    Memset(ssl->sec.seq, 0x0, sizeof(ssl->sec.seq));
     if (ssl->cipher->ident != SSL_NULL_WITH_NULL_NULL)
     {
         ssl->flags |= SSL_FLAGS_WRITE_SECURE;
@@ -839,9 +937,13 @@ int32 sslActivateWriteCipher(ssl_t *ssl)
 /*
         Copy the newly activated write keys into the live buffers
  */
-        memcpy(ssl->sec.writeMAC, ssl->sec.wMACptr, ssl->enMacSize);
-        memcpy(ssl->sec.writeKey, ssl->sec.wKeyptr, ssl->cipher->keySize);
-        memcpy(ssl->sec.writeIV, ssl->sec.wIVptr, ssl->cipher->ivSize);
+        Memcpy(ssl->sec.writeMAC, ssl->sec.wMACptr, ssl->enMacSize);
+        Memcpy(ssl->sec.writeKey, ssl->sec.wKeyptr, ssl->cipher->keySize);
+        Memcpy(ssl->sec.writeIV, ssl->sec.wIVptr, ssl->cipher->ivSize);
+# ifdef DEBUG_TLS_MAC
+        psTracePrintTlsKeys(ssl);
+# endif /* DEBUG_TLS_MAC */
+
 /*
         set up encrypt contexts
  */
@@ -850,7 +952,7 @@ int32 sslActivateWriteCipher(ssl_t *ssl)
             if (ssl->cipher->init(&(ssl->sec), INIT_ENCRYPT_CIPHER,
                     ssl->cipher->keySize) < 0)
             {
-                psTraceInfo("Unable to init write cipher suite\n");
+                psTraceErrr("Unable to init write cipher suite\n");
                 return PS_FAILURE;
             }
         }
@@ -877,11 +979,64 @@ int32 matrixSslNewHelloExtension(tlsExtension_t **extension, void *userPoolPtr)
     {
         return PS_MEM_FAIL;
     }
-    memset(ext, 0x0, sizeof(tlsExtension_t));
+    Memset(ext, 0x0, sizeof(tlsExtension_t));
     ext->pool = pool;
 
     *extension = ext;
     return PS_SUCCESS;
+}
+
+void psCopyHelloExtension(tlsExtension_t *destination,
+        const tlsExtension_t *source)
+{
+    const tlsExtension_t *src;
+    tlsExtension_t *dst;
+
+    psAssert(source != NULL && destination != NULL);
+    psAssert(source != destination);
+
+    src = source;
+    dst = destination;
+
+    while (1)
+    {
+        dst->pool = src->pool;
+        dst->extType = src->extType;
+        dst->extLen = src->extLen;
+        dst->extData = psMalloc(src->pool, src->extLen);
+        Memcpy(dst->extData, src->extData, src->extLen);
+        if (src->next)
+        {
+            dst->next = psMalloc(src->pool, sizeof(*dst->next));
+            dst = dst->next;
+            src = src->next;
+        }
+        else
+        {
+            dst->next = NULL;
+            break;
+        }
+    }
+}
+
+/*
+  Make a deep copy of the extension struct for re-sending
+  during renegotiations and TLS 1.3 HelloRetryRequest responses.
+*/
+void psAddUserExtToSession(ssl_t *ssl,
+        const tlsExtension_t *ext)
+{
+    if (ext == NULL)
+    {
+        ssl->userExt = NULL;
+        return;
+    }
+    if (ssl->userExt == ext)
+    {
+        return;
+    }
+    ssl->userExt = psMalloc(ssl->hsPool, sizeof(tlsExtension_t));
+    psCopyHelloExtension(ssl->userExt, ext);
 }
 
 /******************************************************************************/
@@ -949,7 +1104,7 @@ int32 matrixSslLoadHelloExtension(tlsExtension_t *ext,
         {
             return PS_MEM_FAIL;
         }
-        memset(new, 0, sizeof(tlsExtension_t));
+        Memset(new, 0, sizeof(tlsExtension_t));
         new->pool = ext->pool;
         current->next = new;
         current = new;
@@ -977,7 +1132,7 @@ int32 matrixSslLoadHelloExtension(tlsExtension_t *ext,
             {
                 return PS_MEM_FAIL;
             }
-            memcpy(current->extData, extension, length);
+            Memcpy(current->extData, extension, length);
         }
     }
     else if (length == 0)
@@ -999,7 +1154,9 @@ int32 matrixSslLoadHelloExtension(tlsExtension_t *ext,
   in ClientHello or CertificateRequest.
 */
 psBool_t peerSupportsSigAlg(int32_t sigAlg,
-        uint16_t peerSigAlgs)
+                            uint16_t peerSigAlgs
+                            /* , psSize_t peerSigAlgsLen) */
+                            )
 {
     uint16_t yes;
 
@@ -1276,70 +1433,6 @@ int32_t upgradeSigAlg(int32_t sigAlg, int32_t pubKeyAlgorithm)
 }
 
 static
-psSize_t sigAlgToHashLen(int32_t sigAlg)
-{
-    switch(sigAlg)
-    {
-    case OID_MD2_RSA_SIG:
-    case OID_MD5_RSA_SIG:
-        return MD5_HASH_SIZE;
-    case OID_SHA1_RSA_SIG:
-    case OID_SHA1_ECDSA_SIG:
-        return SHA1_HASH_SIZE;
-    case OID_SHA256_RSA_SIG:
-    case OID_SHA256_ECDSA_SIG:
-        return SHA256_HASH_SIZE;
-    case OID_SHA384_RSA_SIG:
-    case OID_SHA384_ECDSA_SIG:
-        return SHA384_HASH_SIZE;
-    case OID_SHA512_RSA_SIG:
-    case OID_SHA512_ECDSA_SIG:
-        return SHA512_HASH_SIZE;
-    default:
-        return PS_UNSUPPORTED_FAIL;
-    }
-}
-
-/** Return PS_TRUE if sigAlg is deemed insecure.
-    Return PS_FALSE otherwise.
-*/
-static
-int32_t isInsecureSigAlg(int32_t sigAlg)
-{
-    if (sigAlg == OID_MD2_RSA_SIG
-            || sigAlg == OID_MD5_RSA_SIG
-            || sigAlg == OID_SHA1_RSA_SIG
-            || sigAlg == OID_SHA1_ECDSA_SIG)
-    {
-        return 1;
-    }
-    else
-    {
-        return 0;
-    }
-}
-
-/* Return PS_TRUE when sigAlg,modulusNBytes is an invalid
-   hash and modulus size combination. Return PS_FALSE
-   otherwise. */
-static
-int32_t isInvalidModulusHashSizeCombination(int32_t sigAlg,
-        psSize_t modulusNBytes)
-{
-    psSize_t hashLen = sigAlgToHashLen(sigAlg);
-
-    /* Check the PKCS #1.5 restriction that there should be room
-       for at least 8 padding bytes before RSA encryption.
-       (11 = 8 pad bytes + 00 + BT + 00). */
-    if (modulusNBytes < (hashLen + 11))
-    {
-        return PS_TRUE;
-    }
-
-    return PS_FALSE;
-}
-
-static
 int32_t sigAlgRsaToEcdsa(int32_t sigAlg)
 {
     if (sigAlg == OID_SHA1_RSA_SIG)
@@ -1413,19 +1506,20 @@ int32_t ecdsaToRsa(int32_t sigAlg)
 */
 int32_t chooseSigAlgInt(int32_t certSigAlg,
         psSize_t keySize,
-        int32_t pubKeyAlgorithm,
+        int32_t keyAlgorithm,
         uint16_t peerSigAlgs)
 {
     int32 a = certSigAlg;
+    psResSize_t hashLen;
 
 #ifndef USE_RSA
-    if (pubKeyAlgorithm == OID_RSA_KEY_ALG)
+    if (keyAlgorithm == OID_RSA_KEY_ALG)
     {
         return PS_UNSUPPORTED_FAIL;
     }
 #endif
 #ifndef USE_ECC
-    if (pubKeyAlgorithm == OID_ECDSA_KEY_ALG)
+    if (keyAlgorithm == OID_ECDSA_KEY_ALG)
     {
         return PS_UNSUPPORTED_FAIL;
     }
@@ -1436,7 +1530,7 @@ int32_t chooseSigAlgInt(int32_t certSigAlg,
       This is because the SSL layer must ensure anyway that the peer
       supports this algorithm.
     */
-    if (pubKeyAlgorithm == OID_RSA_KEY_ALG)
+    if (keyAlgorithm == OID_RSA_KEY_ALG)
     {
         if (certSigAlg == OID_SHA1_ECDSA_SIG ||
                 certSigAlg == OID_SHA256_ECDSA_SIG ||
@@ -1447,44 +1541,8 @@ int32_t chooseSigAlgInt(int32_t certSigAlg,
                Convert certSigAlg to corresponding RSA alg. */
             a = ecdsaToRsa(certSigAlg);
         }
-
-        /*
-          For RSA signatures, RFC 5746 allows to pick any hash algorithm,
-          as long as it is supported by the peer, i.e. included in the
-          peer's signature_algorithms list.
-
-          We use this opportunity to switch from the insecure MD5 and
-          SHA-1 to SHA-256, if possible. We don't want to contribute
-          to the longevity of obsolete hash algorithms.
-        */
-        if (isInsecureSigAlg(a))
-        {
-            /* Try to upgrade. */
-            a = upgradeSigAlg(a, OID_RSA_KEY_ALG);
-            if (!canUseSigAlg(a, OID_RSA_KEY_ALG, peerSigAlgs))
-            {
-                /* Stil not supported. Try the next alternative. */
-                a = upgradeSigAlg(a, OID_RSA_KEY_ALG);
-                if (!canUseSigAlg(a, OID_RSA_KEY_ALG, peerSigAlgs))
-                {
-                    /* Unable to upgrade insecure alg. Have to use the server
-                       cert sig alg. */
-                    a = certSigAlg;
-                }
-            }
-        }
-        /* Not allowing e.g. RSA-SHA-512 with a 512-bit modulus. */
-        if (isInvalidModulusHashSizeCombination(a, keySize))
-        {
-            /* Try "next best" hash algorithm. */
-            a = upgradeSigAlg(a, OID_RSA_KEY_ALG);
-            if (isInvalidModulusHashSizeCombination(a, keySize))
-            {
-                return PS_UNSUPPORTED_FAIL;
-            }
-        }
     }
-    else if (pubKeyAlgorithm == OID_ECDSA_KEY_ALG)
+    else if (keyAlgorithm == OID_ECDSA_KEY_ALG)
     {
         if (certSigAlg != OID_SHA1_ECDSA_SIG &&
                 certSigAlg != OID_SHA256_ECDSA_SIG &&
@@ -1496,21 +1554,42 @@ int32_t chooseSigAlgInt(int32_t certSigAlg,
             a = sigAlgRsaToEcdsa(certSigAlg);
         }
     }
-    else
-    {
-        return PS_UNSUPPORTED_FAIL; /* Unknown/unsupported pub key alg. */
+
+    hashLen = psSigAlgToHashLen(a);
+    if (hashLen < 0)
+    { /* unknown sigAlg; error on hashLen */
+        return hashLen;
     }
 
-    /* Validate our choice. */
-    if (canUseSigAlg(a, pubKeyAlgorithm, peerSigAlgs))
+    /*
+      For RSA signatures, RFC 5746 allows to pick any hash algorithm,
+      as long as it is supported by the peer, i.e. included in the
+      peer's signature_algorithms list.
+
+      We use this opportunity to switch from the insecure MD5 and
+      SHA-1 to SHA-256, if possible. We don't want to contribute
+      to the longevity of obsolete hash algorithms.
+    */
+    if (psIsInsecureSigAlg(a, keyAlgorithm, keySize, hashLen)
+        || !canUseSigAlg(a, keyAlgorithm, peerSigAlgs))
     {
-        psTraceIntInfo("Chose sigAlg %d\n", a);
-        return a;
+        /* Try to upgrade: This won't select inscure ones. */
+        a = upgradeSigAlg(a, keyAlgorithm);
+        if (!canUseSigAlg(a, keyAlgorithm, peerSigAlgs))
+        {
+            /* Stil not supported. Try the next alternative. */
+            a = upgradeSigAlg(a, keyAlgorithm);
+            if (!canUseSigAlg(a, keyAlgorithm, peerSigAlgs))
+            {
+                /* Unable to upgrade insecure alg. Have to use the
+                   server cert sig alg. */
+                a = certSigAlg;
+                psTraceIntInfo("Fallback to certificate sigAlg: %d\n", a);
+            }
+        }
     }
-    else
-    {
-        return PS_UNSUPPORTED_FAIL;
-    }
+    psTraceIntInfo("Chose sigAlg %d\n", a);
+    return a;
 }
 
 int32_t chooseSigAlg(psX509Cert_t *cert,
@@ -1542,6 +1621,7 @@ int32_t chooseSigAlg(psX509Cert_t *cert,
             peerSigAlgs);
 }
 
+
 /* Return the TLS 1.2 SignatureAndHashAlgorithm encoding for the
    given algorithm OID. */
 int32_t getSignatureAndHashAlgorithmEncoding(uint16_t sigAlgOid,
@@ -1552,9 +1632,7 @@ int32_t getSignatureAndHashAlgorithmEncoding(uint16_t sigAlgOid,
     unsigned char b1, b2;
     uint16_t hLen = 0;
 
-    psAssert(octet1 != NULL && octet2 != NULL && hashSize != NULL);
-
-    switch(sigAlgOid)
+     switch (sigAlgOid)
     {
 #ifdef USE_SHA1
     case OID_SHA1_ECDSA_SIG:
@@ -1605,125 +1683,116 @@ int32_t getSignatureAndHashAlgorithmEncoding(uint16_t sigAlgOid,
         break;
 #endif
     default:
-        return PS_UNSUPPORTED_FAIL;
+        return PS_UNSUPPORTED_FAIL; /* algorithm not supported */
     }
 
-    *octet1 = b1;
-    *octet2 = b2;
-    *hashSize = hLen;
-
-    return PS_SUCCESS;
+     if (octet1 && octet2 && hashSize)
+     {
+         *octet1 = b1;
+         *octet2 = b2;
+         *hashSize = hLen;
+         return PS_SUCCESS;
+     }
+     return PS_ARG_FAIL;
 }
 #endif /* ! USE_ONLY_PSK_CIPHER_SUITE */
 #endif /* USE_SERVER_SIDE_SSL || USE_CLIENT_AUTH */
 
-# ifdef USE_SSL_INFORMATIONAL_TRACE
-void psPrintSigAlgs(uint16_t sigAlgs, const char *where)
+/* Helper function that searches for an uint16 item in an array */
+int32_t findFromUint16Array(const uint16_t *a,
+        psSize_t aLen,
+        const uint16_t b)
 {
-    if (where)
+    psSize_t i;
+    for (i = 0; i < aLen; i++)
     {
-        psTraceStrInfo("Signature algorithms in %s:\n", where);
+        if (a[i] == b)
+        {
+            return i;
+        }
     }
-
-    if (sigAlgs & HASH_SIG_MD5_RSA_MASK)
-    {
-        _psTrace("RSA-MD5");
-    }
-    if (sigAlgs & HASH_SIG_SHA1_RSA_MASK)
-    {
-        _psTrace(" RSA-SHA1");
-    }
-    if (sigAlgs & HASH_SIG_SHA256_RSA_MASK)
-    {
-        _psTrace(" RSA-SHA256");
-    }
-    if (sigAlgs & HASH_SIG_SHA384_RSA_MASK)
-    {
-        _psTrace(" RSA-SHA384");
-    }
-    if (sigAlgs & HASH_SIG_SHA512_RSA_MASK)
-    {
-        _psTrace(" RSA-SHA512");
-    }
-    if (sigAlgs & HASH_SIG_SHA1_ECDSA_MASK)
-    {
-        _psTrace(" ECDSA-SHA1");
-    }
-    if (sigAlgs & HASH_SIG_SHA256_ECDSA_MASK)
-    {
-        _psTrace(" ECDSA-SHA256");
-    }
-    if (sigAlgs & HASH_SIG_SHA384_ECDSA_MASK)
-    {
-        _psTrace(" ECDSA-SHA384");
-    }
-    if (sigAlgs & HASH_SIG_SHA512_ECDSA_MASK)
-    {
-        _psTrace(" ECDSA-SHA512");
-    }
-    _psTrace("\n");
+    return PS_FAILURE;
 }
 
-void psPrintProtocolVersion(const char *where,
-        unsigned char majVer,
-        unsigned char minVer,
-        psBool_t addNewline)
+/* Helper function that determines whether TLS minor version is supported */
+psBool_t tlsVersionSupported(ssl_t *ssl, const uint8_t minVersion)
 {
-    if (where)
+    psSize_t i;
+    for (i = 0; i < ssl->supportedVersionsLen; i++)
     {
-        psTraceStrInfo("%s : ", where);
-    }
-    if (majVer == TLS_MAJ_VER)
-    {
-        if (minVer == TLS_1_2_MIN_VER)
+        if ((ssl->supportedVersions[i] & 0xff) == minVersion)
         {
-            _psTrace("TLS 1.2");
-        }
-        else if (minVer == TLS_1_1_MIN_VER)
-        {
-            _psTrace("TLS 1.1");
-        }
-        else if (minVer == TLS_1_0_MIN_VER)
-        {
-            _psTrace("TLS 1.0");
-        }
-        else if (minVer == SSL3_MIN_VER)
-        {
-            _psTrace("SSL 3.0");
-        }
-        else
-        {
-            _psTrace("Unsupported protocol version");
+            return PS_TRUE;
         }
     }
-# ifdef USE_DTLS
-    else if (majVer == DTLS_MAJ_VER)
-    {
-        if (minVer == DTLS_1_2_MIN_VER)
-        {
-            _psTrace("DTLS 1.2");
-        }
-        else if (minVer == DTLS_MIN_VER)
-        {
-            _psTrace("DTLS 1.0");
-        }
-        else
-        {
-            _psTrace("Unsupported protocol version");
-        }
-    }
-# endif /* USE_DTLS */
-    else
-    {
-        _psTrace("Unsupported protocol version");
-    }
-    if (addNewline)
-    {
-        _psTrace("\n");
-    }
+    return PS_FALSE;
 }
 
-# endif /* USE_SSL_INFORMATIONAL_TRACE */
+psBool_t anyTls13VersionSupported(ssl_t *ssl)
+{
+    return tlsVersionSupported(ssl, tls_v_1_3) ||
+        tlsVersionSupported(ssl, tls_v_1_3_draft_22) ||
+        tlsVersionSupported(ssl, tls_v_1_3_draft_23) ||
+        tlsVersionSupported(ssl, tls_v_1_3_draft_24) ||
+        tlsVersionSupported(ssl, tls_v_1_3_draft_26) ||
+        tlsVersionSupported(ssl, tls_v_1_3_draft_28);
+}
+
+psBool_t anyNonTls13VersionSupported(ssl_t *ssl)
+{
+    return tlsVersionSupported(ssl, tls_v_1_2) ||
+        tlsVersionSupported(ssl, tls_v_1_1) ||
+        tlsVersionSupported(ssl, tls_v_1_0);
+}
+
+# ifdef USE_TLS_1_3
+psBool_t tlsVersionSupportedByPeer(ssl_t *ssl, const uint8_t minVersion)
+{
+    psSize_t i;
+    for (i = 0; i < ssl->tls13PeerSupportedVersionsLen; i++)
+    {
+        if ((ssl->tls13PeerSupportedVersions[i] & 0xff) == minVersion)
+        {
+            return PS_TRUE;
+        }
+    }
+    return PS_FALSE;
+}
+
+psBool_t anyTls13VersionSupportedByPeer(ssl_t *ssl)
+{
+    return tlsVersionSupportedByPeer(ssl, tls_v_1_3) ||
+        tlsVersionSupportedByPeer(ssl, tls_v_1_3_draft_22) ||
+        tlsVersionSupportedByPeer(ssl, tls_v_1_3_draft_23) ||
+        tlsVersionSupportedByPeer(ssl, tls_v_1_3_draft_24) ||
+        tlsVersionSupportedByPeer(ssl, tls_v_1_3_draft_26) ||
+        tlsVersionSupportedByPeer(ssl, tls_v_1_3_draft_28);
+}
+
+psBool_t peerOnlySupportsTls13(ssl_t *ssl)
+{
+    if (anyTls13VersionSupportedByPeer(ssl)
+            && !tlsVersionSupportedByPeer(ssl, TLS_1_0_MIN_VER)
+            && !tlsVersionSupportedByPeer(ssl, TLS_1_1_MIN_VER)
+            && !tlsVersionSupportedByPeer(ssl, TLS_1_2_MIN_VER))
+    {
+        return PS_TRUE;
+    }
+    return PS_FALSE;
+}
+
+psBool_t weOnlySupportTls13(ssl_t *ssl)
+{
+    if (anyTls13VersionSupported(ssl)
+            && !tlsVersionSupported(ssl, TLS_1_0_MIN_VER)
+            && !tlsVersionSupported(ssl, TLS_1_1_MIN_VER)
+            && !tlsVersionSupported(ssl, TLS_1_2_MIN_VER))
+    {
+        return PS_TRUE;
+    }
+    return PS_FALSE;
+}
+# endif /* USE_TLS_1_3 */
+
 
 /******************************************************************************/
-

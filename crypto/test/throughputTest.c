@@ -30,10 +30,18 @@
  *      http://www.gnu.org/copyleft/gpl.html
  */
 /******************************************************************************/
+#ifndef _POSIX_C_SOURCE
+# define _POSIX_C_SOURCE 200112L
+#endif
+
+#ifndef NEED_PS_TIME_CONCRETE
+# define NEED_PS_TIME_CONCRETE
+#endif
 
 #include "crypto/cryptoImpl.h"
-#include <string.h>
-#include <stdio.h>
+#include "osdep_string.h"
+#include "osdep_stdio.h"
+#include "osdep-types.h"
 
 #define DATABYTES_AMOUNT    100 * 1048576   /* # x 1MB (1024-byte variety) */
 
@@ -90,7 +98,7 @@ static void runWithHmac(psCipherContext_t *ctx, psHmac_t *hmac,
 # endif
 
     dataChunk = psMalloc(NULL, chunk);
-    memset(dataChunk, 0x0, chunk);
+    Memset(dataChunk, 0x0, chunk);
     bytesToSend = (DATABYTES_AMOUNT / chunk) * chunk;
     bytesSent = 0;
 
@@ -139,7 +147,7 @@ static void runWithHmac(psCipherContext_t *ctx, psHmac_t *hmac,
 #  endif
 # endif
     default:
-        printf("Skipping HMAC Test\n");
+        Printf("Skipping HMAC Test\n");
         psFree(dataChunk, NULL);
         return;
     }
@@ -148,12 +156,12 @@ static void runWithHmac(psCipherContext_t *ctx, psHmac_t *hmac,
     diffu = psDiffUsecs(start, end);
     round = (bytesToSend / diffu);
     mod = (bytesToSend % diffu);
-    printf("%d byte chunks in %lld usecs total for rate of %d.%d MB/sec\n",
+    Printf("%d byte chunks in %lld usecs total for rate of %d.%d MB/sec\n",
         chunk, (unsigned long long) diffu, round, mod);
 # else
     diffm = psDiffMsecs(start, end, NULL);
     round = (bytesToSend / diffm) / 1000;
-    printf("%d byte chunks in %d msecs total for rate of %d MB/sec\n",
+    Printf("%d byte chunks in %d msecs total for rate of %d MB/sec\n",
         chunk, diffm, round);
 # endif
     psFree(dataChunk, NULL);
@@ -175,7 +183,7 @@ static void runTime(psCipherContext_t *ctx, psCipherGivContext_t *ctx_giv,
 #endif
 
     dataChunk = psMalloc(NULL, chunk + 16);
-    memset(dataChunk, 0x0, chunk);
+    Memset(dataChunk, 0x0, chunk);
     bytesToSend = (DATABYTES_AMOUNT / chunk) * chunk;
     bytesSent = 0;
 
@@ -183,7 +191,7 @@ static void runTime(psCipherContext_t *ctx, psCipherGivContext_t *ctx_giv,
     {
 #ifdef USE_AES_CBC
     case AES_ENC_ALG:
-        printf("Encrypt ");
+        Printf("Encrypt ");
         psGetTime(&start, NULL);
         while (bytesSent < bytesToSend)
         {
@@ -193,7 +201,7 @@ static void runTime(psCipherContext_t *ctx, psCipherGivContext_t *ctx_giv,
         psGetTime(&end, NULL);
         break;
     case AES_DEC_ALG:
-        printf("Decrypt ");
+        Printf("Decrypt ");
         psGetTime(&start, NULL);
         while (bytesSent < bytesToSend)
         {
@@ -302,12 +310,12 @@ static void runTime(psCipherContext_t *ctx, psCipherGivContext_t *ctx_giv,
     diffu = psDiffUsecs(start, end);
     round = (bytesToSend / diffu);
     mod = (bytesToSend % diffu);
-    printf("%d byte chunks in %lld usecs total for rate of %d.%d MB/sec\n",
+    Printf("%d byte chunks in %lld usecs total for rate of %d.%d MB/sec\n",
         chunk, (unsigned long long) diffu, round, mod);
 #else
     diffm = psDiffMsecs(start, end, NULL);
     round = (bytesToSend / diffm) / 1000;
-    printf("%d byte chunks in %d msecs total for rate of %d MB/sec\n",
+    Printf("%d byte chunks in %d msecs total for rate of %d MB/sec\n",
         chunk, diffm, round);
 #endif
 
@@ -321,16 +329,16 @@ static int32 psAesTestCBC(void)
     psCipherContext_t eCtx;
 
 # if defined(USE_MATRIX_AES_CBC) && !defined(PS_AES_IMPROVE_PERF_INCREASE_CODESIZE)
-    printf("##########\n#\n# ");
-    printf("AES speeds can be improved by enabling\n# ");
-    printf("PS_AES_IMPROVE_PERF_INCREASE_CODESIZE in cryptoConfig.h\n");
-    printf("#\n#\n#########\n");
+    Printf("##########\n#\n# ");
+    Printf("AES speeds can be improved by enabling\n# ");
+    Printf("PS_AES_IMPROVE_PERF_INCREASE_CODESIZE in cryptoConfig.h\n");
+    Printf("#\n#\n#########\n");
 # endif
 
-    printf("***** AES-128 CBC *****\n");
+    Printf("***** AES-128 CBC *****\n");
     if ((err = psAesInitCBC(&eCtx.aes, iv, key, 16, PS_AES_ENCRYPT)) != PS_SUCCESS)
     {
-        printf("FAILED:  returned %d\n", err);
+        Printf("FAILED:  returned %d\n", err);
         return err;
     }
     runTime(&eCtx, NULL, TINY_CHUNKS, AES_ENC_ALG);
@@ -342,10 +350,10 @@ static int32 psAesTestCBC(void)
     runTime(&eCtx, NULL, HUGE_CHUNKS, AES_DEC_ALG);
     psAesClearCBC(&eCtx.aes);
 
-    printf("***** AES-192 CBC *****\n");
+    Printf("***** AES-192 CBC *****\n");
     if ((err = psAesInitCBC(&eCtx.aes, iv, key, 24, PS_AES_ENCRYPT)) != PS_SUCCESS)
     {
-        printf("FAILED:  returned %d\n", err);
+        Printf("FAILED:  returned %d\n", err);
         return err;
     }
     runTime(&eCtx, NULL, TINY_CHUNKS, AES_ENC_ALG);
@@ -357,10 +365,10 @@ static int32 psAesTestCBC(void)
     runTime(&eCtx, NULL, HUGE_CHUNKS, AES_DEC_ALG);
     psAesClearCBC(&eCtx.aes);
 
-    printf("***** AES-256 CBC *****\n");
+    Printf("***** AES-256 CBC *****\n");
     if ((err = psAesInitCBC(&eCtx.aes, iv, key, 32, PS_AES_ENCRYPT)) != PS_SUCCESS)
     {
-        printf("FAILED:  returned %d\n", err);
+        Printf("FAILED:  returned %d\n", err);
         return err;
     }
     runTime(&eCtx, NULL, TINY_CHUNKS, AES_ENC_ALG);
@@ -383,17 +391,17 @@ static int32 psAesTestCBCHmac(void)
     psHmac_t hCtx;
 
 #  if defined(USE_MATRIX_AES_CBC) && !defined(PS_AES_IMPROVE_PERF_INCREASE_CODESIZE)
-    printf("##########\n#\n# ");
-    printf("AES speeds can be improved by enabling\n# ");
-    printf("PS_AES_IMPROVE_PERF_INCREASE_CODESIZE in cryptoConfig.h\n");
-    printf("#\n#\n#########\n");
+    Printf("##########\n#\n# ");
+    Printf("AES speeds can be improved by enabling\n# ");
+    Printf("PS_AES_IMPROVE_PERF_INCREASE_CODESIZE in cryptoConfig.h\n");
+    Printf("#\n#\n#########\n");
 #  endif
 
 #  ifdef USE_HMAC_SHA1
-    printf("***** AES-128 CBC + SHA1-HMAC *****\n");
+    Printf("***** AES-128 CBC + SHA1-HMAC *****\n");
     if ((err = psAesInitCBC(&eCtx.aes, iv, key, 16, PS_AES_ENCRYPT)) != PS_SUCCESS)
     {
-        printf("FAILED:  returned %d\n", err);
+        Printf("FAILED:  returned %d\n", err);
         return err;
     }
     psHmacSha1Init(&hCtx.u.sha1, key, SHA1_HASH_SIZE);
@@ -408,10 +416,10 @@ static int32 psAesTestCBCHmac(void)
     runWithHmac(&eCtx, &hCtx, 0, HUGE_CHUNKS, AES_HMAC_ALG);
     psAesClearCBC(&eCtx.aes);
 
-    printf("***** AES-256 CBC + SHA1-HMAC *****\n");
+    Printf("***** AES-256 CBC + SHA1-HMAC *****\n");
     if ((err = psAesInitCBC(&eCtx.aes, iv, key, 32, PS_AES_ENCRYPT)) != PS_SUCCESS)
     {
-        printf("FAILED:  returned %d\n", err);
+        Printf("FAILED:  returned %d\n", err);
         return err;
     }
     psHmacSha1Init(&hCtx.u.sha1, key, SHA1_HASH_SIZE);
@@ -428,10 +436,10 @@ static int32 psAesTestCBCHmac(void)
 #  endif
 
 #  ifdef USE_HMAC_SHA256
-    printf("***** AES-128 CBC + SHA256-HMAC *****\n");
+    Printf("***** AES-128 CBC + SHA256-HMAC *****\n");
     if ((err = psAesInitCBC(&eCtx.aes, iv, key, 16, PS_AES_ENCRYPT)) != PS_SUCCESS)
     {
-        printf("FAILED:  returned %d\n", err);
+        Printf("FAILED:  returned %d\n", err);
         return err;
     }
     psHmacSha256Init(&hCtx.u.sha256, key, 32);
@@ -446,10 +454,10 @@ static int32 psAesTestCBCHmac(void)
     runWithHmac(&eCtx, &hCtx, SHA256_HASH_SIZE, HUGE_CHUNKS, AES_HMAC256_ALG);
     psAesClearCBC(&eCtx.aes);
 
-    printf("***** AES-256 CBC + SHA256-HMAC *****\n");
+    Printf("***** AES-256 CBC + SHA256-HMAC *****\n");
     if ((err = psAesInitCBC(&eCtx.aes, iv, key, 32, PS_AES_ENCRYPT)) != PS_SUCCESS)
     {
-        printf("FAILED:  returned %d\n", err);
+        Printf("FAILED:  returned %d\n", err);
         return err;
     }
     psHmacSha256Init(&hCtx.u.sha256, key, 32);
@@ -479,13 +487,13 @@ int32 psAesTestGCM(void)
     psCipherContext_t eCtx;
     psCipherGivContext_t eCtxGiv;
 
-    memset(&eCtxGiv, 0, sizeof(eCtxGiv));
+    Memset(&eCtxGiv, 0, sizeof(eCtxGiv));
 
 #  ifndef USE_LIBSODIUM_AES_GCM
-    printf("***** AES-GCM-128 *****\n");
+    Printf("***** AES-GCM-128 *****\n");
     if ((err = psAesInitGCM(&eCtx.aesgcm, key, 16)) != PS_SUCCESS)
     {
-        printf("FAILED:  psAesInitGCM returned %d\n", err);
+        Printf("FAILED:  psAesInitGCM returned %d\n", err);
         return err;
     }
     psAesReadyGCM(&eCtx.aesgcm, iv, iv, 16);
@@ -495,13 +503,13 @@ int32 psAesTestGCM(void)
     runTime(&eCtx, &eCtxGiv, LARGE_CHUNKS, AES_GCM_ALG);
     runTime(&eCtx, &eCtxGiv, HUGE_CHUNKS, AES_GCM_ALG);
 #  else
-    printf("***** Skipping AES-GCM-128 *****\n");
+    Printf("***** Skipping AES-GCM-128 *****\n");
 #  endif /* !USE_LIBSODIUM */
 
-    printf("***** AES-GCM-256 *****\n");
+    Printf("***** AES-GCM-256 *****\n");
     if ((err = psAesInitGCM(&eCtx.aesgcm, key, 32)) != PS_SUCCESS)
     {
-        printf("FAILED:  psAesInitGCM returned %d\n", err);
+        Printf("FAILED:  psAesInitGCM returned %d\n", err);
         return err;
     }
     psAesReadyGCM(&eCtx.aesgcm, iv, iv, 16);
@@ -532,10 +540,10 @@ int32 psDes3Test(void)
     psCipherContext_t eCtx;
 
 # if defined(USE_MATRIX_3DES) && !defined(PS_3DES_IMPROVE_PERF_INCREASE_CODESIZE)
-    printf("##########\n#\n# ");
-    printf("3DES speeds can be improved by enabling\n# ");
-    printf("PS_3DES_IMPROVE_PERF_INCREASE_CODESIZE in cryptoConfig.h\n");
-    printf("#\n#\n#########\n");
+    Printf("##########\n#\n# ");
+    Printf("3DES speeds can be improved by enabling\n# ");
+    Printf("PS_3DES_IMPROVE_PERF_INCREASE_CODESIZE in cryptoConfig.h\n");
+    Printf("#\n#\n#########\n");
 # endif
 
     psDes3Init(&eCtx.des3, iv, key);
@@ -619,6 +627,7 @@ void runDigestTime(psDigestContext_t *ctx, int32 chunk, int32 alg)
     unsigned char *dataChunk;
     unsigned char hashout[64];
     int32 bytesSent, bytesToSend, round;
+    psRes_t rv;
 
 #ifdef USE_HIGHRES_TIME
     int32 mod;
@@ -635,6 +644,7 @@ void runDigestTime(psDigestContext_t *ctx, int32 chunk, int32 alg)
     {
 #ifdef USE_SHA1
     case SHA1_ALG:
+        psSha1Init(&ctx->sha1);
         psGetTime(&start, NULL);
         while (bytesSent < bytesToSend)
         {
@@ -647,6 +657,7 @@ void runDigestTime(psDigestContext_t *ctx, int32 chunk, int32 alg)
 #endif
 #ifdef USE_SHA256
     case SHA256_ALG:
+        psSha256Init(&ctx->sha256);
         psGetTime(&start, NULL);
         while (bytesSent < bytesToSend)
         {
@@ -659,6 +670,7 @@ void runDigestTime(psDigestContext_t *ctx, int32 chunk, int32 alg)
 #endif
 #ifdef USE_SHA384
     case SHA384_ALG:
+        psSha384Init(&ctx->sha384);
         psGetTime(&start, NULL);
         while (bytesSent < bytesToSend)
         {
@@ -671,6 +683,7 @@ void runDigestTime(psDigestContext_t *ctx, int32 chunk, int32 alg)
 #endif
 #ifdef USE_SHA512
     case SHA512_ALG:
+        psSha512Init(&ctx->sha512);
         psGetTime(&start, NULL);
         while (bytesSent < bytesToSend)
         {
@@ -683,6 +696,9 @@ void runDigestTime(psDigestContext_t *ctx, int32 chunk, int32 alg)
 #endif
 #ifdef USE_MD5
     case MD5_ALG:
+        rv = psMd5Init(&ctx->md5);
+        if (rv != PS_SUCCESS)
+            goto skipped;
         psGetTime(&start, NULL);
         while (bytesSent < bytesToSend)
         {
@@ -694,8 +710,11 @@ void runDigestTime(psDigestContext_t *ctx, int32 chunk, int32 alg)
         break;
 #endif
     default:
+#ifdef USE_MD5
+    skipped:
+#endif
         psFree(dataChunk, NULL);
-        printf("Skipping Digest Tests\n");
+        Printf("Skipping Digest Tests\n");
         return;
     }
 
@@ -703,12 +722,12 @@ void runDigestTime(psDigestContext_t *ctx, int32 chunk, int32 alg)
     diffu = psDiffUsecs(start, end);
     round = (bytesToSend / diffu);
     mod = (bytesToSend % diffu);
-    printf("%d byte chunks in %lld usecs total for rate of %d.%d MB/sec\n",
+    Printf("%d byte chunks in %lld usecs total for rate of %d.%d MB/sec\n",
         chunk, (unsigned long long) diffu, round, mod);
 #else
     diffm = psDiffMsecs(start, end, NULL);
     round = (bytesToSend / diffm) / 1000;
-    printf("%d byte chunks in %d msecs total for rate of %d MB/sec\n",
+    Printf("%d byte chunks in %d msecs total for rate of %d MB/sec\n",
         chunk, diffm, round);
 #endif
     psFree(dataChunk, NULL);
@@ -721,14 +740,12 @@ int32  psSha1Test(void)
     psDigestContext_t ctx;
 
 # if defined(USE_MATRIX_SHA1) && !defined(PS_SHA1_IMPROVE_PERF_INCREASE_CODESIZE)
-    printf("##########\n#\n# ");
-    printf("SHA-1 speeds can be improved by enabling\n# ");
-    printf("PS_SHA1_IMPROVE_PERF_INCREASE_CODESIZE in cryptoConfig.h\n");
-    printf("#\n#\n#########\n");
+    Printf("##########\n#\n# ");
+    Printf("SHA-1 speeds can be improved by enabling\n# ");
+    Printf("PS_SHA1_IMPROVE_PERF_INCREASE_CODESIZE in cryptoConfig.h\n");
+    Printf("#\n#\n#########\n");
 # endif
 
-
-    psSha1Init(&ctx.sha1);
     runDigestTime(&ctx, TINY_CHUNKS, SHA1_ALG);
     runDigestTime(&ctx, SMALL_CHUNKS, SHA1_ALG);
     runDigestTime(&ctx, MEDIUM_CHUNKS, SHA1_ALG);
@@ -747,7 +764,6 @@ int32 psSha256Test(void)
 {
     psDigestContext_t ctx;
 
-    psSha256Init(&ctx.sha256);
     runDigestTime(&ctx, TINY_CHUNKS, SHA256_ALG);
     runDigestTime(&ctx, SMALL_CHUNKS, SHA256_ALG);
     runDigestTime(&ctx, MEDIUM_CHUNKS, SHA256_ALG);
@@ -764,7 +780,6 @@ int32 psSha384Test(void)
 {
     psDigestContext_t ctx;
 
-    psSha384Init(&ctx.sha384);
     runDigestTime(&ctx, TINY_CHUNKS, SHA384_ALG);
     runDigestTime(&ctx, SMALL_CHUNKS, SHA384_ALG);
     runDigestTime(&ctx, MEDIUM_CHUNKS, SHA384_ALG);
@@ -781,7 +796,6 @@ int32  psSha512Test(void)
 {
     psDigestContext_t ctx;
 
-    psSha512Init(&ctx.sha512);
     runDigestTime(&ctx, TINY_CHUNKS, SHA512_ALG);
     runDigestTime(&ctx, SMALL_CHUNKS, SHA512_ALG);
     runDigestTime(&ctx, MEDIUM_CHUNKS, SHA512_ALG);
@@ -800,13 +814,12 @@ int32 psMd5Test(void)
     psDigestContext_t ctx;
 
 # if defined(USE_MATRIX_MD5) && !defined(PS_MD5_IMPROVE_PERF_INCREASE_CODESIZE)
-    printf("##########\n#\n# ");
-    printf("MD5 speeds can be improved by enabling\n# ");
-    printf("PS_MD5_IMPROVE_PERF_INCREASE_CODESIZE in cryptoConfig.h\n");
-    printf("#\n#\n#########\n");
+    Printf("##########\n#\n# ");
+    Printf("MD5 speeds can be improved by enabling\n# ");
+    Printf("PS_MD5_IMPROVE_PERF_INCREASE_CODESIZE in cryptoConfig.h\n");
+    Printf("#\n#\n#########\n");
 # endif
 
-    psMd5Init(&ctx.md5);
     runDigestTime(&ctx, TINY_CHUNKS, MD5_ALG);
     runDigestTime(&ctx, SMALL_CHUNKS, MD5_ALG);
     runDigestTime(&ctx, MEDIUM_CHUNKS, MD5_ALG);
@@ -987,12 +1000,12 @@ int main(int argc, char **argv)
 
     if (argc > 1)
     {
-        if (!strcmp(argv[1], "--list"))
+        if (!Strcmp(argv[1], "--list"))
         {
-            printf("Tests:\n");
+            Printf("Tests:\n");
             for (i = 0; *tests[i].name; i++)
             {
-                printf("%s\n", tests[i].name);
+                Printf("%s\n", tests[i].name);
             }
             return 0;
         }
@@ -1000,15 +1013,15 @@ int main(int argc, char **argv)
         {
             for (i = 0; *tests[i].name; i++)
             {
-                if (strstr(tests[i].name, argv[l]))
+                if (Strstr(tests[i].name, argv[l]))
                 {
                     break;
                 }
             }
             if (!*tests[i].name)
             {
-                fprintf(stderr, "Test not found: %s\n", argv[l]);
-                fprintf(stderr, "Usage: %s [--list | test...]\n", argv[0]);
+                Fprintf(stderr, "Test not found: %s\n", argv[l]);
+                Fprintf(stderr, "Usage: %s [--list | test...]\n", argv[0]);
                 exit(1);
             }
         }
@@ -1016,7 +1029,7 @@ int main(int argc, char **argv)
     
     if (psCryptoOpen(PSCRYPTO_CONFIG) < PS_SUCCESS)
     {
-        printf("Failed to initialize library:  psCryptoOpen failed\n");
+        Printf("Failed to initialize library:  psCryptoOpen failed\n");
         return -1;
     }
 
@@ -1024,7 +1037,7 @@ int main(int argc, char **argv)
     {
         for(l = 1; argc > 1 && l < argc; l++)
         {
-            if (strstr(tests[i].name, argv[l]))
+            if (Strstr(tests[i].name, argv[l]))
             {
                 break;
             }
@@ -1036,18 +1049,18 @@ int main(int argc, char **argv)
 
         if (tests[i].fn)
         {
-            printf("%s\n", tests[i].name);
+            Printf("%s\n", tests[i].name);
             tests[i].fn();
         }
         else
         {
-            printf("%s: SKIPPED\n", tests[i].name);
+            Printf("%s: SKIPPED\n", tests[i].name);
         }
     }
     psCryptoClose();
 
 #ifdef WIN32
-    printf("Press any key to close");
+    Printf("Press any key to close");
     getchar();
 #endif
 

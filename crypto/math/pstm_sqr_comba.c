@@ -5,7 +5,7 @@
  *      Multiprecision Squaring with Comba technique.
  */
 /*
- *      Copyright (c) 2013-2017 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 INSIDE Secure Corporation
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -183,7 +183,7 @@
         : "=r" (c0), "=r" (c1), "=r" (c2) : "0" (c0), "1" (c1), "2" (c2), "r" (sc0), "r" (sc1), "r" (sc2) : "cc");
 
 /******************************************************************************/
-# elif defined(PSTM_ARM)
+# elif defined(PSTM_ARM) && !defined __ARMCC5
 /* ARM code */
 /* #pragma message ("Using 32 bit ARM Assembly Optimizations") */
 
@@ -252,6 +252,101 @@
         "  ADCS  %1,%1,%4                     \n\t"                      \
         "  ADC   %2,%2,%5                     \n\t"                      \
         : "=r" (c0), "=r" (c1), "=r" (c2) : "r" (sc0), "r" (sc1), "r" (sc2), "0" (c0), "1" (c1), "2" (c2) : "cc");
+
+/******************************************************************************/
+# elif defined(PSTM_ARM) && defined __ARMCC5
+
+/* ARM Compiler 5 support: */
+
+#pragma arm /* ARM code. Switch code generation to the ARM instruction set so
+               that the inline assembler is available. On platforms with
+               only Thumb code support, it is necessary to use NO_PSTM_ARM
+               as ARM Compiler 5 lacks thumb inline assembly support. */
+
+#  define COMBA_START
+
+#  define CLEAR_CARRY \
+    c0 = c1 = c2 = 0;
+
+#  define COMBA_STORE(x) \
+    x = c0;
+
+#  define COMBA_STORE2(x) \
+    x = c1;
+
+#  define CARRY_FORWARD \
+    do { c0 = c1; c1 = c2; c2 = 0; } while (0);
+
+#  define COMBA_FINI
+
+/* multiplies point i and j, updates carry "c1" and digit c2 */
+#  define SQRADD(i, j)                                             \
+    do {                                                           \
+        unsigned int reg0;                                         \
+        unsigned int reg1;                                         \
+        unsigned int i_in = i;                                     \
+        /* no j_in; j is the same than i. */                       \
+        __asm {                                                    \
+            UMULL  reg0, reg1, i_in, i_in;                         \
+            ADDS   c0, c0, reg0;                                   \
+            ADCS   c1, c1, reg1;                                   \
+            ADC    c2, c2, 0;                                      \
+        }                                                          \
+    } while(0);
+
+/* for squaring some of the terms are doubled... */
+#  define SQRADD2(i, j)                                            \
+    do {                                                           \
+        unsigned int reg0;                                         \
+        unsigned int reg1;                                         \
+        unsigned int i_in = i;                                     \
+        unsigned int j_in = j;                                     \
+        __asm {                                                    \
+            UMULL  reg0, reg1, i_in, j_in;                         \
+            ADDS   c0, c0, reg0;                                   \
+            ADCS   c1, c1, reg1;                                   \
+            ADC    c2, c2, 0;                                      \
+            ADDS   c0, c0, reg0;                                   \
+            ADCS   c1, c1, reg1;                                   \
+            ADC    c2, c2, 0;                                      \
+        }                                                          \
+    } while(0);
+
+#  define SQRADDSC(i, j)                                           \
+    do {                                                           \
+        unsigned int i_in = i;                                     \
+        unsigned int j_in = j;                                     \
+        __asm {                                                    \
+            UMULL sc0, sc1, i_in, j_in;                            \
+            SUB   sc2, sc2, sc2;                                   \
+        }                                                          \
+    } while(0);
+
+#  define SQRADDAC(i, j)                                            \
+    do {                                                            \
+        unsigned int reg0;                                          \
+        unsigned int reg1;                                          \
+        unsigned int i_in = i;                                      \
+        unsigned int j_in = j;                                      \
+        __asm {                                                     \
+            UMULL reg0, reg1, i_in, j_in;                           \
+            ADDS  sc0, sc0, reg0;                                   \
+            ADCS  sc1, sc1, reg1;                                   \
+            ADC   sc2, sc2, 0;                                      \
+        }                                                           \
+    } while(0);
+
+#  define SQRADDDB                                                      \
+    do {                                                                \
+        __asm {                                                         \
+            ADDS c0, c0, sc0;                                           \
+            ADCS c1, c1, sc1;                                           \
+            ADC  c2, c2, sc2;                                           \
+            ADDS c0, c0, sc0;                                           \
+            ADCS c1, c1, sc1;                                           \
+            ADC  c2, c2, sc2;                                           \
+        }                                                               \
+    } while(0);
 
 /******************************************************************************/
 # elif defined(PSTM_MIPS)
@@ -470,12 +565,12 @@ static int32_t pstm_sqr_comba_gen(psPool_t *pool, const pstm_int *A,
             {
                 return PS_MEM_FAIL;
             }
-            memset(dst, 0x0, sizeof(pstm_digit) * pa);
+            Memset(dst, 0x0, sizeof(pstm_digit) * pa);
         }
         else
         {
             dst = paD;
-            memset(dst, 0x0, paDlen);
+            Memset(dst, 0x0, paDlen);
         }
     }
     else
@@ -484,7 +579,7 @@ static int32_t pstm_sqr_comba_gen(psPool_t *pool, const pstm_int *A,
         {
             return PS_MEM_FAIL;
         }
-        memset(dst, 0x0, sizeof(pstm_digit) * pa);
+        Memset(dst, 0x0, sizeof(pstm_digit) * pa);
     }
 
     for (ix = 0; ix < pa; ix++)
@@ -744,7 +839,7 @@ static int32_t pstm_sqr_comba16(const pstm_int *A, pstm_int *B)
 
     B->used = 32;
     B->sign = PSTM_ZPOS;
-    memcpy(B->dp, b, 32 * sizeof(pstm_digit));
+    Memcpy(B->dp, b, 32 * sizeof(pstm_digit));
     pstm_clamp(B);
     return PSTM_OKAY;
 }
@@ -1092,7 +1187,7 @@ static int32_t pstm_sqr_comba32(const pstm_int *A, pstm_int *B)
 
     B->used = 64;
     B->sign = PSTM_ZPOS;
-    memcpy(B->dp, b, 64 * sizeof(pstm_digit));
+    Memcpy(B->dp, b, 64 * sizeof(pstm_digit));
     pstm_clamp(B);
     return PSTM_OKAY;
 }

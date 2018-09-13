@@ -37,7 +37,8 @@
 
 # define PS_MATRIXSSL_IMPLEMENTATION 1
 # include "matrixsslApi.h"
-# include "../core/osdep.h"
-# include "../core/psUtil.h"
+# include "matrixssllib.h"
+# include "osdep.h"
+# include "psUtil.h"
 
 #endif /* _h_PS_MATRIXSSLIMPL */

@@ -6,23 +6,37 @@
 /*****************************************************************************
 * Copyright (c) 2017 INSIDE Secure Oy. All Rights Reserved.
 *
-* This confidential and proprietary software may be used only as authorized
-* by a licensing agreement from INSIDE Secure.
+* The latest version of this code is available at http://www.matrixssl.org
 *
-* The entire notice above must be reproduced on all authorized copies that
-* may only be made to the extent permitted by a licensing agreement from
-* INSIDE Secure.
+* This software is open source; you can redistribute it and/or modify
+* it under the terms of the GNU General Public License as published by
+* the Free Software Foundation; either version 2 of the License, or
+* (at your option) any later version.
+*
+* This General Public License does NOT permit incorporating this software
+* into proprietary programs.  If you are unable to comply with the GPL, a
+* commercial license for this software may be purchased from INSIDE at
+* http://www.insidesecure.com/
+*
+* This program is distributed in WITHOUT ANY WARRANTY; without even the
+* implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+* See the GNU General Public License for more details.
+*
+* You should have received a copy of the GNU General Public License
+* along with this program; if not, write to the Free Software
+* Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+* http://www.gnu.org/copyleft/gpl.html
 *****************************************************************************/
 
 #include "matrixsslNet.h"
 
 #ifdef USE_PS_NETWORKING
 
-# include <signal.h> /* Defines SIGTERM, etc. */
-# include <sys/types.h>
-# include <sys/socket.h>
-# include <unistd.h>
-# include "core/psUtil.h"
+# include "osdep_signal.h" /* Defines SIGTERM, etc. */
+# include "osdep_sys_types.h"
+# include "osdep_sys_socket.h"
+# include "osdep_unistd.h"
+# include "psUtil.h"
 
 # ifndef MATRIXSSL_INTERACT_READBUF_SIZE
 #  define MATRIXSSL_INTERACT_READBUF_SIZE (1024 * 18)
@@ -33,8 +47,8 @@
 # endif
 
 # ifdef USE_MATRIX_NET_DEBUG
-#  include <stdio.h>
-#  define MATRIXSSL_NET_DEBUGF(...) printf(__VA_ARGS__)
+#  include "osdep_stdio.h"
+#  define MATRIXSSL_NET_DEBUGF(...) Printf(__VA_ARGS__)
 # else
 #  define MATRIXSSL_NET_DEBUGF(...) do {} while (0)
 # endif
@@ -51,7 +65,7 @@ void matrixSslInteractBegin(matrixSslInteract_t *i, ssl_t *ssl,
     psSocket_t *sock)
 {
     /* Clear all except the ssl storage. */
-    memset(i, 0, sizeof(*i));
+    Memset(i, 0, sizeof(*i));
     i->ssl = ssl;
     i->sock = sock;
     i->prev_rc = PS_SUCCESS;
@@ -121,13 +135,13 @@ matrixSslInteractAfterSocketRead(matrixSslInteract_t *i,
 
             /* Keep a copy of the record header inside matrixsslNet.
                We use this private copy to determine record length. */
-            memcpy(i->rechdr + i->rechdrlen, buf, transferred);
+            Memcpy(i->rechdr + i->rechdrlen, buf, transferred);
             i->rechdrlen += transferred;
 
             if (i->rechdrlen == MSI_TLS_REC_LEN)
             {
                 int32 reclen;
-                
+
                 /* Interpret record length (the record type and the TLS version
                    are ignored here.) */
                 reclen = i->rechdr[MSI_TLS_REC_CONTENT_LEN_HIGH] << 8;
@@ -144,7 +158,7 @@ matrixSslInteractAfterSocketRead(matrixSslInteract_t *i,
                     {
                         i->recleft = reclen;
                         i->recvretry = 1; /* After providing the record
-                                             header bytes to matrixssl, 
+                                             header bytes to matrixssl,
                                              continue with the read for record
                                              content. */
                         MATRIXSSL_NET_DEBUGF(
@@ -228,6 +242,8 @@ static int32 matrixSslInteractGotData(matrixSslInteract_t *i, int32 rc)
                             for alerts not processed correctly. */
         return MATRIXSSL_RECEIVED_ALERT;
     }
+
+    i->last_alert_level = i->ch2[0];
 
     /* Close connection if: */
     if (i->ch2[0] == 1 && i->ch2[1] == 0)
@@ -373,7 +389,7 @@ int32 matrixSslInteractInt3(matrixSslInteract_t *i,
                 rc = matrixSslReceivedData(i->ssl, 0, &buf, &len);
                 while(rc == MATRIXSSL_APP_DATA && len == 0)
                 {
-					MATRIXSSL_NET_DEBUGF("Ignored zero length false start data record");
+                                        MATRIXSSL_NET_DEBUGF("Ignored zero length false start data record");
                     rc = matrixSslProcessedData(i->ssl, &buf, &len);
                 }
                 if (rc == MATRIXSSL_APP_DATA && len > 0)
@@ -440,9 +456,6 @@ int32 matrixSslInteractInt3(matrixSslInteract_t *i,
             /* Check if there are more read operations to perform. */
             if (matrixSslInteractSocketReadRetry(i, rc))
             {
-                /* Clear transferred variable because we have handled
-                   all bytes this far. */
-                transferred = 0;
                 goto receive_repeat;
             }
             if (rc == MATRIXSSL_APP_DATA ||
@@ -573,7 +586,7 @@ int32 matrixSslInteractRead(matrixSslInteract_t *i,
     {
         real = MATRIXSSL_INTERACT_MAX_TRANSFER;
     }
-    memcpy(target, i->receive_buf, real);
+    Memcpy(target, i->receive_buf, real);
     i->receive_buf += real;
     i->receive_len_left -= real;
     total_read = real;
@@ -606,7 +619,7 @@ int32 matrixSslInteractPeek(matrixSslInteract_t *i,
     {
         real = MATRIXSSL_INTERACT_MAX_TRANSFER;
     }
-    memcpy(target, i->receive_buf, real);
+    Memcpy(target, i->receive_buf, real);
     return real;
 }
 int32 matrixSslInteractWrite(matrixSslInteract_t *i,
@@ -628,7 +641,7 @@ int32 matrixSslInteractWrite(matrixSslInteract_t *i,
     {
         bytesToEncrypt = in_len;
     }
-    memcpy(buf, target, bytesToEncrypt);
+    Memcpy(buf, target, bytesToEncrypt);
 
     /* Encrypt. */
     rc = matrixSslEncodeWritebuf(i->ssl, bytesToEncrypt);
@@ -661,13 +674,24 @@ int32 matrixSslInteractWrite(matrixSslInteract_t *i,
     return rc;
 }
 
+int matrixSslInteractRemoveFd(matrixSslInteract_t *i)
+{
+    if (i->sock)
+    {
+        int fd = i->sock->internal_fd;
+        i->sock->internal_fd = -1;
+        return fd;
+    }
+    return -1;
+}
+
 void matrixSslInteractClose(matrixSslInteract_t *i)
 {
     if (i->sock)
     {
         psSocketShutdown(i->sock, 0);
     }
-    memset(i, 0, sizeof(*i));
+    Memset(i, 0, sizeof(*i));
 }
 
 void matrixSslInteractCloseErr(matrixSslInteract_t *i, int32 status)
@@ -676,7 +700,7 @@ void matrixSslInteractCloseErr(matrixSslInteract_t *i, int32 status)
     {
         psSocketShutdown(i->sock, 0);
     }
-    memset(i, 0, sizeof(*i));
+    Memset(i, 0, sizeof(*i));
 }
 
 /**/
@@ -733,7 +757,7 @@ int32 matrixSslInteractBeginConnected(matrixSslInteract_t *msi_p,
     int32 rc;
     ssl_t *ssl = NULL;
 
-    memset(msi_p, 0, sizeof(*msi_p));
+    Memset(msi_p, 0, sizeof(*msi_p));
     rc = psSocketConnect(hostname, port, opts,
         PS_SOCKET_STREAM, NULL, func, &sock);
     if (rc == PS_SUCCESS)
@@ -769,7 +793,7 @@ int32 matrixSslInteractBeginAccept(matrixSslInteract_t *msi_p,
     int32 rc;
     ssl_t *ssl = NULL;
 
-    memset(msi_p, 0, sizeof(*msi_p));
+    Memset(msi_p, 0, sizeof(*msi_p));
     rc = psSocketAccept(sock, 0, &new);
     if (rc != PS_SUCCESS)
     {

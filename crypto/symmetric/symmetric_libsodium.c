@@ -50,7 +50,7 @@ int32_t psAesInitGCM(psAesGcm_t *ctx,
     if (((uintptr_t) (const void *) (&(ctx->libSodiumCtx))) % 16 != 0)
     {
         psTraceCrypto("\nFAIL: libsodium structure not 16bytes aligned");
-        printf("FAIL: libsodium structure not 16bytes aligned %p", &(ctx->libSodiumCtx));
+        Printf("FAIL: libsodium structure not 16bytes aligned %p", &(ctx->libSodiumCtx));
         psAssert(0);
         return PS_FAIL;
     }
@@ -75,7 +75,7 @@ int32_t psAesInitGCM(psAesGcm_t *ctx,
         return PS_FAIL;
     }
 
-    memset(ctx, 0x00, sizeof(psAesGcm_t));
+    Memset(ctx, 0x00, sizeof(psAesGcm_t));
 
     if (crypto_aead_aes256gcm_beforenm(&(ctx->libSodiumCtx), key) != 0)
     {
@@ -106,8 +106,8 @@ void psAesReadyGCM(psAesGcm_t *ctx,
     /* --- Set up context structure ---// */
 
     /* Set up IV (nonce) */
-    memset(ctx->IV, 0, 16);
-    memcpy(ctx->IV, IV, 12);
+    Memset(ctx->IV, 0, 16);
+    Memcpy(ctx->IV, IV, 12);
 
     if (aadLen > sizeof(ctx->Aad))
     {
@@ -116,7 +116,7 @@ void psAesReadyGCM(psAesGcm_t *ctx,
     }
 
     /* Set up additional data */
-    memcpy(ctx->Aad, aad, aadLen);
+    Memcpy(ctx->Aad, aad, aadLen);
     ctx->AadLen = aadLen;
 }
 
@@ -140,10 +140,10 @@ void psAesEncryptGCM(psAesGcm_t *ctx, const unsigned char *pt, unsigned char *ct
         (crypto_aead_aes256gcm_state *) &(ctx->libSodiumCtx));
 
     /* Copy the authentication tag in context to be able to retrieve it later */
-    memcpy(ctx->Tag, (resultEncryption + len), sizeof(ctx->Tag));
+    Memcpy(ctx->Tag, (resultEncryption + len), sizeof(ctx->Tag));
 
     /* Copy the ciphertext in destination */
-    memcpy(ct, resultEncryption, len);
+    Memcpy(ct, resultEncryption, len);
 
     psFree(resultEncryption, NULL);
 }
@@ -154,7 +154,7 @@ void psAesEncryptGCM(psAesGcm_t *ctx, const unsigned char *pt, unsigned char *ct
  */
 void psAesGetGCMTag(psAesGcm_t *ctx, uint8_t tagBytes, unsigned char tag[AES_BLOCKLEN])
 {
-    memcpy(tag, ctx->Tag, tagBytes);
+    Memcpy(tag, ctx->Tag, tagBytes);
 }
 
 /* Just does the GCM decrypt portion.  Doesn't expect the tag to be at the end
@@ -226,7 +226,7 @@ psRes_t psChacha20Poly1305IetfInit(
         const unsigned char key[PS_EXACTLY(PS_CHACHA20POLY1305_IETF_KEYBYTES)])
 {
     /* Copy the key */
-    memcpy(ctx->key, key, PS_CHACHA20POLY1305_IETF_KEYBYTES);
+    Memcpy(ctx->key, key, PS_CHACHA20POLY1305_IETF_KEYBYTES);
 
     return PS_SUCCESS;
 }

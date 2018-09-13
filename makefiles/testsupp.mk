@@ -5,7 +5,7 @@
 #
 
 # Include test materials to path
-CPPFLAGS += -I$(MATRIXSSL_ROOT)/../testsupp
+CPPFLAGS += -I$(MATRIXSSL_ROOT)/../core/include/testsupp
 
 # Building with testsupp requires C++: define additional rules allowing
 # compilation of C++ files inheriting options from C files compilation.

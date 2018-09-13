@@ -5,7 +5,7 @@
  *      Secure Sockets Layer protocol message encoding portion of MatrixSSL.
  */
 /*
- *      Copyright (c) 2013-2017 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 INSIDE Secure Corporation
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -36,29 +36,30 @@
 
 /******************************************************************************/
 
-# ifndef USE_ONLY_PSK_CIPHER_SUITE
+# ifdef USE_IDENTITY_CERTIFICATES
 static int32 writeCertificate(ssl_t *ssl, sslBuf_t *out, int32 notEmpty);
 #  if defined(USE_OCSP_RESPONSE) && defined(USE_SERVER_SIDE_SSL)
 static int32 writeCertificateStatus(ssl_t *ssl, sslBuf_t *out);
 #  endif
 # endif
+
 static int32 writeChangeCipherSpec(ssl_t *ssl, sslBuf_t *out);
 static int32 writeFinished(ssl_t *ssl, sslBuf_t *out);
 static int32 writeAlert(ssl_t *ssl, unsigned char level,
                         unsigned char description, sslBuf_t *out, uint32 *requiredLen);
-static int32_t writeRecordHeader(ssl_t *ssl, uint8_t type, uint8_t hsType,
-                                 psSize_t *messageSize, uint8_t *padLen,
-                                 unsigned char **encryptStart,
-                                 const unsigned char *end, unsigned char **c);
+int32_t writeRecordHeader(ssl_t *ssl, uint8_t type, uint8_t hsType,
+        psSize_t *messageSize, uint8_t *padLen,
+        unsigned char **encryptStart,
+        const unsigned char *end, unsigned char **c);
 # ifdef USE_DTLS
 #  ifdef USE_SERVER_SIDE_SSL
 static int32 writeHelloVerifyRequest(ssl_t *ssl, sslBuf_t *out);
 #  endif
 # endif /* USE_DTLS */
 
-static int32 encryptRecord(ssl_t *ssl, int32 type, int32 hsMsgType,
-                           int32 messageSize,  int32 padLen, unsigned char *pt,
-                           sslBuf_t *out, unsigned char **c);
+int32 encryptRecord(ssl_t *ssl, int32 type, int32 hsMsgType,
+        int32 messageSize,  int32 padLen, unsigned char *pt,
+        sslBuf_t *out, unsigned char **c);
 
 # ifdef USE_CLIENT_SIDE_SSL
 static int32 writeClientKeyExchange(ssl_t *ssl, sslBuf_t *out);
@@ -98,6 +99,15 @@ static int32 writeNewSessionTicket(ssl_t *ssl, sslBuf_t *out);
 static int32 secureWriteAdditions(ssl_t *ssl, int32 numRecs);
 static int32 encryptFlight(ssl_t *ssl, unsigned char **end);
 
+# ifdef USE_TLS_1_3
+extern int32_t tls13EncodeResponse(ssl_t *ssl,
+        psBuf_t *out,
+        uint32 *requiredLen);
+extern int32_t tls13EncryptMessage(ssl_t *ssl,
+        flightEncode_t *msg,
+        unsigned char **end);
+# endif
+
 # ifdef USE_ZLIB_COMPRESSION
 #  define MAX_ZLIB_COMPRESSED_OH  128/* Only FINISHED message supported */
 # endif
@@ -125,6 +135,13 @@ int32 matrixSslEncode(ssl_t *ssl, unsigned char *buf, uint32 size,
     int32_t rc;
     psBuf_t tmpout;
 
+# ifdef USE_TLS_1_3
+    if (USING_TLS_1_3(ssl))
+    {
+        return tls13EncodeAppData(ssl, buf, size, ptBuf, len);
+    }
+# endif
+
     /* If we've had a protocol error, don't allow further use of the session
         Also, don't allow a application data record to be encoded unless the
         handshake is complete.
@@ -133,8 +150,8 @@ int32 matrixSslEncode(ssl_t *ssl, unsigned char *buf, uint32 size,
         ssl->flags & SSL_FLAGS_CLOSED)
     {
         psTraceInfo("Bad SSL state for matrixSslEncode call attempt: ");
-        psTraceIntInfo(" flags %d,", ssl->flags);
-        psTraceIntInfo(" state %d\n", ssl->hsState);
+        psTracePrintSslFlags(ssl->flags);
+        psTracePrintHsState(ssl->hsState, PS_TRUE);
         return MATRIXSSL_ERROR;
     }
 
@@ -243,6 +260,10 @@ int32 matrixSslEncode(ssl_t *ssl, unsigned char *buf, uint32 size,
  */
 int32 matrixSslGetEncodedSize(ssl_t *ssl, uint32 len)
 {
+# ifdef USE_TLS_1_3
+    uint32 ptLen = len;
+# endif
+
     len += ssl->recordHeadLen;
     if (ssl->flags & SSL_FLAGS_WRITE_SECURE)
     {
@@ -259,9 +280,31 @@ int32 matrixSslGetEncodedSize(ssl_t *ssl, uint32 len)
         {
             len += ssl->enBlockSize;
         }
+        /* Add AEAD overhead. */
         if (ssl->flags & SSL_FLAGS_AEAD_W)
         {
-            len += AEAD_TAG_LEN(ssl) + AEAD_NONCE_LEN(ssl);
+            len += AEAD_TAG_LEN(ssl);
+
+#  ifdef USE_TLS_1_3
+            if (USING_TLS_1_3(ssl))
+            {
+                /* TLS 1.3 does not send any part of the nonce over the
+                   wire, but requires one additional byte and possibly
+                   room for the padding. */
+                if (ssl->tls13BlockSize > 0)
+                {
+                    ssl->tls13PadLen = tls13GetPadLen(ssl, ptLen);
+                }
+                len += 1; /* InnerPlaintext.type */
+                len += ssl->tls13PadLen; /* InnerPlaintext.zeros */
+            }
+            else
+            {
+                len += AEAD_NONCE_LEN(ssl);
+            }
+#   else
+            len += AEAD_NONCE_LEN(ssl);
+#   endif /* USE_TLS_1_3 */
         }
 # endif /* USE_TLS_1_1 */
 
@@ -287,6 +330,7 @@ int32 matrixSslGetEncodedSize(ssl_t *ssl, uint32 len)
 
 # ifndef USE_ONLY_PSK_CIPHER_SUITE
 #  if defined(USE_SERVER_SIDE_SSL) || defined(USE_CLIENT_AUTH)
+
 /* Second parameter includes handshake header length */
 static int32 addCertFragOverhead(ssl_t *ssl, int32 totalCertLen)
 {
@@ -322,12 +366,8 @@ static int32 addCertFragOverhead(ssl_t *ssl, int32 totalCertLen)
     }
     return oh;
 }
-#  endif /* SERVER || CLIENT_AUTH */
-# endif  /* ! ONLY_PSK */
 
-# ifdef USE_ECC
-#  if defined(USE_SERVER_SIDE_SSL) || defined(USE_CLIENT_AUTH)
-#   ifndef USE_ONLY_PSK_CIPHER_SUITE
+#   ifdef USE_ECC
 /* ECDSA signature is two DER INTEGER values.  Either integer could result
     in the high bit being set which is interpreted as a negative number
     unless proceeded by a 0x0 byte.  MatrixSSL predicts one of the two will
@@ -431,7 +471,7 @@ static int accountForEcdsaSizeChange(ssl_t *ssl, pkaAfter_t *pka, int real,
     {
         whereToMoveTo = whereToMoveFrom - howFarToMove;
     }
-    memmove(whereToMoveTo, whereToMoveFrom, howMuchToMove);
+    Memmove(whereToMoveTo, whereToMoveFrom, howMuchToMove);
     if (addOrSub)
     {
         out->end += howFarToMove;
@@ -445,7 +485,7 @@ static int accountForEcdsaSizeChange(ssl_t *ssl, pkaAfter_t *pka, int real,
         flightMsg->messageSize -= howFarToMove;
     }
     /* Now put in ECDSA sig */
-    memcpy(pka->outbuf, sig, real);
+    Memcpy(pka->outbuf, sig, real);
 
     /* Now update the record message length - We can use the
         flightEncode entry to help us find the handshake header
@@ -483,7 +523,7 @@ static int accountForEcdsaSizeChange(ssl_t *ssl, pkaAfter_t *pka, int real,
             Only supporting     if there is no fragmentation here.  The magic
             5 is skipping over the 3 byte length iteself, 2 byte sequence
             and 3 byte offset */
-        if (memcmp(msgLenLoc, msgLenLoc + 8, 3) != 0)
+        if (Memcmp(msgLenLoc, msgLenLoc + 8, 3) != 0)
         {
             psTraceInfo("ERROR: ECDSA SKE DTLS fragmentation unsupported\n");
             return MATRIXSSL_ERROR;
@@ -541,9 +581,10 @@ static int accountForEcdsaSizeChange(ssl_t *ssl, pkaAfter_t *pka, int real,
     }
     return PS_SUCCESS;
 }
-#   endif /* !USE_ONLY_PSK_CIPHER_SUITE */
+#    endif   /* USE_ECC */
+
 #  endif  /* USE_SERVER_SIDE_SSL || USE_CLIENT_AUTH */
-# endif   /* USE_ECC */
+# endif /* !USE_ONLY_PSK_CIPHER_SUITE */
 
 # ifdef USE_SERVER_SIDE_SSL
 /* The ServerKeyExchange delayed PKA op */
@@ -553,6 +594,7 @@ static int32 nowDoSkePka(ssl_t *ssl, psBuf_t *out)
 
 #  ifndef USE_ONLY_PSK_CIPHER_SUITE
     pkaAfter_t *pka;
+    sslIdentity_t *chosen = ssl->chosenIdentity;
 #   if defined(USE_ECC_CIPHER_SUITE) || defined(USE_RSA_CIPHER_SUITE)
     psPool_t *pkiPool = NULL;
 #   endif  /* USE_ECC_CIPHER_SUITE || USE_RSA_CIPHER_SUITE */
@@ -582,9 +624,9 @@ static int32 nowDoSkePka(ssl_t *ssl, psBuf_t *out)
         if (ssl->flags & SSL_FLAGS_TLS_1_2)
         {
             if ((rc = privRsaEncryptSignedElement(pkiPool,
-                     &ssl->keys->privKey.key.rsa,
+                     &chosen->privKey.key.rsa,
                      pka->inbuf, pka->inlen, pka->outbuf,
-                     ssl->keys->privKey.keysize, pka->data)) < 0)
+                     chosen->privKey.keysize, pka->data)) < 0)
             {
                 if (rc != PS_PENDING)
                 {
@@ -603,8 +645,8 @@ static int32 nowDoSkePka(ssl_t *ssl, psBuf_t *out)
         }
         else
         {
-            if ((rc = psRsaEncryptPriv(pkiPool, &ssl->keys->privKey.key.rsa, pka->inbuf,
-                     pka->inlen, pka->outbuf, ssl->keys->privKey.keysize,
+            if ((rc = psRsaEncryptPriv(pkiPool, &chosen->privKey.key.rsa, pka->inbuf,
+                     pka->inlen, pka->outbuf, chosen->privKey.keysize,
                      pka->data)) < 0)
             {
                 if (rc != PS_PENDING)
@@ -622,8 +664,8 @@ static int32 nowDoSkePka(ssl_t *ssl, psBuf_t *out)
             }
         }
 #    else /* !USE_TLS_1_2 */
-        if ((rc = psRsaEncryptPriv(pkiPool, &ssl->keys->privKey.key.rsa, pka->inbuf,
-                 pka->inlen, pka->outbuf, ssl->keys->privKey.keysize,
+        if ((rc = psRsaEncryptPriv(pkiPool, &chosen->privKey.key.rsa, pka->inbuf,
+                 pka->inlen, pka->outbuf, chosen->privKey.keysize,
                  pka->data)) < 0)
         {
             if (rc != PS_PENDING)
@@ -647,13 +689,13 @@ static int32 nowDoSkePka(ssl_t *ssl, psBuf_t *out)
             /* Using existing ckeMsg and ckeSize that clients are using but
                 this should be totally fine on the server side because it is
                 freed at FINISHED parse */
-            ssl->ckeSize = ssl->keys->privKey.keysize;
+            ssl->ckeSize = chosen->privKey.keysize;
             if ((ssl->ckeMsg = psMalloc(ssl->hsPool, ssl->ckeSize)) == NULL)
             {
                 psTraceInfo("Memory allocation error ckeMsg\n");
                 return PS_MEM_FAIL;
             }
-            memcpy(ssl->ckeMsg, pka->outbuf, ssl->ckeSize);
+            Memcpy(ssl->ckeMsg, pka->outbuf, ssl->ckeSize);
         }
 #    endif /* USE_DTLS */
 
@@ -683,7 +725,7 @@ static int32 nowDoSkePka(ssl_t *ssl, psBuf_t *out)
 #    ifdef USE_DTLS
         ssl->ecdsaSizeChange = 0;
 #    endif
-        if ((err = psEccDsaSign(pkiPool, &ssl->keys->privKey.key.ecc,
+        if ((err = psEccDsaSign(pkiPool, &chosen->privKey.key.ecc,
                  pka->inbuf, pka->inlen, tmpEcdsa, &len, 1, pka->data)) != 0)
         {
             /* DO NOT close pool (unless failed).  It is kept around in
@@ -712,7 +754,7 @@ static int32 nowDoSkePka(ssl_t *ssl, psBuf_t *out)
         }
         else
         {
-            memcpy(pka->outbuf, tmpEcdsa, pka->user);
+            Memcpy(pka->outbuf, tmpEcdsa, pka->user);
         }
         psFree(tmpEcdsa, ssl->hsPool);
 
@@ -729,7 +771,7 @@ static int32 nowDoSkePka(ssl_t *ssl, psBuf_t *out)
                 psTraceInfo("Memory allocation error ckeMsg\n");
                 return PS_MEM_FAIL;
             }
-            memcpy(ssl->ckeMsg, pka->outbuf, ssl->ckeSize);
+            Memcpy(ssl->ckeMsg, pka->outbuf, ssl->ckeSize);
         }
 #    endif /* USE_DTLS */
 
@@ -741,10 +783,77 @@ static int32 nowDoSkePka(ssl_t *ssl, psBuf_t *out)
 }
 # endif /* USE_SERVER_SIDE_SSL */
 
-
 # ifdef USE_CLIENT_SIDE_SSL
 
-/*********/
+psResSize_t calcCkeSize(ssl_t *ssl)
+{
+    psResSize_t ckeSize = 0;
+
+    if ((ssl->flags & SSL_FLAGS_DHE_KEY_EXCH) != 0)
+    {
+#   ifdef USE_DTLS
+        if ((ssl->flags & SSL_FLAGS_DTLS) && ssl->retransmit == 1)
+        {
+            return ssl->ckeSize; /* Keys have been freed - use cached. */
+        }
+#   endif /* USE_DTLS */
+
+#   ifdef USE_ECC_CIPHER_SUITE
+        if ((ssl->flags & SSL_FLAGS_ECC_CIPHER) != 0)
+        {
+            return (ssl->sec.eccKeyPriv->curve->size * 2) + 2;
+        }
+#   endif /* USE_ECC_CIPHER_SUITE */
+
+#   ifdef REQUIRE_DH_PARAMS
+        ckeSize += ssl->sec.dhKeyPriv->size;
+#   endif /* REQUIRE_DH_PARAMS */
+
+#   ifdef USE_PSK_CIPHER_SUITE
+        /* This is the DHE_PSK suite case.  PSK suites add the key
+           identity with psSize_t size */
+        if (ssl->flags & SSL_FLAGS_PSK_CIPHER)
+        {
+            ckeSize += (SSL_PSK_MAX_ID_SIZE + 2);
+        }
+#   endif /* USE_PSK_CIPHER_SUITE */
+        return ckeSize;
+    }
+
+    if ((ssl->flags & SSL_FLAGS_DHE_KEY_EXCH) == 0)
+    {
+#  ifdef USE_PSK_CIPHER_SUITE
+        /* This is the basic PSK case. PSK suites add the key identity
+           with psSize_t size */
+        if (ssl->flags & SSL_FLAGS_PSK_CIPHER)
+        {
+            ckeSize += SSL_PSK_MAX_ID_SIZE + 2;
+        }
+#  endif /* USE_PSK_CIPHER_SUITE */
+
+#  ifndef USE_ONLY_PSK_CIPHER_SUITE
+#   ifdef USE_ECC_CIPHER_SUITE
+        if (ssl->cipher->type == CS_ECDH_ECDSA || ssl->cipher->type == CS_ECDH_RSA)
+        {
+            ckeSize = (ssl->sec.cert->publicKey.key.ecc.curve->size * 2) + 2;
+        }
+#   endif /* USE_ECC_CIPHER_SUITE */
+        if (ckeSize == 0)
+        {
+            /* Normal RSA auth cipher suite case */
+            if (ssl->sec.cert == NULL)
+            {
+                return MATRIXSSL_ERROR;
+            }
+            ckeSize = ssl->sec.cert->publicKey.keysize;
+        }
+#  endif /* USE_ONLY_PSK_CIPHER_SUITE */
+        return ckeSize;
+    }
+    return MATRIXSSL_ERROR;
+}
+
+            /*********/
 /* A test feature to allow clients to reuse the CKE RSA encryption output
     for each connection to remove the CPU overhead of pubkey operation when
     testing against high performance servers. The same premaster must be
@@ -881,16 +990,16 @@ static int32 nowDoCkePka(ssl_t *ssl)
                containing the length of the PSK (in octets), and the PSK itself.
 
                 The pskId is held in the pkaAfter inbuf */
-            matrixSslPskGetKey(ssl, pka->inbuf, pka->inlen, &pskKey,
+            rc = matrixSslPskGetKey(ssl, pka->inbuf, pka->inlen, &pskKey,
                 &pskIdLen);
-            if (pskKey == NULL)
+            if (rc < 0 || pskKey == NULL)
             {
                 psFree(ssl->sec.premaster, ssl->hsPool);
                 ssl->sec.premaster = NULL;
                 return MATRIXSSL_ERROR;
             }
             /* Need to prepend a psSize_t length to the premaster key. */
-            memmove(&ssl->sec.premaster[2], ssl->sec.premaster,
+            Memmove(&ssl->sec.premaster[2], ssl->sec.premaster,
                 ssl->sec.premasterSize);
             ssl->sec.premaster[0] = (ssl->sec.premasterSize & 0xFF00) >> 8;
             ssl->sec.premaster[1] = (ssl->sec.premasterSize & 0xFF);
@@ -898,19 +1007,19 @@ static int32 nowDoCkePka(ssl_t *ssl)
             ssl->sec.premaster[ssl->sec.premasterSize + 2] = 0;
             ssl->sec.premaster[ssl->sec.premasterSize + 3] =
                 (pskIdLen & 0xFF);
-            memcpy(&ssl->sec.premaster[ssl->sec.premasterSize + 4], pskKey,
+            Memcpy(&ssl->sec.premaster[ssl->sec.premasterSize + 4], pskKey,
                 pskIdLen);
             /*  Lastly, adjust the premasterSize */
             ssl->sec.premasterSize += pskIdLen + 4;
         }
         if (cleared == 0)
         {
-            clearPkaAfter(ssl); cleared = 1;     /* Standard and PSK DHE */
+            clearPkaAfter(ssl); cleared = 1; /* Standard and PSK DHE */
         }
 #    else
         if (cleared == 0)
         {
-            clearPkaAfter(ssl); cleared = 1; /* Standard DHE, PSK disabled*/
+            clearPkaAfter(ssl); /* Standard DHE, PSK disabled*/
         }
 #    endif                                   /* PSK */
 
@@ -980,7 +1089,7 @@ static int32 nowDoCkePka(ssl_t *ssl)
                     return SSL_MEM_ERROR;
                 }
                 ssl->ckeMsg[0] = pka->user & 0xFF;
-                memcpy(ssl->ckeMsg + 1, pka->outbuf, ssl->ckeSize - 1);
+                Memcpy(ssl->ckeMsg + 1, pka->outbuf, ssl->ckeSize - 1);
             }
 #   endif          /* USE_DTLS */
 
@@ -1015,7 +1124,6 @@ static int32 nowDoCkePka(ssl_t *ssl)
         /* Successfully completed both PKA operations and key write */
         psEccDeleteKey(&ssl->sec.eccKeyPriv);
         clearPkaAfter(ssl);
-
     }
     else
     {
@@ -1030,8 +1138,8 @@ static int32 nowDoCkePka(ssl_t *ssl)
     {
         if (psRsaCmpPubKey(&g_reuseRSAKey, &ssl->sec.cert->publicKey.key.rsa) == 0)
         {
-            memcpy(ssl->sec.premaster, g_reusePremaster, g_reusePreLen);
-            memcpy(pka->outbuf, g_reuseRSAEncrypt, g_reuseRSALen);
+            Memcpy(ssl->sec.premaster, g_reusePremaster, g_reusePreLen);
+            Memcpy(pka->outbuf, g_reuseRSAEncrypt, g_reuseRSALen);
         }
         else
         {
@@ -1066,11 +1174,11 @@ static int32 nowDoCkePka(ssl_t *ssl)
 }
 if (g_reusePreLen == 0)
 {
-    printf("REUSE_CKE ENABLED!! NOT FOR PRODUCTION USE\n");
+    Printf("REUSE_CKE ENABLED!! NOT FOR PRODUCTION USE\n");
     g_reusePreLen = ssl->sec.premasterSize;
     g_reuseRSALen = psRsaSize(&ssl->sec.cert->publicKey.key.rsa);
-    memcpy(g_reusePremaster, ssl->sec.premaster,  g_reusePreLen);
-    memcpy(g_reuseRSAEncrypt, pka->outbuf, g_reuseRSALen);
+    Memcpy(g_reusePremaster, ssl->sec.premaster,  g_reusePreLen);
+    Memcpy(g_reuseRSAEncrypt, pka->outbuf, g_reuseRSALen);
     /* TODO this key is allocated once and leaked */
     if (psRsaCopyKey(&g_reuseRSAKey, &ssl->sec.cert->publicKey.key.rsa) < 0)
     {
@@ -1095,7 +1203,7 @@ if (g_reusePreLen == 0)
             return SSL_MEM_ERROR;
         }
         ssl->ckeSize = pka->user;
-        memcpy(ssl->ckeMsg, pka->outbuf, pka->user);
+        Memcpy(ssl->ckeMsg, pka->outbuf, pka->user);
     }
 #   endif      /* USE_DTLS */
     clearPkaAfter(ssl);
@@ -1167,16 +1275,17 @@ int32 sslEncodeResponse(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
     uint32 alertReqLen;
 
 # if defined(USE_SERVER_SIDE_SSL) || defined(USE_CLIENT_AUTH)
-    int32 i;
+    int32 ncerts;
 #  ifndef USE_ONLY_PSK_CIPHER_SUITE
     psX509Cert_t *cert;
 #  endif /* USE_ONLY_PSK_CIPHER_SUITE */
-# endif  /* USE_SERVER_SIDE_SSL */
+# endif /* USE_SERVER_SIDE_SSL || USE_CLIENT_AUTH */
 
 # if defined(USE_SERVER_SIDE_SSL)
     int32 extSize;
     int32 stotalCertLen;
-# endif
+    int32 srvKeyExLen;
+# endif /* USE_SERVER_SIDE_SSL */
 
 # ifdef USE_CLIENT_SIDE_SSL
     int32 ckeSize;
@@ -1191,19 +1300,16 @@ int32 sslEncodeResponse(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
     int32 certCount = 0, certReqLen = 0, CAcertLen = 0;
 #  endif /* USE_SERVER_SIDE_SSL && USE_CLIENT_AUTH */
 # endif  /* USE_ONLY_PSK_CIPHER_SUITE */
-# if defined(USE_SERVER_SIDE_SSL) && defined(USE_DHE_CIPHER_SUITE)
-    int32 srvKeyExLen;
-# endif /* USE_SERVER_SIDE_SSL && USE_DHE_CIPHER_SUITE */
 
 # ifdef USE_DTLS
     sslSessOpts_t options;
-    memset(&options, 0x0, sizeof(sslSessOpts_t));
-# endif
+    Memset(&options, 0x0, sizeof(sslSessOpts_t));
+# endif /* USE_DTLS */
 
-/*
-    We may be trying to encode an alert response if there is an error marked
-    on the connection.
- */
+    /*
+      We may be trying to encode an alert response if there is an error marked
+      on the connection.
+    */
     if (ssl->err != SSL_ALERT_NONE)
     {
         rc = writeAlert(ssl, SSL_ALERT_LEVEL_FATAL, (unsigned char) ssl->err,
@@ -1223,6 +1329,13 @@ int32 sslEncodeResponse(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
         the session table as a precaution.  Additionally, if this alert is
         happening mid-handshake the master secret might not even be valid
  */
+#  ifdef SERVER_IGNORE_UNRECOGNIZED_SNI
+        if (ssl->err == SSL_ALERT_NONE)
+        {
+            /* Warning level alert. Ignore. */
+            goto ok;
+        }
+#  endif
         if (ssl->flags & SSL_FLAGS_SERVER)
         {
             matrixClearSession(ssl, 1);
@@ -1230,6 +1343,10 @@ int32 sslEncodeResponse(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
 # endif /* USE_SERVER_SIDE_SSL */
         return rc;
     }
+
+# ifdef SERVER_IGNORE_UNRECOGNIZED_SNI
+ok:
+# endif
 
 # ifdef USE_EXT_CERTIFICATE_VERIFY_SIGNING
     if (ssl->hwflags & SSL_HWFLAGS_PENDING_PKA_W &&
@@ -1255,6 +1372,23 @@ int32 sslEncodeResponse(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
     }
 # endif /* USE_DTLS */
 
+#ifdef USE_TLS_1_3
+    if (USING_TLS_1_3(ssl))
+    {
+        rc = tls13EncodeResponse(ssl, out, requiredLen);
+        if (rc == SSL_FULL)
+        {
+            *requiredLen = tls13EstimateNextFlightSize(ssl);
+            psTraceIntInfo("Need larger write buffer: %d\n", *requiredLen);
+            /* Return to matrixSslReceivedData for buffer enlargement.
+               Next time, we shall continue from where we left. */
+            ssl->tls13NextMsgRequiredLen = 0;
+            return SSL_FULL;
+        }
+        goto flightEncode;
+    }
+#endif /* USE_TLS_1_3 */
+
 /*
     We encode a set of response messages based on our current state
     We have to pre-verify the size of the outgoing buffer against
@@ -1264,26 +1398,27 @@ int32 sslEncodeResponse(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
  */
     switch (ssl->hsState)
     {
-/*
-    If we're waiting for the ClientKeyExchange message, then we need to
-    send the messages that would prompt that result on the client
- */
+        /* If we're waiting for the ClientKeyExchange message, then we
+           need to send the messages that would prompt that result on
+           the client */
+
 # ifdef USE_SERVER_SIDE_SSL
     case SSL_HS_CLIENT_KEY_EXCHANGE:
+
 #  ifdef USE_CLIENT_AUTH
-/*
-        This message is also suitable for the client authentication case
-        where the server is in the CERTIFICATE state.
- */
+        /*
+          This message is also suitable for the client authentication case
+          where the server is in the CERTIFICATE state.
+        */
     case SSL_HS_CERTIFICATE:
-/*
-        Account for the certificateRequest message if client auth is on.
-        First two bytes are the certificate_types member (rsa_sign (1) and
-        ecdsa_sign (64) are supported).  Remainder of length is the
-        list of BER encoded distinguished names this server is
-        willing to accept children certificates of.  If there
-        are no valid CAs to work with, client auth can't be done.
- */
+        /*
+          Account for the certificateRequest message if client auth is on.
+          First two bytes are the certificate_types member (rsa_sign (1) and
+          ecdsa_sign (64) are supported).  Remainder of length is the list of
+          BER encoded distinguished names this server is willing to accept
+          children certificates of.  If there are no valid CAs to work with,
+          client auth can't be done.
+        */
 #   ifndef USE_ONLY_PSK_CIPHER_SUITE
         if (ssl->flags & SSL_FLAGS_CLIENT_AUTH)
         {
@@ -1319,10 +1454,13 @@ int32 sslEncodeResponse(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
 #    endif /* USE_ECC */
                 while (CAcert)
                 {
-                    certReqLen += 2; /* 2 bytes for specifying each cert len */
-                    CAcertLen += CAcert->subject.dnencLen;
+                    if (CAcert->parseStatus == PS_X509_PARSE_SUCCESS)
+                    {
+                        certReqLen += 2; /* 2 bytes for specifying each cert len */
+                        CAcertLen += CAcert->subject.dnencLen;
+                        certCount++;
+                    }
                     CAcert = CAcert->next;
-                    certCount++;
                 }
 #    ifdef USE_DTLS
                 /* if (ssl->flags & SSL_FLAGS_DTLS) { */
@@ -1352,54 +1490,51 @@ int32 sslEncodeResponse(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
 #   endif /* USE_ONLY_PSK_CIPHER_SUITE */
 #  endif  /* USE_CLIENT_AUTH */
 
-#  ifdef USE_DHE_CIPHER_SUITE
         srvKeyExLen = 0;
-        if (ssl->flags & SSL_FLAGS_DHE_KEY_EXCH)
-        {
-#   ifdef USE_ECC_CIPHER_SUITE
-            if (!(ssl->flags & SSL_FLAGS_ECC_CIPHER))
-            {
-#   endif   /* USE_ECC_CIPHER_SUITE */
-#   ifdef REQUIRE_DH_PARAMS
-/*
-            Extract p and g parameters from key to session context.  Going
-            to send these in the SERVER_KEY_EXCHANGE message.  This is
-            wrapped in a test of whether or not the values have already
-            been extracted because an SSL_FULL scenario below will cause
-            this code to be executed again with a larger buffer.
- */
-            if (ssl->sec.dhPLen == 0 && ssl->sec.dhP == NULL)
-            {
-                if (psDhExportParameters(ssl->hsPool, &ssl->keys->dhParams,
-                        &ssl->sec.dhP, &ssl->sec.dhPLen,
-                        &ssl->sec.dhG, &ssl->sec.dhGLen) < 0)
-                {
-                    return MATRIXSSL_ERROR;
-                }
-            }
-#   endif
-#   ifdef USE_ECC_CIPHER_SUITE
-        }
-#   endif   /* USE_ECC_CIPHER_SUITE */
-#   ifdef USE_ANON_DH_CIPHER_SUITE
-            if (ssl->flags & SSL_FLAGS_ANON_CIPHER)
-            {
-/*
-                If we are an anonymous cipher, we don't send the certificate.
-                The messages are simply SERVER_HELLO, SERVER_KEY_EXCHANGE,
-                and SERVER_HELLO_DONE
- */
-                stotalCertLen = 0;
 
-                srvKeyExLen = ssl->sec.dhPLen + 2 + ssl->sec.dhGLen + 2 +
-                              ssl->sec.dhKeyPriv->size + 2;
+        if ((ssl->flags & SSL_FLAGS_DHE_KEY_EXCH) != 0)
+        {
+#  ifdef USE_DHE_CIPHER_SUITE
+            if (!(ssl->flags & SSL_FLAGS_ECC_CIPHER))
+            { /* DHE without ECC */
+#   ifdef REQUIRE_DH_PARAMS
+                /*
+                  Extract p and g parameters from key to session context.
+                  Going to send these in the SERVER_KEY_EXCHANGE message.
+                  This is wrapped in a test of whether or not the values have
+                  already been extracted because an SSL_FULL scenario below
+                  will cause this code to be executed again with a larger
+                  buffer. */
+                if (ssl->sec.dhPLen == 0 && ssl->sec.dhP == NULL)
+                {
+                    if (psDhExportParameters(ssl->hsPool, &ssl->keys->dhParams,
+                                             &ssl->sec.dhP, &ssl->sec.dhPLen,
+                                             &ssl->sec.dhG, &ssl->sec.dhGLen) < 0)
+                    {
+                        return MATRIXSSL_ERROR;
+                    }
+                }
+#   endif /* REQUIRE_DH_PARAMS */
+            }
+            if ((ssl->flags & SSL_FLAGS_ANON_CIPHER) != 0)
+            {
+#   ifdef USE_ANON_DH_CIPHER_SUITE
+                /*
+                  If we are an anonymous cipher, we don't send the
+                  certificate.  The messages are simply SERVER_HELLO,
+                  SERVER_KEY_EXCHANGE, and SERVER_HELLO_DONE
+                */
+                stotalCertLen = 0;
+                srvKeyExLen = ssl->sec.dhPLen + 2 +
+                    ssl->sec.dhGLen + 2 +
+                    ssl->sec.dhKeyPriv->size + 2;
 
 #    ifdef USE_PSK_CIPHER_SUITE
                 if (ssl->flags & SSL_FLAGS_PSK_CIPHER)
                 {
 /*
  *                                      struct {
- *                                              select (KeyExchangeAlgorithm) {
+ *                                              Select (KeyExchangeAlgorithm) {
  *                                                      case diffie_hellman_psk:  * NEW *
  *                                                      opaque psk_identity_hint<0..2^16-1>;
  *                                                      ServerDHParams params;
@@ -1418,95 +1553,107 @@ int32 sslEncodeResponse(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
                     3 * ssl->hshakeHeadLen +
                     38 + SSL_MAX_SESSION_ID_SIZE +     /* server hello */
                     srvKeyExLen;                       /* server key exchange */
-
                 messageSize += secureWriteAdditions(ssl, 3);
-            }
-            else
-            {
 #   endif   /* USE_ANON_DH_CIPHER_SUITE */
+            } /* anonymous DHE */
 
+            if ((ssl->flags & SSL_FLAGS_ANON_CIPHER) == 0)
+            { /* DHE with authentication */
+
+                if ((ssl->flags & SSL_FLAGS_ECC_CIPHER) != 0)
+                { /* DHE with ECC */
 #   ifdef USE_ECC_CIPHER_SUITE
-            if (ssl->flags & SSL_FLAGS_ECC_CIPHER)
-            {
-                if (ssl->flags & SSL_FLAGS_DHE_WITH_RSA)
-                {
-/*
-                         Magic 7: 1byte ECCurveType named, 2bytes NamedCurve id
-                         1 byte pub key len, 2 byte privkeysize len,
-                         1 byte 0x04 inside the eccKey itself
- */
-                    srvKeyExLen = (ssl->sec.eccKeyPriv->curve->size * 2) + 7 +
-                                  ssl->keys->privKey.keysize;
-                }
-                else if (ssl->flags & SSL_FLAGS_DHE_WITH_DSA)
-                {
-                    /* ExportKey plus signature */
-                    srvKeyExLen = (ssl->sec.eccKeyPriv->curve->size * 2) + 7 +
-                                  6 + /* 6 = 2 ASN_SEQ, 4 ASN_BIG */
-                                  ssl->keys->privKey.keysize;
-                    if (ssl->keys->privKey.keysize >= 128)
+                    if (ssl->flags & SSL_FLAGS_DHE_WITH_RSA)
                     {
-                        srvKeyExLen += 1;     /* Extra len byte in ASN.1 sig */
+                        /*
+                          Magic 7: 1byte ECCurveType named, 2bytes NamedCurve id
+                          1 byte pub key len, 2 byte privkeysize len,
+                          1 byte 0x04 inside the eccKey itself
+                        */
+                        srvKeyExLen =
+                            (ssl->sec.eccKeyPriv->curve->size * 2) +
+                            7 +
+                            ssl->chosenIdentity->privKey.keysize;
                     }
-                    /* NEGATIVE ECDSA - For purposes of SSL_FULL we
-                        add 2 extra bytes to account for the two possible
-                        0x0     bytes in signature */
-                    srvKeyExLen += 2;
-                }
+                    else if (ssl->flags & SSL_FLAGS_DHE_WITH_DSA)
+                    {
+                        /* ExportKey plus signature */
+                        srvKeyExLen = (ssl->sec.eccKeyPriv->curve->size * 2) + 7 +
+                            6 + /* 6 = 2 ASN_SEQ, 4 ASN_BIG */
+                            ssl->chosenIdentity->privKey.keysize;
+                        if (ssl->chosenIdentity->privKey.keysize >= 128)
+                        {
+                            srvKeyExLen += 1;     /* Extra len byte in ASN.1 sig */
+                        }
+                        /* NEGATIVE ECDSA - For purposes of SSL_FULL we
+                           add 2 extra bytes to account for the two possible
+                           0x0     bytes in signature */
+                        srvKeyExLen += 2;
+                    }
 #    ifdef USE_TLS_1_2
-                if (ssl->flags & SSL_FLAGS_TLS_1_2)
-                {
-                    srvKeyExLen += 2;     /* hashSigAlg */
-                }
+                    if (ssl->flags & SSL_FLAGS_TLS_1_2)
+                    {
+                        srvKeyExLen += 2;     /* hashSigAlg */
+                    }
 #    endif /* USE_TLS_1_2 */
-            }
-            else
-            {
-#   endif   /* USE_ECC_CIPHER_SUITE */
+#   endif /* USE_ECC_CIPHER_SUITE */
+                }
+                if ((ssl->flags & SSL_FLAGS_ECC_CIPHER) == 0)
+                { /* DHE without ECC */
 #   ifdef REQUIRE_DH_PARAMS
-/*
-                The AUTH versions of the DHE cipher suites include a
-                signature value in the SERVER_KEY_EXCHANGE message.
-                Account for that length here.  Also, the CERTIFICATE
-                message is sent in this flight as well for normal
-                authentication.
- */
-            srvKeyExLen = ssl->sec.dhPLen + 2 + ssl->sec.dhGLen + 2 +
-                          ssl->sec.dhKeyPriv->size + 2 +
-                          ssl->keys->privKey.keysize + 2;
+                    /*
+                      The AUTH versions of the DHE cipher suites include a
+                      signature value in the SERVER_KEY_EXCHANGE message.
+                      Account for that length here.  Also, the CERTIFICATE
+                      message is sent in this flight as well for normal
+                      authentication.
+                    */
+                    srvKeyExLen =
+                        ssl->sec.dhPLen + 2 +
+                        ssl->sec.dhGLen + 2 +
+                        ssl->sec.dhKeyPriv->size + 2;
+#    ifdef USE_IDENTITY_CERTIFICATES
+                    srvKeyExLen += (ssl->chosenIdentity->privKey.keysize + 2);
+#    endif
 #    ifdef USE_TLS_1_2
-            if (ssl->flags & SSL_FLAGS_TLS_1_2)
-            {
-                srvKeyExLen += 2;     /* hashSigAlg */
-            }
+                    if (ssl->flags & SSL_FLAGS_TLS_1_2)
+                    {
+                        srvKeyExLen += 2;     /* hashSigAlg */
+                    }
 #    endif /* USE_TLS_1_2 */
-
 #   endif   /* REQUIRE_DH_PARAMS */
-#   ifdef USE_ECC_CIPHER_SUITE
-        }
-#   endif   /* USE_ECC_CIPHER_SUITE */
-            stotalCertLen = i = 0;
-#   ifndef USE_ONLY_PSK_CIPHER_SUITE
-            cert = ssl->keys->cert;
-            for (i = 0; cert != NULL; i++)
+                }
+            } /* authenticated DHE */
+
+            stotalCertLen = ncerts = 0;
+#   ifdef USE_IDENTITY_CERTIFICATES
+            if ((ssl->flags & SSL_FLAGS_PSK_CIPHER) == 0)
             {
-                stotalCertLen += cert->binLen;
-                cert = cert->next;
+                if (ssl->chosenIdentity)
+                {
+                    for (cert = ssl->chosenIdentity->cert, ncerts = 0;
+                         cert != NULL;
+                         cert = cert->next, ncerts++)
+                    {
+                        stotalCertLen += cert->binLen;
+                    }
+                    /* Are we going to have to fragment the CERTIFICATE message? */
+                    if ((stotalCertLen + 3 + (ncerts * 3) + ssl->hshakeHeadLen) >
+                        ssl->maxPtFrag)
+                    {
+                        stotalCertLen += addCertFragOverhead(
+                                ssl,
+                                stotalCertLen + 3 + (ncerts * 3) + ssl->hshakeHeadLen);
+                    }
+                }
             }
-            /* Are we going to have to fragment the CERTIFICATE message? */
-            if ((stotalCertLen + 3 + (i * 3) + ssl->hshakeHeadLen) >
-                ssl->maxPtFrag)
-            {
-                stotalCertLen += addCertFragOverhead(ssl,
-                    stotalCertLen + 3 + (i * 3) + ssl->hshakeHeadLen);
-            }
-#   endif   /* USE_ONLY_PSK_CIPHER_SUITE  */
+#   endif /* USE_IDENTITY_CERTIFICATES */
             messageSize =
                 4 * ssl->recordHeadLen +
                 4 * ssl->hshakeHeadLen +
                 38 + SSL_MAX_SESSION_ID_SIZE +     /* server hello */
                 srvKeyExLen +                      /* server key exchange */
-                3 + (i * 3) + stotalCertLen;       /* certificate */
+                3 + (ncerts * 3) + stotalCertLen;  /* certificate */
 #   ifdef USE_CLIENT_AUTH
 #    ifndef USE_ONLY_PSK_CIPHER_SUITE
             if (ssl->flags & SSL_FLAGS_CLIENT_AUTH)
@@ -1525,117 +1672,112 @@ int32 sslEncodeResponse(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
 #    endif /* USE_ONLY_PSK_CIPHER_SUITE */
 #   endif  /* USE_CLIENT_AUTH */
             messageSize += secureWriteAdditions(ssl, 4);
-#   ifdef USE_ANON_DH_CIPHER_SUITE
-        }
-#   endif   /* USE_ANON_DH_CIPHER_SUITE */
-        }
-        else
-        {
 #  endif  /* USE_DHE_CIPHER_SUITE */
-/*
-            This is the entry point for a server encoding the first flight
-            of a non-DH, non-client-auth handshake.
- */
-        stotalCertLen = 0;
+        } /* DHE key exchange */
+
+        if ((ssl->flags & SSL_FLAGS_DHE_KEY_EXCH) == 0)
+        {
+            /*
+              This is the entry point for a server encoding the first flight
+              of a non-DH, non-client-auth handshake.
+            */
+            stotalCertLen = 0;
+            if ((ssl->flags & SSL_FLAGS_PSK_CIPHER) != 0)
+            {
 #  ifdef USE_PSK_CIPHER_SUITE
-        if (ssl->flags & SSL_FLAGS_PSK_CIPHER)
-        {
-/*
-                Omit the CERTIFICATE message but (possibly) including the
-                SERVER_KEY_EXCHANGE.
- */
-            messageSize =
-                2 * ssl->recordHeadLen +
-                2 * ssl->hshakeHeadLen +
-                38 + SSL_MAX_SESSION_ID_SIZE;              /* server hello */
-            if (SSL_PSK_MAX_HINT_SIZE > 0)
-            {
-                messageSize += 2 + SSL_PSK_MAX_HINT_SIZE + /* SKE */
-                               ssl->recordHeadLen + ssl->hshakeHeadLen;
-            }
-            else
-            {
-/*
-                    Assuming 3 messages below when only two are going to exist
- */
-                messageSize -= secureWriteAdditions(ssl, 1);
-            }
-        }
-        else
-        {
+                /*
+                  Omit the CERTIFICATE message but (possibly) including the
+                  SERVER_KEY_EXCHANGE.
+                */
+                messageSize =
+                    2 * ssl->recordHeadLen +
+                    2 * ssl->hshakeHeadLen +
+                    38 + SSL_MAX_SESSION_ID_SIZE;              /* server hello */
+                if (SSL_PSK_MAX_HINT_SIZE > 0)
+                {
+                    messageSize += 2 + SSL_PSK_MAX_HINT_SIZE + /* SKE */
+                        ssl->recordHeadLen + ssl->hshakeHeadLen;
+                }
+                else
+                {
+                    /*
+                      Assuming 3 messages below when only two are going to exist
+                    */
+                    messageSize -= secureWriteAdditions(ssl, 1);
+                }
 #  endif
-#  ifndef USE_ONLY_PSK_CIPHER_SUITE
-        cert = ssl->keys->cert;
-        for (i = 0; cert != NULL; i++)
-        {
-            psAssert(cert->unparsedBin != NULL);
-            stotalCertLen += cert->binLen;
-            cert = cert->next;
-        }
-        /* Are we going to have to fragment the CERTIFICATE message? */
-        if ((stotalCertLen + 3 + (i * 3) + ssl->hshakeHeadLen) >
-            ssl->maxPtFrag)
-        {
-            stotalCertLen += addCertFragOverhead(ssl,
-                stotalCertLen + 3 + (i * 3) + ssl->hshakeHeadLen);
-        }
-        messageSize =
-            3 * ssl->recordHeadLen +
-            3 * ssl->hshakeHeadLen +
-            38 + SSL_MAX_SESSION_ID_SIZE +       /* server hello */
-            3 + (i * 3) + stotalCertLen;         /* certificate */
-#  endif /* !USE_ONLY_PSK_CIPHER_SUITE */
-#  ifdef USE_PSK_CIPHER_SUITE
-    }
-#  endif /* USE_PSK_CIPHER_SUITE */
+            } /* PSK cipher */
+
+            if ((ssl->flags & SSL_FLAGS_PSK_CIPHER) == 0)
+            {
+#  ifdef USE_IDENTITY_CERTIFICATES
+                if (ssl->chosenIdentity)
+                {
+                    for (cert = ssl->chosenIdentity->cert, ncerts = 0;
+                         cert != NULL; cert = cert->next, ncerts++)
+                    {
+                        psAssert(cert->unparsedBin != NULL);
+                        stotalCertLen += cert->binLen;
+                    }
+                    /* Are we going to have to fragment the CERTIFICATE message? */
+                    if ((stotalCertLen + 3 + (ncerts * 3) + ssl->hshakeHeadLen) > ssl->maxPtFrag)
+                    {
+                        stotalCertLen += addCertFragOverhead(
+                                ssl,
+                                stotalCertLen + 3 + (ncerts * 3) + ssl->hshakeHeadLen);
+                    }
+                    messageSize =
+                        3 * ssl->recordHeadLen +
+                        3 * ssl->hshakeHeadLen +
+                        38 + SSL_MAX_SESSION_ID_SIZE +        /* server hello */
+                        3 + (ncerts * 3) + stotalCertLen;    /* certificate */
+                }
+#  endif /* USE_IDENTITY_CERTIFICATES */
+            } /* not PSK cipher */
 
 #  ifdef USE_CLIENT_AUTH
 #   ifndef USE_ONLY_PSK_CIPHER_SUITE
-        if (ssl->flags & SSL_FLAGS_CLIENT_AUTH)
-        {
-            /* Are we going to have to fragment the     CERTIFICATE_REQUEST
-                message? This is the SSL fragment level */
-            if (certReqLen + CAcertLen > ssl->maxPtFrag)
+            if (ssl->flags & SSL_FLAGS_CLIENT_AUTH)
             {
-                certReqLen += addCertFragOverhead(ssl,
-                    certReqLen + CAcertLen);
-            }
-            messageSize += certReqLen + CAcertLen;     /* certificate request */
-            messageSize += secureWriteAdditions(ssl, 1);
-#    ifdef USE_DTLS
-            if (ssl->flags & SSL_FLAGS_DTLS)
-            {
-                /*      DTLS pmtu CERTIFICATE_REQUEST */
-                messageSize += (MAX_FRAGMENTS - 1) *
-                               (ssl->recordHeadLen + ssl->hshakeHeadLen);
-                if (ssl->flags & SSL_FLAGS_WRITE_SECURE)
+                /* Are we going to have to fragment the CERTIFICATE_REQUEST
+                   message? This is the SSL fragment level */
+                if (certReqLen + CAcertLen > ssl->maxPtFrag)
                 {
-                    messageSize += secureWriteAdditions(ssl,
-                        MAX_FRAGMENTS - 1);
+                    certReqLen += addCertFragOverhead(ssl,
+                                                      certReqLen + CAcertLen);
                 }
-            }
+                messageSize += certReqLen + CAcertLen;     /* certificate request */
+                messageSize += secureWriteAdditions(ssl, 1);
+#    ifdef USE_DTLS
+                if (ssl->flags & SSL_FLAGS_DTLS)
+                {
+                    /*      DTLS pmtu CERTIFICATE_REQUEST */
+                    messageSize += (MAX_FRAGMENTS - 1) *
+                        (ssl->recordHeadLen + ssl->hshakeHeadLen);
+                    if (ssl->flags & SSL_FLAGS_WRITE_SECURE)
+                    {
+                        messageSize += secureWriteAdditions(ssl,
+                                                            MAX_FRAGMENTS - 1);
+                    }
+                }
 #    endif /* USE_DTLS */
-        }
+            }
 #   endif  /* USE_ONLY_PSK_CIPHER_SUITE */
 #  endif   /* USE_CLIENT_AUTH */
-
-        messageSize += secureWriteAdditions(ssl, 3);
-
-#  ifdef USE_DHE_CIPHER_SUITE
-    }
-#  endif /* USE_DHE_CIPHER_SUITE */
+            messageSize += secureWriteAdditions(ssl, 3);
+        } /* not DHE key exchange */
 
 #  ifdef USE_DTLS
         if (ssl->flags & SSL_FLAGS_DTLS)
         {
-/*
-            If DTLS, make sure the max fragment overhead is accounted for
-            on any flight containing the CERTIFICATE message.  If
-            SSL_FULL is hit mid-flight creation, the updates that happen
-            on the handshake hash on that first pass will really mess us up
- */
+            /*
+              If DTLS, make sure the max fragment overhead is accounted for on
+              any flight containing the CERTIFICATE message.  If SSL_FULL is
+              hit mid-flight creation, the updates that happen on the
+              handshake hash on that first pass will really mess us up
+            */
             messageSize += (MAX_FRAGMENTS - 1) *
-                           (ssl->recordHeadLen + ssl->hshakeHeadLen);
+                (ssl->recordHeadLen + ssl->hshakeHeadLen);
             if (ssl->flags & SSL_FLAGS_WRITE_SECURE)
             {
                 messageSize += secureWriteAdditions(ssl, MAX_FRAGMENTS - 1);
@@ -1643,9 +1785,9 @@ int32 sslEncodeResponse(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
         }
 #  endif /* USE_DTLS */
 
-/*
-        Add extensions
- */
+        /*
+          Add extensions
+        */
         extSize = 0; /* Two byte total length for all extensions */
         if (ssl->maxPtFrag < SSL_MAX_PLAINTEXT_LEN)
         {
@@ -1667,17 +1809,17 @@ int32 sslEncodeResponse(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
 
 #  ifdef USE_OCSP_RESPONSE
         /* If we are sending the OCSP status_request extension, we are also
-            sending the CERTIFICATE_STATUS handshake message */
+           sending the CERTIFICATE_STATUS handshake message */
         if (ssl->extFlags.status_request)
         {
             extSize = 2;
             messageSize += 4; /* 2 type, 2 length, 0 value */
 
             /* And the handshake message oh.  1 type, 3 len, x OCSPResponse
-                The status_request flag will only have been set if a
-                ssl->keys->OCSPResponseBuf was present during extension parse */
+               The status_request flag will only have been set if a
+               ssl->keys->OCSPResponseBuf was present during extension parse */
             messageSize += ssl->hshakeHeadLen + ssl->recordHeadLen + 4 +
-                           ssl->keys->OCSPResponseBufLen;
+                ssl->keys->OCSPResponseBufLen;
             messageSize += secureWriteAdditions(ssl, 1);
         }
 #  endif /* USE_OCSP_RESPONSE */
@@ -1705,11 +1847,10 @@ int32 sslEncodeResponse(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
 #  endif
 
 #  ifdef ENABLE_SECURE_REHANDSHAKES
-/*
-        The RenegotiationInfo extension lengths are well known
- */
-        if (ssl->secureRenegotiationFlag == PS_TRUE &&
-            ssl->myVerifyDataLen == 0)
+        /*
+          The RenegotiationInfo extension lengths are well known
+        */
+        if (ssl->secureRenegotiationFlag == PS_TRUE && ssl->myVerifyDataLen == 0)
         {
             extSize = 2;
             messageSize += 5; /* ff 01 00 01 00 */
@@ -1718,25 +1859,28 @@ int32 sslEncodeResponse(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
                  ssl->myVerifyDataLen > 0)
         {
             extSize = 2;
-            messageSize += 5 + ssl->myVerifyDataLen +
-                           ssl->peerVerifyDataLen; /* 2 for total len, 5 for type+len */
+            messageSize += 5 +
+                ssl->myVerifyDataLen +
+                ssl->peerVerifyDataLen; /* 2 for total len, 5 for type+len */
         }
 #  endif /* ENABLE_SECURE_REHANDSHAKES */
 
 #  ifdef USE_ECC_CIPHER_SUITE
-/*
-    Server Hello ECC extension
- */
+        /*
+          Server Hello ECC extension
+        */
         if (ssl->flags & SSL_FLAGS_ECC_CIPHER)
         {
-            extSize = 2;
-            /* EXT_ELLIPTIC_POINTS - hardcoded to 'uncompressed' support */
-            messageSize += 6; /* 00 0B 00 02 01 00 */
+            if (ssl->extFlags.got_elliptic_points == 1)
+            {
+                extSize = 2;
+                messageSize += 6; /* 00 0B 00 02 01 00 */
+            }
         }
 #  endif /* USE_ECC_CIPHER_SUITE */
-/*
-        Done with extensions.  If had some, add the two byte total length
- */
+        /*
+          Done with extensions.  If had some, add the two byte total length
+        */
         messageSize += extSize;
 
         if ((out->buf + out->size) - out->end < messageSize)
@@ -1744,17 +1888,16 @@ int32 sslEncodeResponse(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
             *requiredLen = messageSize;
             return SSL_FULL;
         }
-/*
-        Message size complete.  Begin the flight write
- */
+        /*
+          Message size complete.  Begin the flight write
+        */
         rc = writeServerHello(ssl, out);
 
-#  ifdef USE_DHE_CIPHER_SUITE
-        if (ssl->flags & SSL_FLAGS_DHE_KEY_EXCH)
+        if ((ssl->flags & SSL_FLAGS_DHE_KEY_EXCH) != 0)
         {
-#   ifndef USE_ONLY_PSK_CIPHER_SUITE
-            if (ssl->flags & SSL_FLAGS_DHE_WITH_RSA ||
-                ssl->flags & SSL_FLAGS_DHE_WITH_DSA)
+#  ifdef USE_DHE_CIPHER_SUITE
+#   ifdef USE_IDENTITY_CERTIFICATES
+            if (ssl->flags & SSL_FLAGS_DHE_WITH_RSA || ssl->flags & SSL_FLAGS_DHE_WITH_DSA)
             {
                 if (rc == MATRIXSSL_SUCCESS)
                 {
@@ -1765,60 +1908,54 @@ int32 sslEncodeResponse(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
                 {
                     rc = writeCertificateStatus(ssl, out);
                 }
-#    endif /* USE_OCSP_RESPONSE */
+#    endif
             }
-#   endif   /* !USE_ONLY_PSK_CIPHER_SUITE */
+#  endif /* USE_IDENTITY_CERTIFICATES */
             if (rc == MATRIXSSL_SUCCESS)
             {
-#   ifdef USE_ECC_CIPHER_SUITE
-                if (ssl->flags & SSL_FLAGS_ECC_CIPHER)
+                if ((ssl->flags & SSL_FLAGS_ECC_CIPHER) != 0)
                 {
                     rc = writeServerKeyExchange(ssl, out, 0, NULL, 0, NULL);
                 }
                 else
                 {
-#   endif       /* USE_ECC_CIPHER_SUITE */
-#   ifdef REQUIRE_DH_PARAMS
-                rc = writeServerKeyExchange(ssl, out, ssl->sec.dhPLen,
-                    ssl->sec.dhP, ssl->sec.dhGLen, ssl->sec.dhG);
-#   endif       /* REQUIRE_DH_PARAMS */
-#   ifdef USE_ECC_CIPHER_SUITE
+#  ifdef REQUIRE_DH_PARAMS
+                    rc = writeServerKeyExchange(ssl,
+                                                out, ssl->sec.dhPLen,
+                                                ssl->sec.dhP, ssl->sec.dhGLen, ssl->sec.dhG);
+#  endif /* REQUIRE_DH_PARAMS */
+                }
             }
-#   endif       /* USE_ECC_CIPHER_SUITE */
-            }
-        }
-        else
-        {
 #  endif /* USE_DHE_CIPHER_SUITE */
-#  ifdef USE_PSK_CIPHER_SUITE
-        if (ssl->flags & SSL_FLAGS_PSK_CIPHER)
+        } /* DHE key exchange/write certificates */
+
+        if ((ssl->flags & SSL_FLAGS_DHE_KEY_EXCH) == 0)
         {
-            if (rc == MATRIXSSL_SUCCESS)
+#  ifdef USE_PSK_CIPHER_SUITE
+            if ((ssl->flags & SSL_FLAGS_PSK_CIPHER) != 0)
             {
-                rc = writePskServerKeyExchange(ssl, out);
+                if (rc == MATRIXSSL_SUCCESS)
+                {
+                    rc = writePskServerKeyExchange(ssl, out);
+                }
             }
-        }
-        else
-        {
 #  endif /* USE_PSK_CIPHER_SUITE */
-#  ifndef USE_ONLY_PSK_CIPHER_SUITE
-        if (rc == MATRIXSSL_SUCCESS)
-        {
-            rc = writeCertificate(ssl, out, 1);
-        }
+            if ((ssl->flags & SSL_FLAGS_PSK_CIPHER) == 0)
+            {
+#  ifdef USE_IDENTITY_CERTIFICATES
+                if (rc == MATRIXSSL_SUCCESS)
+                {
+                    rc = writeCertificate(ssl, out, 1);
+                }
 #   ifdef USE_OCSP_RESPONSE
-        if (rc == MATRIXSSL_SUCCESS)
-        {
-            rc = writeCertificateStatus(ssl, out);
-        }
+                if (rc == MATRIXSSL_SUCCESS)
+                {
+                    rc = writeCertificateStatus(ssl, out);
+                }
 #   endif /* USE_OCSP_RESPONSE */
-#  endif /* !USE_ONLY_PSK_CIPHER_SUITE */
-#  ifdef USE_PSK_CIPHER_SUITE
-    }
-#  endif /* USE_PSK_CIPHER_SUITE */
-#  ifdef USE_DHE_CIPHER_SUITE
-    }
-#  endif /* USE_DHE_CIPHER_SUITE */
+#  endif /* USE_IDENTITY_CERTIFICATES */
+            }
+        } /* not DHE key exchange; write PSK/certificates */
 
 #  ifndef USE_ONLY_PSK_CIPHER_SUITE
 #   ifdef USE_CLIENT_AUTH
@@ -1848,12 +1985,12 @@ int32 sslEncodeResponse(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
         break;
 
 #  ifdef USE_DTLS
-/*
-    Got a cookie-less CLIENT_HELLO, need a HELLO_VERIFY_REQUEST message
- */
+        /*
+          Got a cookie-less CLIENT_HELLO, need a HELLO_VERIFY_REQUEST message
+        */
     case SSL_HS_CLIENT_HELLO:
         messageSize = ssl->recordHeadLen + ssl->hshakeHeadLen +
-                      DTLS_COOKIE_SIZE + 3;
+            DTLS_COOKIE_SIZE + 3;
         messageSize += secureWriteAdditions(ssl, 1);
 
         if ((out->buf + out->size) - out->end < messageSize)
@@ -1864,23 +2001,23 @@ int32 sslEncodeResponse(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
         rc = writeHelloVerifyRequest(ssl, out);
         break;
 #  endif /* USE_DTLS */
-# endif  /* USE_SERVER_SIDE_SSL */
+# endif /* USE_SERVER_SIDE_SSL */
 
-/*
-    If we're not waiting for any message from client, then we need to
-    send our finished message
- */
+        /*
+          If we're not waiting for any message from client, then we need to
+          send our finished message
+        */
     case SSL_HS_DONE:
         messageSize = 2 * ssl->recordHeadLen +
-                      ssl->hshakeHeadLen +
-                      1 +                             /* change cipher spec */
-                      MD5_HASH_SIZE + SHA1_HASH_SIZE; /* finished */
-/*
-        Account for possible overhead in CCS message with secureWriteAdditions
-        then always account for the encryption overhead on FINISHED message.
-        Correct to use ssl->cipher values for mac and block since those will
-        be the ones used when encrypting FINISHED
- */
+            ssl->hshakeHeadLen +
+            1 +                             /* change cipher spec */
+            MD5_HASH_SIZE + SHA1_HASH_SIZE; /* finished */
+        /*
+          Account for possible overhead in CCS message with secureWriteAdditions
+          then always account for the encryption overhead on FINISHED message.
+          Correct to use ssl->cipher values for mac and block since those will
+          be the ones used when encrypting FINISHED
+        */
         messageSize += secureWriteAdditions(ssl, 1);
         messageSize += ssl->cipher->macSize + ssl->cipher->blockSize;
 
@@ -1891,31 +2028,31 @@ int32 sslEncodeResponse(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
                 (ssl->sid->sessionTicketState == SESS_TICKET_STATE_RECVD_EXT))
             {
                 messageSize += ssl->recordHeadLen +
-                               ssl->hshakeHeadLen + matrixSessionTicketLen() + 6;
+                    ssl->hshakeHeadLen + matrixSessionTicketLen() + 6;
             }
         }
 # endif
 
 # ifdef USE_TLS
-/*
-        Account for the smaller finished message size for TLS.
- */
+        /*
+          Account for the smaller finished message size for TLS.
+        */
         if (ssl->flags & SSL_FLAGS_TLS)
         {
             messageSize += TLS_HS_FINISHED_SIZE -
-                           (MD5_HASH_SIZE + SHA1_HASH_SIZE);
+                (MD5_HASH_SIZE + SHA1_HASH_SIZE);
         }
 # endif /* USE_TLS */
 # ifdef USE_TLS_1_1
-/*
-        Adds explict IV overhead to the FINISHED message
- */
+        /*
+          Adds explict IV overhead to the FINISHED message
+        */
         if (ssl->flags & SSL_FLAGS_TLS_1_1)
         {
             if (ssl->flags & SSL_FLAGS_AEAD_W)
             {
                 /* The magic 1 back into messageSize is because the
-                    macSize + blockSize above ends up subtracting one on AEAD */
+                   macSize + blockSize above ends up subtracting one on AEAD */
                 messageSize += AEAD_TAG_LEN(ssl) + AEAD_NONCE_LEN(ssl) + 1;
             }
             else
@@ -1983,18 +2120,18 @@ int32 sslEncodeResponse(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
                 38 + SSL_MAX_SESSION_ID_SIZE +      /* server hello */
                 1 +                                 /* change cipher spec */
                 MD5_HASH_SIZE + SHA1_HASH_SIZE;     /* finished */
-/*
-            Account for possible overhead with secureWriteAdditions
-            then always account for the encrypted FINISHED message.  Correct
-            to use the ssl->cipher values for mac and block since those will
-            always be the values used to encrypt the FINISHED message
- */
+            /*
+              Account for possible overhead with secureWriteAdditions
+              then always account for the encrypted FINISHED message.  Correct
+              to use the ssl->cipher values for mac and block since those will
+              always be the values used to encrypt the FINISHED message
+            */
             messageSize += secureWriteAdditions(ssl, 2);
             messageSize += ssl->cipher->macSize + ssl->cipher->blockSize;
 #  ifdef ENABLE_SECURE_REHANDSHAKES
-/*
-            The RenegotiationInfo extension lengths are well known
- */
+            /*
+              The RenegotiationInfo extension lengths are well known
+            */
             if (ssl->secureRenegotiationFlag == PS_TRUE &&
                 ssl->myVerifyDataLen == 0)
             {
@@ -2011,30 +2148,34 @@ int32 sslEncodeResponse(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
 #  ifdef USE_ECC_CIPHER_SUITE
             if (ssl->flags & SSL_FLAGS_ECC_CIPHER)
             {
+                if (ssl->extFlags.got_elliptic_points == 1)
+                {
 #   ifndef ENABLE_SECURE_REHANDSHAKES
-                messageSize += 2; /* ext 2 byte len has not been included */
+                    messageSize += 2; /* ext 2 byte len has not been included */
 #   endif /* ENABLE_SECURE_REHANDSHAKES */
-                /* EXT_ELLIPTIC_POINTS - hardcoded to 'uncompressed' support */
-                messageSize += 6; /* 00 0B 00 02 01 00 */
+                    /* EXT_ELLIPTIC_POINTS - hardcoded to 'uncompressed' support */
+                    messageSize += 6; /* 00 0B 00 02 01 00 */
+                }
             }
 #  endif /* USE_ECC_CIPHER_SUITE */
 
 #  ifdef USE_TLS
-/*
-            Account for the smaller finished message size for TLS.
-            The MD5+SHA1 is SSLv3.  TLS is 12 bytes.
- */
+            /*
+              Account for the smaller finished message size for TLS.
+              The MD5+SHA1 is SSLv3.  TLS is 12 bytes.
+            */
             if (ssl->flags & SSL_FLAGS_TLS)
             {
                 messageSize += TLS_HS_FINISHED_SIZE -
                                (MD5_HASH_SIZE + SHA1_HASH_SIZE);
             }
 #  endif    /* USE_TLS */
+
 #  ifdef USE_TLS_1_1
-/*
-            Adds explict IV overhead to the FINISHED message.  Always added
-            because FINISHED is never accounted for in secureWriteAdditions
- */
+            /*
+              Adds explict IV overhead to the FINISHED message.
+              Always added because FINISHED is never accounted for in
+              secureWriteAdditions */
             if (ssl->flags & SSL_FLAGS_TLS_1_1)
             {
                 if (ssl->cipher->flags &
@@ -2078,181 +2219,101 @@ int32 sslEncodeResponse(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
             }
         }
 # endif /* USE_SERVER_SIDE_SSL */
+
 # ifdef USE_CLIENT_SIDE_SSL
-/*
-        Encode entry point for client side final flight encodes.
-        First task here is to find out size of ClientKeyExchange message
- */
+        /*
+          Encode entry point for client side final flight encodes.
+          First task here is to find out size of ClientKeyExchange message
+        */
         if (!(ssl->flags & SSL_FLAGS_SERVER))
         {
-            ckeSize = 0;
-#  ifdef USE_DHE_CIPHER_SUITE
-            if (ssl->flags & SSL_FLAGS_DHE_KEY_EXCH)
-            {
-#   ifdef USE_DTLS
-                if (ssl->flags & SSL_FLAGS_DTLS && ssl->retransmit == 1)
-                {
-                    ckeSize = ssl->ckeSize; /* Keys have been freed */
-                }
-                else
-                {
-#   endif       /* USE_DTLS */
-#   ifdef USE_ECC_CIPHER_SUITE
-                if (ssl->flags & SSL_FLAGS_ECC_CIPHER)
-                {
-                    ckeSize = (ssl->sec.eccKeyPriv->curve->size * 2) + 2;
-                }
-                else
-                {
-#   endif       /* USE_ECC_CIPHER_SUITE */
-#   ifdef REQUIRE_DH_PARAMS
-                ckeSize = ssl->sec.dhKeyPriv->size;
-#   endif       /* REQUIRE_DH_PARAMS */
-#   ifdef USE_ECC_CIPHER_SUITE
-            }
-#   endif       /* USE_ECC_CIPHER_SUITE */
-#   ifdef USE_DTLS
-            }
-#   endif       /* USE_DTLS */
-#   ifdef USE_PSK_CIPHER_SUITE
-/*
-                This is the DHE_PSK suite case.
-                PSK suites add the key identity with psSize_t size
- */
-                if (ssl->flags & SSL_FLAGS_PSK_CIPHER)
-                {
-                    ckeSize += SSL_PSK_MAX_ID_SIZE + 2;
-                }
-#   endif       /* USE_PSK_CIPHER_SUITE */
-            }
-            else
-            {
-#  endif    /* USE_DHE_CIPHER_SUITE */
-#  ifdef USE_PSK_CIPHER_SUITE
-/*
-                This is the basic PSK case
-                PSK suites add the key identity with psSize_t size
- */
-            if (ssl->flags & SSL_FLAGS_PSK_CIPHER)
-            {
-                ckeSize += SSL_PSK_MAX_ID_SIZE + 2;
-            }
-            else
-            {
-#  endif    /* USE_PSK_CIPHER_SUITE */
-#  ifndef USE_ONLY_PSK_CIPHER_SUITE
-#   ifdef USE_ECC_CIPHER_SUITE
-            if (ssl->cipher->type == CS_ECDH_ECDSA ||
-                ssl->cipher->type == CS_ECDH_RSA)
-            {
-                ckeSize = (ssl->sec.cert->publicKey.key.ecc.curve->size
-                           * 2) + 2;
-            }
-            else
-            {
-#   endif   /* USE_ECC_CIPHER_SUITE */
-/*
-                    Normal RSA auth cipher suite case
- */
-            if (ssl->sec.cert == NULL)
+            ckeSize = calcCkeSize(ssl);
+            if (ckeSize < 0)
             {
                 ssl->flags |= SSL_FLAGS_ERROR;
-                return MATRIXSSL_ERROR;
+                return ckeSize;
             }
-            ckeSize = ssl->sec.cert->publicKey.keysize;
-
-#   ifdef USE_ECC_CIPHER_SUITE
-        }
-#   endif /* USE_ECC_CIPHER_SUITE */
-#  endif  /* !USE_ONLY_PSK_CIPHER_SUITE */
-#  ifdef USE_PSK_CIPHER_SUITE
-        }
-#  endif    /* USE_PSK_CIPHER_SUITE */
-#  ifdef USE_DHE_CIPHER_SUITE
-        }
-#  endif    /* USE_DHE_CIPHER_SUITE */
 
             messageSize = 0;
 
             if (ssl->flags & SSL_FLAGS_CLIENT_AUTH)
             {
-/*
-            Client authentication requires the client to send a CERTIFICATE
-            and CERTIFICATE_VERIFY message.  Account for the length.  It
-            is possible the client didn't have a match for the requested cert.
-            Send an empty certificate message in that case (or alert for SSLv3)
- */
-#  ifndef USE_ONLY_PSK_CIPHER_SUITE
-#   ifdef USE_CLIENT_AUTH
+#  if defined(USE_IDENTITY_CERTIFICATES) && defined(USE_CLIENT_AUTH)
+                /*
+                  Client authentication requires the client to send a
+                  CERTIFICATE and CERTIFICATE_VERIFY message.  Account for the
+                  length.  It is possible the client didn't have a match for
+                  the requested cert.  Send an empty certificate message in
+                  that case (or alert for SSLv3)
+                */
                 if (ssl->sec.certMatch > 0)
                 {
-/*
-                    Account for the certificate and certificateVerify messages
- */
-                    cert = ssl->keys->cert;
-                    ctotalCertLen = 0;
-                    for (i = 0; cert != NULL; i++)
+                    /*
+                      Account for the certificate and certificateVerify messages
+                    */
+                    ctotalCertLen = ncerts = 0;
+                    if (ssl->chosenIdentity)
                     {
-                        ctotalCertLen += cert->binLen;
-                        cert = cert->next;
+                        for (cert = ssl->chosenIdentity->cert; cert; cert = cert->next, ncerts++)
+                        {
+                            ctotalCertLen += cert->binLen;
+                        }
                     }
                     /* Are we going to have to fragment the CERT message? */
-                    if ((ctotalCertLen + 3 + (i * 3) + ssl->hshakeHeadLen) >
+                    if ((ctotalCertLen + 3 + (ncerts * 3) + ssl->hshakeHeadLen) >
                         ssl->maxPtFrag)
                     {
                         ctotalCertLen += addCertFragOverhead(ssl,
-                            ctotalCertLen + 3 + (i * 3) + ssl->hshakeHeadLen);
+                            ctotalCertLen + 3 + (ncerts * 3) + ssl->hshakeHeadLen);
                     }
-                    messageSize += (2 * ssl->recordHeadLen) + 3 + (i * 3) +
-                                   (2 * ssl->hshakeHeadLen) + ctotalCertLen +
-                                   2 + ssl->keys->privKey.keysize;
+                    messageSize =
+                        2 * ssl->recordHeadLen +
+                        2 * ssl->hshakeHeadLen +
+                        3 + (ncerts * 3) + ctotalCertLen +
+                        (ssl->chosenIdentity ? (2 + ssl->chosenIdentity->privKey.keysize): 0);
 
 #    ifdef USE_ECC
                     /* Overhead ASN.1 in psEccSignHash */
-                    if (ssl->keys->cert->pubKeyAlgorithm == OID_ECDSA_KEY_ALG)
+                    if (ssl->chosenIdentity
+                        && ssl->chosenIdentity->cert->pubKeyAlgorithm == OID_ECDSA_KEY_ALG)
                     {
                         /* NEGATIVE ECDSA - For purposes of SSL_FULL we
                             add 2 extra bytes to account for the two 0x0
                             bytes in signature */
                         messageSize += 6 + 2;
-                        if (ssl->keys->privKey.keysize >= 128)
+                        if (ssl->chosenIdentity->privKey.keysize >= 128)
                         {
                             messageSize += 1; /* Extra len byte in ASN.1 sig */
                         }
                     }
 #    endif          /* USE_ECC */
                 }
-                else
+                if (ssl->sec.certMatch == 0)
                 {
-#   endif       /* USE_CLIENT_AUTH */
-/*
-                    SSLv3 sends a no_certificate warning alert for no match
- */
-                if (ssl->majVer == SSL3_MAJ_VER
-                    && ssl->minVer == SSL3_MIN_VER)
-                {
-                    messageSize += 2 + ssl->recordHeadLen;
+                    /*
+                      SSLv3 sends a no_certificate warning alert for no match
+                    */
+                    if (ssl->majVer == SSL3_MAJ_VER && ssl->minVer == SSL3_MIN_VER)
+                    {
+                        messageSize += 2 + ssl->recordHeadLen;
+                    }
+                    else
+                    {
+                        /*
+                          TLS just sends an empty certificate message
+                        */
+                        messageSize += 3 + ssl->recordHeadLen + ssl->hshakeHeadLen;
+                    }
                 }
-                else
-                {
-/*
-                        TLS just sends an empty certificate message
- */
-                    messageSize += 3 + ssl->recordHeadLen +
-                                   ssl->hshakeHeadLen;
-                }
-#   ifdef USE_CLIENT_AUTH
+#  endif /* USE_IDENTITY_CERTIFICATES */
             }
-#   endif /* USE_CLIENT_AUTH */
-#  endif  /* USE_ONLY_PSK_CIPHER_SUITE */
-            }
-/*
-            Account for the header and message size for all records.  The
-            finished message will always be encrypted, so account for one
-            largest possible MAC size and block size.  The finished message is
-            not accounted for in the writeSecureAddition calls below since it
-            is accounted for here.
- */
+
+            /*
+              Account for the header and message size for all records.  The
+              finished message will always be encrypted, so account for one
+              largest possible MAC size and block size.  The finished message
+              is not accounted for in the writeSecureAddition calls below
+              since it is accounted for here.*/
             messageSize +=
                 3 * ssl->recordHeadLen +
                 2 * ssl->hshakeHeadLen +             /* change cipher has no hsHead */
@@ -2262,26 +2323,26 @@ int32 sslEncodeResponse(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
                 ssl->cipher->macSize +
                 ssl->cipher->blockSize;              /* finished overhead */
 #  ifdef USE_TLS
-/*
-            Must add the 2 bytes key size length to the client key exchange
-            message. Also, at this time we can account for the smaller finished
-            message size for TLS.  The MD5+SHA1 is SSLv3.  TLS is 12 bytes.
- */
+            /*
+              Must add the 2 bytes key size length to the client key exchange
+              message. Also, at this time we can account for the smaller
+              finished message size for TLS.  The MD5+SHA1 is SSLv3.  TLS is
+              12 bytes. */
             if (ssl->flags & SSL_FLAGS_TLS)
             {
                 messageSize += 2 - MD5_HASH_SIZE - SHA1_HASH_SIZE +
-                               TLS_HS_FINISHED_SIZE;
+                    TLS_HS_FINISHED_SIZE;
             }
 #  endif    /* USE_TLS */
             if (ssl->flags & SSL_FLAGS_CLIENT_AUTH)
             {
-/*
-                Secure write for ClientKeyExchange, ChangeCipherSpec,
-                Certificate, and CertificateVerify.  Don't account for
-                Certificate and/or CertificateVerify message if no auth cert.
-                This will also cover the NO_CERTIFICATE alert sent in
-                replacement of the NULL certificate message in SSLv3.
- */
+                /*
+                  Secure write for ClientKeyExchange, ChangeCipherSpec,
+                  Certificate, and CertificateVerify.  Don't account for
+                  Certificate and/or CertificateVerify message if no auth
+                  cert.  This will also cover the NO_CERTIFICATE alert sent in
+                  replacement of the NULL certificate message in SSLv3.
+                */
                 if (ssl->sec.certMatch > 0)
                 {
 #  ifdef USE_TLS_1_2
@@ -2305,14 +2366,14 @@ int32 sslEncodeResponse(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
 #  ifdef USE_DTLS
             if (ssl->flags & SSL_FLAGS_DTLS)
             {
-/*
-                 If DTLS, make sure the max fragment overhead is accounted for
-                 on any flight containing the CERTIFICATE message.  If
-                 SSL_FULL is hit mid-flight creation, the updates that happen
-                 on the handshake hash on that first pass will really mess us up
- */
+                /*
+                  If DTLS, make sure the max fragment overhead is accounted
+                  for on any flight containing the CERTIFICATE message.  If
+                  SSL_FULL is hit mid-flight creation, the updates that happen
+                  on the handshake hash on that first pass will really mess us
+                  up */
                 messageSize += (MAX_FRAGMENTS - 1) *
-                               (ssl->recordHeadLen + ssl->hshakeHeadLen);
+                    (ssl->recordHeadLen + ssl->hshakeHeadLen);
                 if (ssl->flags & SSL_FLAGS_WRITE_SECURE)
                 {
                     messageSize += secureWriteAdditions(ssl, MAX_FRAGMENTS - 1);
@@ -2320,10 +2381,10 @@ int32 sslEncodeResponse(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
             }
 #  endif    /* USE_DTLS */
 #  ifdef USE_TLS_1_1
-/*
-            Adds explict IV overhead to the FINISHED message.  Always added
-            because FINISHED is never accounted for in secureWriteAdditions
- */
+            /*
+              Adds explict IV overhead to the FINISHED message.  Always added
+              because FINISHED is never accounted for in secureWriteAdditions
+            */
             if (ssl->flags & SSL_FLAGS_TLS_1_1)
             {
                 if (ssl->cipher->flags &
@@ -2350,53 +2411,50 @@ int32 sslEncodeResponse(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
                 messageSize += MAX_ZLIB_COMPRESSED_OH;
             }
 #  endif
-/*
-            The actual buffer size test to hold this flight
- */
+            /*
+              The actual buffer size test to hold this flight
+            */
             if ((out->buf + out->size) - out->end < messageSize)
             {
                 *requiredLen = messageSize;
                 return SSL_FULL;
             }
-            rc = MATRIXSSL_SUCCESS;
 
-#  ifndef USE_ONLY_PSK_CIPHER_SUITE
+            rc = MATRIXSSL_SUCCESS;
+#  ifdef USE_IDENTITY_CERTIFICATES
             if (ssl->flags & SSL_FLAGS_CLIENT_AUTH)
             {
-/*
-                The TLS RFC is fairly clear that an empty certificate message
-                be sent if there is no certificate match.  SSLv3 tends to lean
-                toward a NO_CERTIFIATE warning alert message
- */
-                if (ssl->sec.certMatch == 0 && ssl->majVer == SSL3_MAJ_VER
-                    && ssl->minVer == SSL3_MIN_VER)
+                /* The TLS RFC is fairly clear that an empty certificate
+                   message be sent if there is no certificate match.  SSLv3
+                   tends to lean toward a NO_CERTIFIATE warning alert message
+                */
+                if (ssl->sec.certMatch == 0 &&
+                    ssl->majVer == SSL3_MAJ_VER && ssl->minVer == SSL3_MIN_VER)
                 {
                     rc = writeAlert(ssl, SSL_ALERT_LEVEL_WARNING,
-                        SSL_ALERT_NO_CERTIFICATE, out, requiredLen);
+                                    SSL_ALERT_NO_CERTIFICATE, out, requiredLen);
                 }
                 else
                 {
                     rc = writeCertificate(ssl, out, ssl->sec.certMatch);
                 }
             }
-#  endif    /* !USE_ONLY_PSK_CIPHER_SUITE */
-
+#  endif /* USE_IDENTITY_CERTIFICATES */
             if (rc == MATRIXSSL_SUCCESS)
             {
                 rc = writeClientKeyExchange(ssl, out);
             }
-#  ifndef USE_ONLY_PSK_CIPHER_SUITE
-#   ifdef USE_CLIENT_AUTH
+#  if defined(USE_IDENTITY_CERTIFICATES) && defined(USE_CLIENT_AUTH)
             if (ssl->flags & SSL_FLAGS_CLIENT_AUTH)
             {
-                if (rc == MATRIXSSL_SUCCESS && ssl->sec.certMatch > 0)
+                if (rc == MATRIXSSL_SUCCESS
+                    && ssl->sec.certMatch > 0
+                    && ssl->chosenIdentity)
                 {
                     rc = writeCertificateVerify(ssl, out);
                 }
             }
-#   endif /* USE_CLIENT_AUTH */
-#  endif  /* !USE_ONLY_PSK_CIPHER_SUITE */
-
+#  endif  /* USE_IDENTITY_CERTIFICATES */
             if (rc == MATRIXSSL_SUCCESS)
             {
                 rc = writeChangeCipherSpec(ssl, out);
@@ -2418,42 +2476,58 @@ int32 sslEncodeResponse(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
         }
         break;
 # ifdef USE_DTLS
-/*
-    If we a client being invoked from here in the HS_SERVER_HELLO state,
-    we are being asked for a CLIENT_HELLO with a cookie.  It's already
-    been parsed out of the server HELLO_VERIFY_REQUEST message, so
-    we can simply call matrixSslEncodeClientHello again and essentially
-    start over again.
- */
+        /*
+          If we a client being invoked from here in the HS_SERVER_HELLO state,
+          we are being asked for a CLIENT_HELLO with a cookie.  It's already
+          been parsed out of the server HELLO_VERIFY_REQUEST message, so we
+          can simply call matrixSslEncodeClientHello again and essentially
+          start over again.
+        */
     case SSL_HS_SERVER_HELLO:
-        rc = matrixSslEncodeClientHello(ssl, out, ssl->cipherSpec,
-            ssl->cipherSpecLen, requiredLen, NULL, &options);
+        rc = matrixSslEncodeClientHello(
+                ssl, out, ssl->cipherSpec,
+                ssl->cipherSpecLen, requiredLen, NULL, &options);
         break;
 # endif /* USE_DTLS */
     }
+    goto flightEncode;
 
+flightEncode:
     if (rc < MATRIXSSL_SUCCESS && rc != SSL_FULL)
     {
-        /* Indication one of the message creations failed and setting the flag to
-            prevent other API calls from working.  We want to send a fatal
-            internal error alert in this case.  Make sure to write to front of
-            buffer since we     can't trust the data in there due to the creation
-            failure. */
+        /* Indication one of the message creations failed and setting the flag
+           to prevent other API calls from working.  We want to send a fatal
+           internal error alert in this case.  Make sure to write to front of
+           buffer since we can't trust the data in there due to the creation
+           failure. */
         psTraceIntInfo("ERROR: Handshake flight creation failed %d\n", rc);
         if (rc == PS_UNSUPPORTED_FAIL)
         {
-            /* Single out this particular error as a handshake failure
-                because there are combinations of cipher negotiations where
-                we don't know until handshake creation that we can't support.
-                For example, the server key material test will be bypassed
-                if an SNI callback is registered.  We won't know until SKE
-                creation that we can't support the requested cipher.  This is
-                a user error so don't report an INTERNAL_ERROR */
+            /* Single out this particular error as a handshake failure because
+               there are combinations of cipher negotiations where we don't
+               know until handshake creation that we can't support.  For
+               example, the server key material test will be bypassed if an
+               SNI callback is registered.  We won't know until SKE creation
+               that we can't support the requested cipher.  This is a user
+               error so don't report an INTERNAL_ERROR */
             ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
         }
         else
         {
+# ifdef USE_TLS_1_3
+            if (USING_TLS_1_3(ssl))
+            {
+                /* TLS 1.3 code path may want to send specific protocol alerts
+                   here. */
+                if (ssl->err == SSL_ALERT_NONE)
+                {
+                    ssl->err = SSL_ALERT_INTERNAL_ERROR;
+                }
+            }
+# else
             ssl->err = SSL_ALERT_INTERNAL_ERROR;
+# endif
+
         }
         out->end = out->start;
         alertReqLen = out->size;
@@ -2467,7 +2541,7 @@ resumeFlightEncryption:
 
 # ifdef USE_SERVER_SIDE_SSL
     /* Post-flight write PKA operation.  Support is for the signature
-        generation during ServerKeyExchange write.  */
+       generation during ServerKeyExchange write.  */
     if (ssl->flags & SSL_FLAGS_SERVER)
     {
         if (ssl->pkaAfter[0].type > 0)
@@ -2478,7 +2552,7 @@ resumeFlightEncryption:
             }
         }
     }
-# endif
+# endif /* USE_SERVER_SIDE_SSL */
 
 # ifdef USE_CLIENT_SIDE_SSL
     /* Post-flight write PKA operation. */
@@ -2503,16 +2577,20 @@ resumeFlightEncryption:
         }
         else
 #  endif /* USE_EXT_CERTIFICATE_VERIFY_SIGNING */
-         /* Handle delayed ClientKeyExchange write. */
-        if (ssl->pkaAfter[0].type > 0)
-        {
-            if ((rc = nowDoCkePka(ssl)) < 0)
+         /*
+           Handle delayed ClientKeyExchange PKA operation.
+           None needed when using a PSK suite.
+         */
+            if (ssl->pkaAfter[0].type > 0)
             {
-                return rc;
-            }
+                rc = nowDoCkePka(ssl);
+                if (rc < 0)
+                {
+                    return rc;
+                }
         }
     }
-# endif
+# endif /* USE_CLIENT_SIDE_SSL */
 
     /* Encrypt Flight */
     if (ssl->flightEncode)
@@ -2540,6 +2618,86 @@ void clearFlightList(ssl_t *ssl)
     ssl->flightEncode = NULL;
 }
 
+static inline
+int32_t processFinished(ssl_t *ssl, flightEncode_t *msg)
+{
+    int32_t rc;
+
+# ifdef USE_DTLS
+    if (ssl->flags & SSL_FLAGS_DTLS)
+    {
+        if (msg->hsMsg == SSL_HS_FINISHED)
+        {
+            /*      Epoch is incremented and the sequence numbers are reset for
+                    this message */
+            incrTwoByte(ssl, ssl->epoch, 1);
+            zeroSixByte(ssl->rsn);
+        }
+#ifdef psTracefDtls
+        psTracefDtls("Flight Encode: RSN %d, MSN %d, Epoch %d\n",
+                ssl->rsn[5], ssl->msn, ssl->epoch[1]);
+#else
+        psTraceIntDtls("RSN %d, ", ssl->rsn[5]);
+        psTraceIntDtls("MSN %d, ", ssl->msn);
+        psTraceIntDtls("Epoch %d\n", ssl->epoch[1]);
+#endif
+        *msg->seqDelay = ssl->epoch[0]; msg->seqDelay++;
+        *msg->seqDelay = ssl->epoch[1]; msg->seqDelay++;
+        *msg->seqDelay = ssl->rsn[0]; msg->seqDelay++;
+        *msg->seqDelay = ssl->rsn[1]; msg->seqDelay++;
+        *msg->seqDelay = ssl->rsn[2]; msg->seqDelay++;
+        *msg->seqDelay = ssl->rsn[3]; msg->seqDelay++;
+        *msg->seqDelay = ssl->rsn[4]; msg->seqDelay++;
+        *msg->seqDelay = ssl->rsn[5]; msg->seqDelay++;
+        msg->seqDelay++;
+        msg->seqDelay++; /* Last two incremements skipped recLen */
+    }
+# endif /* USE_DTLS */
+    if (msg->hsMsg == SSL_HS_FINISHED)
+    {
+        /* If it was just a ChangeCipherSpec message that was encoded we can
+           activate the write cipher */
+        if ((rc = sslActivateWriteCipher(ssl)) < 0)
+        {
+            psTraceInfo("Error Activating Write Cipher\n");
+            clearFlightList(ssl);
+            return rc;
+        }
+
+        /* The finished message had to hold off snapshoting the handshake
+           hash because those updates are done in the encryptRecord call
+           below for each message.  THAT was done because of a possible
+           delay in a PKA op */
+        rc = sslSnapshotHSHash(ssl, ssl->delayHsHash,
+                ssl->flags & SSL_FLAGS_SERVER);
+        if (rc <= 0)
+        {
+            psTraceIntInfo("Error snapshotting HS hash flight %d\n", rc);
+            clearFlightList(ssl);
+            return rc;
+        }
+
+# ifdef ENABLE_SECURE_REHANDSHAKES
+        /* The rehandshake verify data is the previous handshake msg hash */
+#  ifdef USE_DTLS
+        if (ssl->flags & SSL_FLAGS_DTLS)
+        {
+            if (ssl->myVerifyDataLen > 0)
+            {
+                Memcpy(ssl->omyVerifyData, ssl->myVerifyData,
+                        ssl->myVerifyDataLen);
+                ssl->omyVerifyDataLen = ssl->myVerifyDataLen;
+            }
+        }
+#  endif    /* USE_DTLS */
+        Memcpy(ssl->myVerifyData, ssl->delayHsHash, rc);
+        ssl->myVerifyDataLen = rc;
+# endif /* ENABLE_SECURE_REHANDSHAKES */
+    } /* End SSL_HS_FINISHED processing */
+
+    return PS_SUCCESS;
+}
+
 static int32 encryptFlight(ssl_t *ssl, unsigned char **end)
 {
     flightEncode_t *msg, *remove;
@@ -2564,78 +2722,26 @@ static int32 encryptFlight(ssl_t *ssl, unsigned char **end)
     msg = ssl->flightEncode;
     while (msg)
     {
-        c = msg->start + msg->len;
-# ifdef USE_DTLS
-        if (ssl->flags & SSL_FLAGS_DTLS)
+# ifdef USE_TLS_1_3
+        if (USING_TLS_1_3(ssl))
         {
-            if (msg->hsMsg == SSL_HS_FINISHED)
+            rc = tls13EncryptMessage(ssl, msg, end);
+            if (rc < 0)
             {
-                /*      Epoch is incremented and the sequence numbers are reset for
-                    this message */
-                incrTwoByte(ssl, ssl->epoch, 1);
-                zeroSixByte(ssl->rsn);
+                psTraceInfo("encryptFlightTls13 failed\n");
+                clearFlightList(ssl);
+                return rc;
             }
-#ifdef psTracefDtls
-            psTracefDtls("Flight Encode: RSN %d, MSN %d, Epoch %d\n",
-                         ssl->rsn[5], ssl->msn, ssl->epoch[1]);
-#else
-            psTraceIntDtls("RSN %d, ", ssl->rsn[5]);
-            psTraceIntDtls("MSN %d, ", ssl->msn);
-            psTraceIntDtls("Epoch %d\n", ssl->epoch[1]);
-#endif
-            *msg->seqDelay = ssl->epoch[0]; msg->seqDelay++;
-            *msg->seqDelay = ssl->epoch[1]; msg->seqDelay++;
-            *msg->seqDelay = ssl->rsn[0]; msg->seqDelay++;
-            *msg->seqDelay = ssl->rsn[1]; msg->seqDelay++;
-            *msg->seqDelay = ssl->rsn[2]; msg->seqDelay++;
-            *msg->seqDelay = ssl->rsn[3]; msg->seqDelay++;
-            *msg->seqDelay = ssl->rsn[4]; msg->seqDelay++;
-            *msg->seqDelay = ssl->rsn[5]; msg->seqDelay++;
-            msg->seqDelay++;
-            msg->seqDelay++; /* Last two incremements skipped recLen */
+            goto encrypted;
         }
 # endif
-        if (msg->hsMsg == SSL_HS_FINISHED)
+        c = msg->start + msg->len;
+
+        rc = processFinished(ssl, msg);
+        if (rc < 0)
         {
-            /* If it was just a ChangeCipherSpec message that was encoded we can
-                activate the write cipher */
-            if ((rc = sslActivateWriteCipher(ssl)) < 0)
-            {
-                psTraceInfo("Error Activating Write Cipher\n");
-                clearFlightList(ssl);
-                return rc;
-            }
-
-            /* The finished message had to hold off snapshoting the handshake
-                hash because those updates are done in the encryptRecord call
-                below for each message.  THAT was done because of a possible
-                delay in a PKA op */
-            rc = sslSnapshotHSHash(ssl, ssl->delayHsHash,
-                ssl->flags & SSL_FLAGS_SERVER);
-            if (rc <= 0)
-            {
-                psTraceIntInfo("Error snapshotting HS hash flight %d\n", rc);
-                clearFlightList(ssl);
-                return rc;
-            }
-
-# ifdef ENABLE_SECURE_REHANDSHAKES
-            /* The rehandshake verify data is the previous handshake msg hash */
-#  ifdef USE_DTLS
-            if (ssl->flags & SSL_FLAGS_DTLS)
-            {
-                if (ssl->myVerifyDataLen > 0)
-                {
-                    memcpy(ssl->omyVerifyData, ssl->myVerifyData,
-                        ssl->myVerifyDataLen);
-                    ssl->omyVerifyDataLen = ssl->myVerifyDataLen;
-                }
-            }
-#  endif    /* USE_DTLS */
-            memcpy(ssl->myVerifyData, ssl->delayHsHash, rc);
-            ssl->myVerifyDataLen = rc;
-# endif     /* ENABLE_SECURE_REHANDSHAKES */
-        } /* End SSL_HS_FINISHED processing */
+            return rc;
+        }
 
         if (ssl->flags & SSL_FLAGS_NONCE_W
 # ifdef USE_EXT_CERTIFICATE_VERIFY_SIGNING
@@ -2747,6 +2853,8 @@ static int32 encryptFlight(ssl_t *ssl, unsigned char **end)
 # endif /* DTLS */
 
         *end = c;
+        goto encrypted;
+    encrypted:
         if (rc == PS_PENDING)
         {
             /* Eat this message from flight encode, moving next to the front */
@@ -2771,6 +2879,7 @@ static int32 encryptFlight(ssl_t *ssl, unsigned char **end)
         psFree(remove, ssl->flightPool);
     }
     clearFlightList(ssl);
+
     return PS_SUCCESS;
 }
 
@@ -2933,7 +3042,7 @@ int32 sslEncodeClosureAlert(ssl_t *ssl, sslBuf_t *out, uint32 *reqLen)
     Incoming messageSize is the plaintext message length plus the header
     lengths.
  */
-static int32_t writeRecordHeader(ssl_t *ssl, uint8_t type, uint8_t hsType,
+int32_t writeRecordHeader(ssl_t *ssl, uint8_t type, uint8_t hsType,
     psSize_t *messageSize, uint8_t *padLen,
     unsigned char **encryptStart, const unsigned char *end,
     unsigned char **c)
@@ -2987,7 +3096,14 @@ static int32_t writeRecordHeader(ssl_t *ssl, uint8_t type, uint8_t hsType,
     }
     else if (ssl->flags & SSL_FLAGS_AEAD_W)
     {
-        *messageSize += (AEAD_TAG_LEN(ssl) + AEAD_NONCE_LEN(ssl));
+        *messageSize += AEAD_TAG_LEN(ssl);
+
+        /* In TLS 1.2, part of the nonce is explicit and must be
+           sent over-the-wire. In TLS 1.3, it is fully implicit. */
+        if (!(USING_TLS_1_3(ssl)))
+        {
+            *messageSize += AEAD_NONCE_LEN(ssl);
+        }
     }
 /*
     If this session is already in a secure-write state, determine padding.
@@ -3189,7 +3305,7 @@ static int32 encryptCompressedRecord(ssl_t *ssl, int32 type, int32 messageSize,
         was just put into message size calcuations and padding length will
         need to be done again after deflate */
     ssl->zlibBuffer = psMalloc(ssl->bufferPool, ptLen + MAX_ZLIB_COMPRESSED_OH);
-    memset(ssl->zlibBuffer, 0, ptLen + MAX_ZLIB_COMPRESSED_OH);
+    Memset(ssl->zlibBuffer, 0, ptLen + MAX_ZLIB_COMPRESSED_OH);
     if (ssl->zlibBuffer == NULL)
     {
         psTraceInfo("Error allocating compression buffer\n");
@@ -3319,7 +3435,7 @@ static int32 encryptCompressedRecord(ssl_t *ssl, int32 type, int32 messageSize,
     }
     if (modLen > 0)
     {
-        memcpy(encryptStart + divLen, dataToMacAndEncrypt + divLen,
+        Memcpy(encryptStart + divLen, dataToMacAndEncrypt + divLen,
             modLen);
     }
     rc = ssl->encrypt(ssl, encryptStart + divLen,
@@ -3352,14 +3468,13 @@ static int32 encryptCompressedRecord(ssl_t *ssl, int32 type, int32 messageSize,
 }
 # endif /* USE_ZLIB_COMPRESSION */
 
-
 /******************************************************************************/
 /*
     Flights are encypted after they are fully written so this function
     just moves the buffer forward to account for the encryption overhead that
     will be filled in later
  */
-static int32 postponeEncryptRecord(ssl_t *ssl, int32 type, int32 hsMsg,
+int32 postponeEncryptRecord(ssl_t *ssl, int32 type, int32 hsMsg,
     int32 messageSize, int32 padLen, unsigned char *pt,
     sslBuf_t *out, unsigned char **c)
 {
@@ -3371,7 +3486,7 @@ static int32 postponeEncryptRecord(ssl_t *ssl, int32 type, int32 hsMsg,
     {
         return PS_MEM_FAIL;
     }
-    memset(flight, 0x0, sizeof(flightEncode_t));
+    Memset(flight, 0x0, sizeof(flightEncode_t));
     if (ssl->flightEncode == NULL)
     {
         ssl->flightEncode = flight;
@@ -3387,16 +3502,20 @@ static int32 postponeEncryptRecord(ssl_t *ssl, int32 type, int32 hsMsg,
     }
     encryptStart = out->end + ssl->recordHeadLen;
 
-    if (hsMsg == SSL_HS_FINISHED)
+    if (!(USING_TLS_1_3(ssl)))
     {
-        if (ssl->cipher->flags & (CRYPTO_FLAGS_GCM | CRYPTO_FLAGS_CCM))
+        if (hsMsg == SSL_HS_FINISHED)
         {
-            encryptStart += TLS_EXPLICIT_NONCE_LEN;
+            if (ssl->cipher->flags & (CRYPTO_FLAGS_GCM | CRYPTO_FLAGS_CCM))
+            {
+                encryptStart += TLS_EXPLICIT_NONCE_LEN;
+            }
         }
-    }
-    else if (ssl->flags & SSL_FLAGS_AEAD_W)
-    {
-        encryptStart += AEAD_NONCE_LEN(ssl); /* Move past the plaintext nonce */
+        else if (ssl->flags & SSL_FLAGS_AEAD_W)
+        {
+             /* Move past the plaintext nonce */
+            encryptStart += AEAD_NONCE_LEN(ssl);
+        }
     }
 
     ptLen = (int32) (*c - encryptStart);
@@ -3472,7 +3591,7 @@ static int32 postponeEncryptRecord(ssl_t *ssl, int32 type, int32 hsMsg,
     messageSize - 5 = ssl.recLen
  * c - encryptStart = plaintext length
  */
-static int32 encryptRecord(ssl_t *ssl, int32 type, int32 hsMsgType,
+int32 encryptRecord(ssl_t *ssl, int32 type, int32 hsMsgType,
     int32 messageSize, int32 padLen, unsigned char *pt,
     sslBuf_t *out, unsigned char **c)
 {
@@ -3498,10 +3617,14 @@ static int32 encryptRecord(ssl_t *ssl, int32 type, int32 hsMsgType,
 
     encryptStart = out->end + ssl->recordHeadLen;
 
-    if (ssl->flags & SSL_FLAGS_AEAD_W)
+    if (!USING_TLS_1_3(ssl))
     {
-        encryptStart += AEAD_NONCE_LEN(ssl); /* Move past the plaintext nonce */
-        ssl->outRecType = (unsigned char) type;
+        if (ssl->flags & SSL_FLAGS_AEAD_W)
+        {
+             /* Move past the plaintext nonce */
+            encryptStart += AEAD_NONCE_LEN(ssl);
+            ssl->outRecType = (unsigned char) type; /* Needed for AAD. */
+        }
     }
 
     ptLen = (int32) (*c - encryptStart);
@@ -3656,7 +3779,7 @@ static int32 encryptRecord(ssl_t *ssl, int32 type, int32 hsMsgType,
             }
             if (modLen > 0)
             {
-                memcpy(encryptStart + divLen, pt + divLen, modLen);
+                Memcpy(encryptStart + divLen, pt + divLen, modLen);
             }
             rc = ssl->encrypt(ssl, encryptStart + divLen,
                 encryptStart + divLen, modLen + ssl->enMacSize + padLen);
@@ -3692,6 +3815,68 @@ static int32 encryptRecord(ssl_t *ssl, int32 type, int32 hsMsgType,
 }
 
 # ifdef USE_SERVER_SIDE_SSL
+int32 psGenerateServerRandom(ssl_t *ssl)
+{
+    /**
+       @security RFC says to set the first 4 bytes to time, but best common practice is
+       to use full 32 bytes of random. This is forward looking to TLS 1.3, and also works
+       better for embedded platforms and FIPS secret key material.
+       @see https://www.ietf.org/mail-archive/web/tls/current/msg09861.html
+    */
+#  ifdef SEND_HELLO_RANDOM_TIME
+    /* First 4 bytes of the serverRandom are the unix time to prevent replay
+       attacks, the rest are random */
+    t = psGetTime(NULL, ssl->userPtr);
+    ssl->sec.serverRandom[0] = (unsigned char) ((t & 0xFF000000) >> 24);
+    ssl->sec.serverRandom[1] = (unsigned char) ((t & 0xFF0000) >> 16);
+    ssl->sec.serverRandom[2] = (unsigned char) ((t & 0xFF00) >> 8);
+    ssl->sec.serverRandom[3] = (unsigned char) (t & 0xFF);
+    if (psGetPrngLocked(ssl->sec.serverRandom + 4,
+                    SSL_HS_RANDOM_SIZE - 4, ssl->userPtr) < 0)
+    {
+        return MATRIXSSL_ERROR;
+    }
+#  else
+    if (psGetPrngLocked(ssl->sec.serverRandom,
+                    SSL_HS_RANDOM_SIZE, ssl->userPtr) < 0)
+    {
+        return MATRIXSSL_ERROR;
+    }
+#  endif
+
+#  ifdef USE_TLS_1_3
+    /*
+      TLS 1.3 downgrade protection from 4.1.3:
+      If we support TLS 1.3, but negotiated <1.3, we must set the last
+      8 bytes of our server_random specially to indicate a downgrade.
+      The client will check the 8-byte suffix; if present, and if the
+      client also supports TLS 1.3, it will abort the handshake.
+      The goal is to prevent active adversaries from downgrading the
+      connection.
+    */
+    if (tlsVersionSupported(ssl, TLS_1_3_MIN_VER)) /* RFC, not draft. */
+    {
+        if (!NEGOTIATED_TLS_1_3(ssl))
+        {
+            const char *suffix;
+
+            if (ssl->minVer == TLS_1_2_MIN_VER)
+            {
+                suffix = TLS13_DOWNGRADE_PROT_TLS12;
+            }
+            else
+            {
+                psAssert(ssl->minVer <= TLS_1_1_MIN_VER);
+                suffix = TLS13_DOWNGRADE_PROT_TLS11_OR_BELOW;
+            }
+            Memcpy(ssl->sec.serverRandom + 24, suffix, 8);
+        }
+    }
+#  endif /* USE_TLS_1_3 */
+
+    return PS_SUCCESS;
+}
+
 /******************************************************************************/
 /*
     Write out the ServerHello message
@@ -3703,7 +3888,8 @@ static int32 writeServerHello(ssl_t *ssl, sslBuf_t *out)
     uint8_t padLen;
     int32 t, rc, extLen = 0;
 
-    psTraceHs("<<< Server creating SERVER_HELLO message\n");
+    psTracePrintHsMessageCreate(ssl, SSL_HS_SERVER_HELLO);
+
     c = out->end;
     end = out->buf + out->size;
 /*
@@ -3751,12 +3937,15 @@ static int32 writeServerHello(ssl_t *ssl, sslBuf_t *out)
 #  ifdef USE_ECC_CIPHER_SUITE
     if (ssl->flags & SSL_FLAGS_ECC_CIPHER)
     {
-        if (extLen == 0)
+        if (ssl->extFlags.got_elliptic_points == 1)
         {
-            extLen = 2; /* if first extension, add two byte total len */
+            if (extLen == 0)
+            {
+                extLen = 2; /* if first extension, add two byte total len */
+            }
+            /* EXT_ELLIPTIC_POINTS - hardcoded to 'uncompressed' support */
+            extLen += 6; /* 00 0B 00 02 01 00 */
         }
-        /* EXT_ELLIPTIC_POINTS - hardcoded to 'uncompressed' support */
-        extLen += 6; /* 00 0B 00 02 01 00 */
     }
 #  endif /* USE_ECC_CIPHER_SUITE */
 
@@ -3849,30 +4038,11 @@ static int32 writeServerHello(ssl_t *ssl, sslBuf_t *out)
 
     if (t)
     {
-        /**     @security RFC says to set the first 4 bytes to time, but best common practice is
-            to use full 32 bytes of random. This is forward looking to TLS 1.3, and also works
-            better for embedded platforms and FIPS secret key material.
-            @see https://www.ietf.org/mail-archive/web/tls/current/msg09861.html */
-#  ifdef SEND_HELLO_RANDOM_TIME
-        /* First 4 bytes of the serverRandom are the unix time to prevent replay
-            attacks, the rest are random */
-        t = psGetTime(NULL, ssl->userPtr);
-        ssl->sec.serverRandom[0] = (unsigned char) ((t & 0xFF000000) >> 24);
-        ssl->sec.serverRandom[1] = (unsigned char) ((t & 0xFF0000) >> 16);
-        ssl->sec.serverRandom[2] = (unsigned char) ((t & 0xFF00) >> 8);
-        ssl->sec.serverRandom[3] = (unsigned char) (t & 0xFF);
-        if (psGetPrngLocked(ssl->sec.serverRandom + 4,
-                SSL_HS_RANDOM_SIZE - 4, ssl->userPtr) < 0)
+        rc = psGenerateServerRandom(ssl);
+        if (rc < 0)
         {
-            return MATRIXSSL_ERROR;
+            return rc;
         }
-#  else
-        if (psGetPrngLocked(ssl->sec.serverRandom,
-                SSL_HS_RANDOM_SIZE, ssl->userPtr) < 0)
-        {
-            return MATRIXSSL_ERROR;
-        }
-#  endif
     }
 
 /*
@@ -3900,15 +4070,21 @@ static int32 writeServerHello(ssl_t *ssl, sslBuf_t *out)
     *c = ssl->majVer; c++;
     *c = ssl->minVer; c++;
 
-    psTracePrintProtocolVersion("Encoded ServerHello.server_version",
-            ssl->majVer, ssl->minVer, 1);
+    psTracePrintProtocolVersion(INDENT_HS_MSG,
+            "server_version",
+            *(c - 2), *(c - 1), 1);
 
 /*
     The next 32 bytes are the server's random value, to be combined with
     the client random and premaster for key generation later
  */
-    memcpy(c, ssl->sec.serverRandom, SSL_HS_RANDOM_SIZE);
+    Memcpy(c, ssl->sec.serverRandom, SSL_HS_RANDOM_SIZE);
     c += SSL_HS_RANDOM_SIZE;
+    psTracePrintHex(INDENT_HS_MSG,
+            "random",
+            ssl->sec.serverRandom,
+            SSL_HS_RANDOM_SIZE,
+            PS_TRUE);
 /*
     The next data is a single byte containing the session ID length,
     and up to 32 bytes containing the session id.
@@ -3918,9 +4094,15 @@ static int32 writeServerHello(ssl_t *ssl, sslBuf_t *out)
     *c = (unsigned char) ssl->sessionIdLen; c++;
     if (ssl->sessionIdLen > 0)
     {
-        memcpy(c, ssl->sessionId, ssl->sessionIdLen);
+        Memcpy(c, ssl->sessionId, ssl->sessionIdLen);
         c += ssl->sessionIdLen;
     }
+    psTracePrintHex(INDENT_HS_MSG,
+            "session_id",
+            ssl->sessionId,
+            ssl->sessionIdLen,
+            PS_TRUE);
+
 /*
     Two byte cipher suite we've chosen based on the list sent by the client
     and what we support.
@@ -3973,6 +4155,7 @@ static int32 writeServerHello(ssl_t *ssl, sslBuf_t *out)
         }
         if (ssl->extFlags.truncated_hmac)
         {
+            psTracePrintExtensionCreate(ssl, EXT_TRUNCATED_HMAC);
             *c = (EXT_TRUNCATED_HMAC & 0xFF00) >> 8; c++;
             *c = EXT_TRUNCATED_HMAC & 0xFF; c++;
             *c = 0; c++;
@@ -3980,6 +4163,7 @@ static int32 writeServerHello(ssl_t *ssl, sslBuf_t *out)
         }
         if (ssl->extFlags.extended_master_secret)
         {
+            psTracePrintExtensionCreate(ssl, EXT_EXTENDED_MASTER_SECRET);
             *c = (EXT_EXTENDED_MASTER_SECRET & 0xFF00) >> 8; c++;
             *c = EXT_EXTENDED_MASTER_SECRET & 0xFF; c++;
             *c = 0; c++;
@@ -3992,6 +4176,7 @@ static int32 writeServerHello(ssl_t *ssl, sslBuf_t *out)
         {
             /* This empty extension is ALWAYS an indication to the client that
                 a NewSessionTicket handshake message will be sent */
+            psTracePrintExtensionCreate(ssl, EXT_SESSION_TICKET);
             *c = (EXT_SESSION_TICKET & 0xFF00) >> 8; c++;
             *c = EXT_SESSION_TICKET & 0xFF; c++;
             *c = 0; c++;
@@ -4002,6 +4187,7 @@ static int32 writeServerHello(ssl_t *ssl, sslBuf_t *out)
         /* For the second condition, see comment above. */
         if (ssl->extFlags.sni && ssl->extFlags.sni_in_last_client_hello)
         {
+            psTracePrintExtensionCreate(ssl, EXT_SNI);
             *c = (EXT_SNI & 0xFF00) >> 8; c++;
             *c = EXT_SNI & 0xFF; c++;
             *c = 0; c++;
@@ -4010,6 +4196,7 @@ static int32 writeServerHello(ssl_t *ssl, sslBuf_t *out)
 #  ifdef USE_OCSP_RESPONSE
         if (ssl->extFlags.status_request)
         {
+            psTracePrintExtensionCreate(ssl, EXT_STATUS_REQUEST);
             *c = (EXT_STATUS_REQUEST & 0xFF00) >> 8; c++;
             *c = EXT_STATUS_REQUEST & 0xFF; c++;
             *c = 0; c++;
@@ -4020,6 +4207,7 @@ static int32 writeServerHello(ssl_t *ssl, sslBuf_t *out)
 #  ifdef USE_ALPN
         if (ssl->alpnLen)
         {
+            psTracePrintExtensionCreate(ssl, EXT_ALPN);
             *c = (EXT_ALPN & 0xFF00) >> 8; c++;
             *c = EXT_ALPN & 0xFF; c++;
             /* Total ext len can be hardcoded +3 because only one proto reply */
@@ -4029,7 +4217,7 @@ static int32 writeServerHello(ssl_t *ssl, sslBuf_t *out)
             *c = ((ssl->alpnLen + 1) & 0xFF00) >> 8; c++;
             *c = (ssl->alpnLen + 1) & 0xFF; c++;
             *c = ssl->alpnLen; c++;
-            memcpy(c, ssl->alpn, ssl->alpnLen);
+            Memcpy(c, ssl->alpn, ssl->alpnLen);
             c += ssl->alpnLen;
             psFree(ssl->alpn, ssl->sPool); ssl->alpn = NULL; /* app must store if needed */
             ssl->alpnLen = 0;
@@ -4040,6 +4228,7 @@ static int32 writeServerHello(ssl_t *ssl, sslBuf_t *out)
         if (ssl->secureRenegotiationFlag == PS_TRUE)
         {
             /* RenegotiationInfo*/
+            psTracePrintExtensionCreate(ssl, EXT_RENEGOTIATION_INFO);
             *c = (EXT_RENEGOTIATION_INFO & 0xFF00) >> 8; c++;
             *c = EXT_RENEGOTIATION_INFO & 0xFF; c++;
             if (ssl->myVerifyDataLen == 0)
@@ -4055,9 +4244,9 @@ static int32 writeServerHello(ssl_t *ssl, sslBuf_t *out)
                 *c = (ssl->myVerifyDataLen + ssl->peerVerifyDataLen + 1) & 0xFF;
                 c++;
                 *c = (ssl->myVerifyDataLen + ssl->peerVerifyDataLen) & 0xFF; c++;
-                memcpy(c, ssl->peerVerifyData, ssl->peerVerifyDataLen);
+                Memcpy(c, ssl->peerVerifyData, ssl->peerVerifyDataLen);
                 c += ssl->peerVerifyDataLen;
-                memcpy(c, ssl->myVerifyData, ssl->myVerifyDataLen);
+                Memcpy(c, ssl->myVerifyData, ssl->myVerifyDataLen);
                 c += ssl->myVerifyDataLen;
                 ssl->secureRenegotiationInProgress = PS_TRUE;
             }
@@ -4067,12 +4256,19 @@ static int32 writeServerHello(ssl_t *ssl, sslBuf_t *out)
 #  ifdef USE_ECC_CIPHER_SUITE
         if (ssl->flags & SSL_FLAGS_ECC_CIPHER)
         {
-            *c = (EXT_ELLIPTIC_POINTS & 0xFF00) >> 8; c++;
-            *c = EXT_ELLIPTIC_POINTS & 0xFF; c++;
-            *c = 0x00; c++;
-            *c = 0x02; c++;
-            *c = 0x01; c++;
-            *c = 0x00; c++;
+            if (ssl->extFlags.got_elliptic_points == 1)
+            {
+               /*
+                  The ec_point_formats extension. We can hardcode this,
+                  since we only support the uncompressed format.*/
+                psTracePrintExtensionCreate(ssl, EXT_ELLIPTIC_POINTS);
+                *c = (EXT_ELLIPTIC_POINTS & 0xFF00) >> 8; c++;
+                *c = EXT_ELLIPTIC_POINTS & 0xFF; c++;
+                *c = 0x00; c++;
+                *c = 0x02; c++;
+                *c = 0x01; c++;
+                *c = 0x00; c++;
+            }
         }
 #  endif /* USE_ECC_CIPHER_SUITE */
     }
@@ -4113,7 +4309,8 @@ static int32 writeServerHelloDone(ssl_t *ssl, sslBuf_t *out)
     psSize_t messageSize;
     int32_t rc;
 
-    psTraceHs("<<< Server creating SERVER_HELLO_DONE message\n");
+    psTracePrintHsMessageCreate(ssl, SSL_HS_SERVER_HELLO_DONE);
+
     c = out->end;
     end = out->buf + out->size;
     messageSize =
@@ -4152,7 +4349,8 @@ static int32 writePskServerKeyExchange(ssl_t *ssl, sslBuf_t *out)
     uint8_t padLen, hintLen;
     int32_t rc;
 
-    psTraceHs("<<< Server creating SERVER_KEY_EXCHANGE message\n");
+    psTracePrintHsMessageCreate(ssl, SSL_HS_SERVER_KEY_EXCHANGE);
+
 #   ifdef USE_DHE_CIPHER_SUITE
 /*
     This test prevents a second ServerKeyExchange from being written if a
@@ -4189,7 +4387,7 @@ static int32 writePskServerKeyExchange(ssl_t *ssl, sslBuf_t *out)
 
     *c = 0; c++;
     *c = (hintLen & 0xFF); c++;
-    memcpy(c, hint, hintLen);
+    Memcpy(c, hint, hintLen);
     c += hintLen;
 
     if ((rc = postponeEncryptRecord(ssl, SSL_RECORD_TYPE_HANDSHAKE,
@@ -4211,7 +4409,8 @@ static int32 writeNewSessionTicket(ssl_t *ssl, sslBuf_t *out)
     psSize_t messageSize;
     int32_t rc;
 
-    psTraceHs("<<< Server creating NEW_SESSION_TICKET message\n");
+    psTracePrintHsMessageCreate(ssl, SSL_HS_NEW_SESSION_TICKET);
+
     c = out->end;
     end = out->buf + out->size;
 
@@ -4267,6 +4466,7 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
     psDigestContext_t digestCtx;
     pkaAfter_t *pkaAfter;
     void *pkiData = ssl->userPtr;
+    sslIdentity_t *chosen = ssl->chosenIdentity;
 #   endif
 
 #   if defined(USE_PSK_CIPHER_SUITE) && defined(USE_ANON_DH_CIPHER_SUITE)
@@ -4274,10 +4474,11 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
     uint8_t hintLen;
 #   endif /* USE_PSK_CIPHER_SUITE && USE_ANON_DH_CIPHER_SUITE */
 #   ifdef USE_ECC_CIPHER_SUITE
-    psSize_t eccPubKeyLen;
+    psSize_t eccPubKeyLen = 0;
 #   endif /* USE_ECC_CIPHER_SUITE */
 
-    psTraceHs("<<< Server creating SERVER_KEY_EXCHANGE message\n");
+    psTracePrintHsMessageCreate(ssl, SSL_HS_SERVER_KEY_EXCHANGE);
+
     c = out->end;
     end = out->buf + out->size;
 
@@ -4326,6 +4527,7 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
     else
     {
 #   endif  /* USE_ANON_DH_CIPHER_SUITE */
+
 #   ifdef USE_ECC_CIPHER_SUITE
     if (ssl->flags & SSL_FLAGS_ECC_CIPHER)
     {
@@ -4335,7 +4537,7 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
         if (ssl->flags & SSL_FLAGS_DHE_WITH_RSA)
         {
             messageSize = ssl->recordHeadLen + ssl->hshakeHeadLen +
-                          eccPubKeyLen + 4 + ssl->keys->privKey.keysize + 2;
+                eccPubKeyLen + 4 + chosen->privKey.keysize + 2;
         }
         else if (ssl->flags & SSL_FLAGS_DHE_WITH_DSA)
         {
@@ -4350,11 +4552,11 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
                 bytes are needed because there can only be a single
                 low bit for that sig size.  So subtract that byte
                 back out to stay around the 50% no-move goal */
-            if (ssl->keys->privKey.keysize != 132)
+            if (chosen->privKey.keysize != 132)
             {
                 messageSize += 1;
             }
-            messageSize += ssl->keys->privKey.keysize;
+            messageSize += chosen->privKey.keysize;
             /* Signature portion */
             messageSize += 6;     /* 6 = 2 ASN_SEQ, 4 ASN_BIG */
             /* BIG EC KEY.  The sig is 2 bytes len, 1 byte SEQ,
@@ -4362,7 +4564,7 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
                 1 byte INT, 1 byte rLen, r, 1 byte INT, 1 byte sLen, s.
                 So the +4 here are the 2 INT and 2 rLen/sLen bytes on
                 top of the keysize */
-            if (ssl->keys->privKey.keysize + 4 >= 128)
+            if (chosen->privKey.keysize + 4 >= 128)
             {
                 messageSize++;     /* Extra byte for 'long' asn.1 encode */
             }
@@ -4379,10 +4581,14 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
     {
 #   endif  /* USE_ECC_CIPHER_SUITE */
 #   ifdef REQUIRE_DH_PARAMS
-    messageSize = ssl->recordHeadLen + ssl->hshakeHeadLen +
-                  8 + pLen + gLen + ssl->sec.dhKeyPriv->size +
-                  ssl->keys->privKey.keysize;
+    messageSize =
+      ssl->recordHeadLen + ssl->hshakeHeadLen +
+      8 + pLen + gLen + ssl->sec.dhKeyPriv->size;
+#    ifdef USE_IDENTITY_CERTIFICATES
+    messageSize += chosen->privKey.keysize;
+#    endif
 #   endif  /* REQUIRE_DH_PARAMS */
+
 #   ifdef USE_ECC_CIPHER_SUITE
 }
 #   endif  /* USE_ECC_CIPHER_SUITE */
@@ -4419,7 +4625,7 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
         *c = (hintLen & 0xFF); c++;
         if (hintLen != 0 && hint != NULL)
         {
-            memcpy(c, hint, hintLen);
+            Memcpy(c, hint, hintLen);
             c += hintLen;
         }
     }
@@ -4456,11 +4662,11 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
  */
     *c = (pLen & 0xFF00) >> 8; c++;
     *c = pLen & 0xFF; c++;
-    memcpy(c, p, pLen);
+    Memcpy(c, p, pLen);
     c += pLen;
     *c = (gLen & 0xFF00) >> 8; c++;
     *c = gLen & 0xFF; c++;
-    memcpy(c, g, gLen);
+    Memcpy(c, g, gLen);
     c += gLen;
     *c = (ssl->sec.dhKeyPriv->size & 0xFF00) >> 8; c++;
     *c = ssl->sec.dhKeyPriv->size & 0xFF; c++;
@@ -4492,7 +4698,9 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
     {
         int32 skeSigAlg = 0; /* If this stays 0, we will use MD5-SHA-1. */
 
+# ifdef USE_SSL_INFORMATIONAL_TRACE_VERBOSE
         psTracePrintSigAlgs(ssl->hashSigAlg, "Peer ClientHello");
+# endif
 #    ifndef USE_ONLY_PSK_CIPHER_SUITE
         /* Saved aside for pkaAfter_t */
         if ((hsMsgHash = psMalloc(ssl->hsPool, SHA512_HASH_SIZE)) == NULL)
@@ -4503,13 +4711,10 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
 #    ifdef USE_TLS_1_2
         if (ssl->flags & SSL_FLAGS_TLS_1_2)
         {
-            skeSigAlg = chooseSigAlg(ssl->keys->cert,
-                    &ssl->keys->privKey,
-                    ssl->hashSigAlg);
+            skeSigAlg = chooseSigAlg(chosen->cert, &chosen->privKey, ssl->hashSigAlg);
             if (skeSigAlg == PS_UNSUPPORTED_FAIL)
             {
-                psTraceIntInfo("Unavailable sigAlgorithm for SKE write: %d\n",
-                    ssl->keys->cert->sigAlgorithm);
+                psTraceInfo("Unavailable sigAlgorithm for SKE write\n");
                 psFree(hsMsgHash, ssl->hsPool);
                 return PS_UNSUPPORTED_FAIL;
             }
@@ -4603,8 +4808,8 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
             return PS_UNSUPPORTED_FAIL;
         }
 
-        *c = (ssl->keys->privKey.keysize & 0xFF00) >> 8; c++;
-        *c = ssl->keys->privKey.keysize & 0xFF; c++;
+        *c = (chosen->privKey.keysize & 0xFF00) >> 8; c++;
+        *c = chosen->privKey.keysize & 0xFF; c++;
 
 #    ifdef USE_DTLS
         if ((ssl->flags & SSL_FLAGS_DTLS) && (ssl->retransmit == 1))
@@ -4615,7 +4820,7 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
                 so the few hashSigAlg bytes and keysize done above during the
                 hash are important to rewrite */
             psFree(hsMsgHash, ssl->hsPool);
-            memcpy(c, ssl->ckeMsg, ssl->ckeSize);
+            Memcpy(c, ssl->ckeMsg, ssl->ckeSize);
             c += ssl->ckeSize;
         }
         else     /* closed below */
@@ -4639,7 +4844,7 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
         pkaAfter->outbuf = c;
         pkaAfter->data = pkiData;
         pkaAfter->inlen = hashSize;
-        c += ssl->keys->privKey.keysize;
+        c += chosen->privKey.keysize;
 #    ifdef USE_DTLS
     }
 #    endif /* USE_DTLS */
@@ -4649,16 +4854,30 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
 #   ifdef USE_ECC_CIPHER_SUITE
     if (ssl->flags & SSL_FLAGS_DHE_WITH_DSA)
     {
+        int32 skeSigAlg = OID_SHA1_ECDSA_SIG;
 #    ifndef USE_ONLY_PSK_CIPHER_SUITE
         /* Saved aside for pkaAfter_t */
-        if ((hsMsgHash = psMalloc(ssl->hsPool, SHA384_HASH_SIZE)) == NULL)
+        if ((hsMsgHash = psMalloc(ssl->hsPool, SHA512_HASH_SIZE)) == NULL)
         {
             return PS_MEM_FAIL;
         }
 #    endif
 #    ifdef USE_TLS_1_2
-        if ((ssl->flags & SSL_FLAGS_TLS_1_2) &&
-            (ssl->keys->cert->sigAlgorithm == OID_SHA256_ECDSA_SIG))
+        if (ssl->flags & SSL_FLAGS_TLS_1_2)
+        {
+            skeSigAlg = chooseSigAlg(chosen->cert, &chosen->privKey, ssl->hashSigAlg);
+            if (skeSigAlg == PS_UNSUPPORTED_FAIL)
+            {
+                psTraceInfo("Unavailable sigAlgorithm for SKE write\n");
+                psFree(hsMsgHash, ssl->hsPool);
+                return PS_UNSUPPORTED_FAIL;
+            }
+        }
+        else
+        {
+            skeSigAlg = OID_SHA1_ECDSA_SIG;
+        }
+        if (skeSigAlg == OID_SHA256_ECDSA_SIG)
         {
             hashSize = SHA256_HASH_SIZE;
             psSha256PreInit(&digestCtx.sha256);
@@ -4674,7 +4893,7 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
 #     ifdef USE_SHA384
         }
         else if ((ssl->flags & SSL_FLAGS_TLS_1_2) &&
-                 (ssl->keys->cert->sigAlgorithm == OID_SHA384_ECDSA_SIG))
+                 (skeSigAlg == OID_SHA384_ECDSA_SIG))
         {
             hashSize = SHA384_HASH_SIZE;
             psSha384PreInit(&digestCtx.sha384);
@@ -4688,6 +4907,23 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
             *c++ = 0x5; /* SHA384 */
             *c++ = 0x3; /* ECDSA */
 #     endif
+#     ifdef USE_SHA512
+        }
+        else if ((ssl->flags & SSL_FLAGS_TLS_1_2) &&
+                 (skeSigAlg == OID_SHA512_ECDSA_SIG))
+        {
+            hashSize = SHA512_HASH_SIZE;
+            psSha512PreInit(&digestCtx.sha512);
+            psSha512Init(&digestCtx.sha512);
+            psSha512Update(&digestCtx.sha512, ssl->sec.clientRandom,
+                SSL_HS_RANDOM_SIZE);
+            psSha512Update(&digestCtx.sha512, ssl->sec.serverRandom,
+                SSL_HS_RANDOM_SIZE);
+            psSha512Update(&digestCtx.sha512, sigStart, (int32) (c - sigStart));
+            psSha512Final(&digestCtx.sha512, hsMsgHash);
+            *c++ = 0x6; /* SHA512 */
+            *c++ = 0x3; /* ECDSA */
+#     endif
 #     ifdef USE_SHA1
         }
         else if (ssl->minVer < TLS_1_2_MIN_VER ||
@@ -4696,7 +4932,7 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
                  ssl->minVer == DTLS_MIN_VER ||
 #      endif
                  ((ssl->flags & SSL_FLAGS_TLS_1_2) &&
-                  (ssl->keys->cert->sigAlgorithm == OID_SHA1_ECDSA_SIG)))
+                  (skeSigAlg == OID_SHA1_ECDSA_SIG)))
         {
             hashSize = SHA1_HASH_SIZE;
             psSha1PreInit(&digestCtx.sha1);
@@ -4740,7 +4976,7 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
                 so the few hashSigAlg bytes and keysize done above during the
                 hash are important to rewrite */
             psFree(hsMsgHash, ssl->hsPool);
-            memcpy(c, ssl->ckeMsg, ssl->ckeSize);
+            Memcpy(c, ssl->ckeMsg, ssl->ckeSize);
             c += ssl->ckeSize;
         }
         else     /* closed below */
@@ -4757,10 +4993,10 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
         pkaAfter->data = pkiData;
         pkaAfter->inlen = hashSize;
         pkaAfter->type = PKA_AFTER_ECDSA_SIG_GEN;
-        rc = ssl->keys->privKey.keysize + 8;
+        rc = chosen->privKey.keysize + 8;
         /* NEGATIVE ECDSA - Adding spot for ONE 0x0 byte in ECDSA so we'll
             be right 50% of the time... 521 curve doesn't need */
-        if (ssl->keys->privKey.keysize != 132)
+        if (chosen->privKey.keysize != 132)
         {
             rc += 1;
         }
@@ -4803,7 +5039,8 @@ int32 matrixSslEncodeHelloRequest(ssl_t *ssl, sslBuf_t *out,
     int32_t rc;
 
     *requiredLen = 0;
-    psTraceHs("<<< Server creating HELLO_REQUEST message\n");
+    psTracePrintHsMessageCreate(ssl, SSL_HS_HELLO_REQUEST);
+
     if (ssl->flags & SSL_FLAGS_ERROR || ssl->flags & SSL_FLAGS_CLOSED)
     {
         psTraceInfo("SSL flag error in matrixSslEncodeHelloRequest\n");
@@ -4892,10 +5129,13 @@ static int32 writeMultiRecordCertificate(ssl_t *ssl, sslBuf_t *out,
 
             if (notEmpty)
             {
-                cert = ssl->keys->cert;
+                cert = ssl->chosenIdentity->cert;
                 while (cert)
                 {
-                    psAssert(cert->unparsedBin != NULL);
+                    if (cert->unparsedBin == NULL)
+                    {
+                        continue;
+                    }
                     certLen = cert->binLen;
                     midWrite = 0;
                     if (certLen > 0)
@@ -4929,7 +5169,7 @@ static int32 writeMultiRecordCertificate(ssl_t *ssl, sslBuf_t *out,
                             countDown -= 3;
                         }
                         midWrite = min(certLen, countDown);
-                        memcpy(c, cert->unparsedBin, midWrite);
+                        Memcpy(c, cert->unparsedBin, midWrite);
                         certLen -= midWrite;
                         c += midWrite;
                         totalClen -= midWrite;
@@ -5021,7 +5261,7 @@ static int32 writeMultiRecordCertificate(ssl_t *ssl, sslBuf_t *out,
 
             if (countDown < certLen)
             {
-                memcpy(c, cert->unparsedBin + midWrite, countDown);
+                Memcpy(c, cert->unparsedBin + midWrite, countDown);
                 certLen -= countDown;
                 c += countDown;
                 totalClen -= countDown;
@@ -5030,7 +5270,7 @@ static int32 writeMultiRecordCertificate(ssl_t *ssl, sslBuf_t *out,
             }
             else
             {
-                memcpy(c, cert->unparsedBin + midWrite, certLen);
+                Memcpy(c, cert->unparsedBin + midWrite, certLen);
                 c += certLen;
                 totalClen -= certLen;
                 countDown -= certLen;
@@ -5073,7 +5313,7 @@ static int32 writeMultiRecordCertificate(ssl_t *ssl, sslBuf_t *out,
                     countDown -= 3;
                 }
                 midWrite = min(certLen, countDown);
-                memcpy(c, cert->unparsedBin, midWrite);
+                Memcpy(c, cert->unparsedBin, midWrite);
                 certLen -= midWrite;
                 c += midWrite;
                 totalClen -= midWrite;
@@ -5098,7 +5338,7 @@ static int32 writeMultiRecordCertificate(ssl_t *ssl, sslBuf_t *out,
     return MATRIXSSL_SUCCESS;
 }
 #  endif /* USE_SERVER_SIDE_SSL || USE_CLIENT_AUTH */
-
+# endif /* USE_ONLY_PSK_CIPHER_SUITE */
 
 #  if defined(USE_OCSP_RESPONSE) && defined(USE_SERVER_SIDE_SSL)
 static int32 writeCertificateStatus(ssl_t *ssl, sslBuf_t *out)
@@ -5116,7 +5356,7 @@ static int32 writeCertificateStatus(ssl_t *ssl, sslBuf_t *out)
         return MATRIXSSL_SUCCESS;
     }
 
-    psTraceHs("<<< Server creating CERTIFICATE_STATUS  message\n");
+    psTracePrintHsMessageCreate(ssl, SSL_HS_CERTIFICATE_STATUS);
 
     c = out->end;
     end = out->buf + out->size;
@@ -5132,7 +5372,7 @@ static int32 writeCertificateStatus(ssl_t *ssl, sslBuf_t *out)
     }
     /*  struct {
           CertificateStatusType status_type;
-          select (status_type) {
+          Select (status_type) {
               case ocsp: OCSPResponse;
           } response;
        } CertificateStatus; */
@@ -5141,7 +5381,7 @@ static int32 writeCertificateStatus(ssl_t *ssl, sslBuf_t *out)
     *c = 0; c++;
     *c = (ocspLen & 0xFF00) >> 8; c++;
     *c = (ocspLen & 0xFF); c++;
-    memcpy(c, ssl->keys->OCSPResponseBuf, ocspLen);
+    Memcpy(c, ssl->keys->OCSPResponseBuf, ocspLen);
     c += ocspLen;
 
     if ((rc = postponeEncryptRecord(ssl, SSL_RECORD_TYPE_HANDSHAKE,
@@ -5156,6 +5396,7 @@ static int32 writeCertificateStatus(ssl_t *ssl, sslBuf_t *out)
 }
 #  endif /* OCSP && SERVER_SIDE_SSL */
 
+# ifdef USE_IDENTITY_CERTIFICATES
 /******************************************************************************/
 /*
     Write a Certificate message.
@@ -5185,12 +5426,15 @@ static int32 writeCertificate(ssl_t *ssl, sslBuf_t *out, int32 notEmpty)
 
     unsigned char *c, *end, *encryptStart;
     uint8_t padLen;
-    int32 totalCertLen, lsize, i, rc;
+    int32 totalCertLen, lsize, ncerts = 0, rc;
     psSize_t messageSize;
 
-    psTraceStrHs("<<< %s creating CERTIFICATE  message\n",
-        (ssl->flags & SSL_FLAGS_SERVER) ? "Server" : "Client");
+    psTracePrintHsMessageCreate(ssl, SSL_HS_CERTIFICATE);
 
+    if (!notEmpty)
+    {
+        psTraceInfo("No suitable cert available, so encoding an empty cert\n");
+    }
 #  ifdef USE_PSK_CIPHER_SUITE
 /*
     Easier to exclude this message internally rather than futher muddy the
@@ -5209,16 +5453,19 @@ static int32 writeCertificate(ssl_t *ssl, sslBuf_t *out, int32 notEmpty)
 /*
     Determine total length of certs
  */
-    totalCertLen = i = 0;
+    totalCertLen = 0;
     if (notEmpty)
     {
 #  if defined(USE_SERVER_SIDE_SSL) || defined(USE_CLIENT_AUTH)
-        cert = ssl->keys->cert;
-        for (; cert != NULL; i++)
+        if (ssl->chosenIdentity)
         {
-            psAssert(cert->unparsedBin != NULL);
-            totalCertLen += cert->binLen;
-            cert = cert->next;
+            for (cert = ssl->chosenIdentity->cert, ncerts = 0;
+                 cert;
+                 cert = cert->next, ncerts++)
+            {
+                psAssert(cert->unparsedBin != NULL);
+                totalCertLen += cert->binLen;
+            }
         }
 #  else
         return PS_DISABLED_FEATURE_FAIL;
@@ -5228,7 +5475,7 @@ static int32 writeCertificate(ssl_t *ssl, sslBuf_t *out, int32 notEmpty)
 /*
     Account for the 3 bytes of certChain len for each cert and get messageSize
  */
-    lsize = 3 + (i * 3);
+    lsize = 3 + (ncerts * 3);
 
     /* TODO DTLS: Make sure this maxPtFrag is consistent with the fragment
         extension and is not interfering with DTLS notions of fragmentation */
@@ -5283,20 +5530,23 @@ static int32 writeCertificate(ssl_t *ssl, sslBuf_t *out, int32 notEmpty)
 #  if defined(USE_SERVER_SIDE_SSL) || defined(USE_CLIENT_AUTH)
         if (notEmpty)
         {
-            cert = ssl->keys->cert;
-            while (cert)
+            if (ssl->chosenIdentity)
             {
-                psAssert(cert->unparsedBin != NULL);
-                certLen = cert->binLen;
-                if (certLen > 0)
+                for (cert = ssl->chosenIdentity->cert; cert; cert = cert->next)
                 {
-                    *c = (unsigned char) ((certLen & 0xFF0000) >> 16); c++;
-                    *c = (certLen & 0xFF00) >> 8; c++;
-                    *c = (certLen & 0xFF); c++;
-                    memcpy(c, cert->unparsedBin, certLen);
-                    c += certLen;
+                    if (!cert->unparsedBin)
+                        continue;
+
+                    certLen = cert->binLen;
+                    if (certLen > 0)
+                    {
+                        *c = (unsigned char) ((certLen & 0xFF0000) >> 16); c++;
+                        *c = (certLen & 0xFF00) >> 8; c++;
+                        *c = (certLen & 0xFF); c++;
+                        Memcpy(c, cert->unparsedBin, certLen);
+                        c += certLen;
+                    }
                 }
-                cert = cert->next;
             }
         }
 #  endif /* USE_SERVER_SIDE_SSL || USE_CLIENT_AUTH */
@@ -5311,7 +5561,7 @@ static int32 writeCertificate(ssl_t *ssl, sslBuf_t *out, int32 notEmpty)
     }
     return MATRIXSSL_SUCCESS;
 }
-# endif /* USE_ONLY_PSK_CIPHER_SUITE */
+# endif /* USE_IDENTITY_CERTIFICATES */
 
 /******************************************************************************/
 /*
@@ -5326,8 +5576,7 @@ static int32_t writeChangeCipherSpec(ssl_t *ssl, sslBuf_t *out)
     psSize_t messageSize;
     int32_t rc;
 
-    psTraceStrHs("<<< %s creating CHANGE_CIPHER_SPEC message\n",
-        (ssl->flags & SSL_FLAGS_SERVER) ? "Server" : "Client");
+    psTracePrintChangeCipherSpecCreate(ssl);
 
     c = out->end;
     end = out->buf + out->size;
@@ -5381,8 +5630,7 @@ static int32 writeFinished(ssl_t *ssl, sslBuf_t *out)
     psSize_t messageSize, verifyLen;
     int32_t rc;
 
-    psTraceStrHs("<<< %s creating FINISHED message\n",
-        (ssl->flags & SSL_FLAGS_SERVER) ? "Server" : "Client");
+    psTracePrintHsMessageCreate(ssl, SSL_HS_FINISHED);
 
     c = out->end;
     end = out->buf + out->size;
@@ -5480,25 +5728,15 @@ static int32 writeAlert(ssl_t *ssl, unsigned char level,
     psSize_t messageSize;
     int32_t rc;
 
-# ifdef USE_SSL_HANDSHAKE_MSG_TRACE
-    if (ssl->flags & SSL_FLAGS_SERVER)
+# ifdef USE_TLS_1_3
+    if (USING_TLS_1_3(ssl))
     {
-        psTraceHs("<<< Server");
-    }
-    else
-    {
-        psTraceHs("<<< Client");
-    }
-    if (description == SSL_ALERT_CLOSE_NOTIFY)
-    {
-        psTraceHs(" creating ALERT (CLOSE_NOTIFY) message\n");
-    }
-    else
-    {
-        psTraceHs(" creating ALERT message\n");
+        return tls13EncodeAlert(ssl, description, out, requiredLen);
     }
 # endif
-    psTraceIntInfo("Creating alert %d\n", description);
+
+    psTracePrintAlertEncodeInfo(ssl, description);
+
     c = out->end;
     end = out->buf + out->size;
     messageSize = 2 + ssl->recordHeadLen;
@@ -5509,7 +5747,13 @@ static int32 writeAlert(ssl_t *ssl, unsigned char level,
         level = (unsigned char) SSL_ALERT_LEVEL_WARNING;
         ssl->err = SSL_ALERT_NONE;
     }
-
+#  ifdef SERVER_IGNORE_UNRECOGNIZED_SNI
+    else if (description == (unsigned char) SSL_ALERT_UNRECOGNIZED_NAME)
+    {
+        level = (unsigned char) SSL_ALERT_LEVEL_WARNING;
+        ssl->err = SSL_ALERT_NONE;
+    }
+#  endif
     if ((rc = writeRecordHeader(ssl, SSL_RECORD_TYPE_ALERT, 0, &messageSize,
              &padLen, &encryptStart, end, &c)) < 0)
     {
@@ -5564,7 +5808,7 @@ static void writeTrustedCAindication(psX509Cert_t *certs, unsigned char **pp)
     while (next)
     {
         *p = 0x3; p++; /* cert_sha1_hash */
-        memcpy(p, next->sha1CertHash, 20);
+        Memcpy(p, next->sha1CertHash, 20);
         p += 20;
         next = next->next;
     }
@@ -5587,11 +5831,11 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
     psSize_t messageSize, cipherLen, cookieLen, addRenegotiationScsv;
     tlsExtension_t *ext;
     uint32 extLen;
-    const sslCipherSpec_t *cipherDetails;
     short i, useTicket;
 #  ifdef USE_TLS_1_2
     psSize_t sigHashLen, sigHashFlags;
-    unsigned char sigHash[18];      /* 2b len + 2b * 8 sig hash combos */
+    /* 2b len + 2b * MAX sig hash combos */
+    unsigned char sigHash[2 + TLS_MAX_SIGNATURE_ALGORITHMS * 2];
 #  endif
 #  ifdef USE_ECC_CIPHER_SUITE
     unsigned char eccCurveList[32];
@@ -5602,7 +5846,8 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
     int cipherCount;
 #  endif
 
-    psTraceHs("<<< Client creating CLIENT_HELLO  message\n");
+    psTracePrintHsMessageCreate(ssl, SSL_HS_CLIENT_HELLO);
+
     *requiredLen = 0;
     if (out == NULL || out->buf == NULL || ssl == NULL || options == NULL)
     {
@@ -5669,8 +5914,10 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
         cipherLen = 2;
         for (i = 0; i < cipherSpecLen; i++)
         {
-            if ((cipherDetails = sslGetCipherSpec(ssl, cipherSpecs[i]))
-                == NULL)
+            const sslCipherSpec_t *cipherDetails;
+
+            cipherDetails = sslGetCipherSpec(ssl, cipherSpecs[i]);
+            if (cipherDetails == NULL)
             {
                 psTraceIntInfo("Cipher suite not supported: %d\n",
                     cipherSpecs[i]);
@@ -5871,9 +6118,8 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
         TLS 1.2 clients must add the SignatureAndHashAlgorithm extension,
         (although not sending them implies SHA-1, and it's unused for
         non-certificate based ciphers like PSK).
-        Sending all the algorithms that are enabled at compile time.
-        Always sends SHA256 since it must be enabled for TLS 1.2
-
+        Sending all the algorithms that are enabled at compile time unless
+        restricted by the matrixSslSessOptsSetSigAlgs API.
         enum {
           none(0), md5(1), sha1(2), sha224(3), sha256(4), sha384(5),
           sha512(6), (255)
@@ -5891,41 +6137,11 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
     sigHashFlags = 0;
     sigHashLen = 2;     /* Length of buffer, Start with 2b len */
 
-#   ifdef USE_ECC
-    /* Always support SHA256 */
-    ADD_SIG_HASH(HASH_SIG_SHA256, HASH_SIG_ECDSA);
-
-#    ifdef USE_SHA512
-    ADD_SIG_HASH(HASH_SIG_SHA512, HASH_SIG_ECDSA);
-#    endif
-#    ifdef USE_SHA384
-    ADD_SIG_HASH(HASH_SIG_SHA384, HASH_SIG_ECDSA);
-#    endif
-#    ifdef USE_SHA1
-    ADD_SIG_HASH(HASH_SIG_SHA1, HASH_SIG_ECDSA);
-#    endif
-#   endif /* USE_ECC */
-
-#   ifdef USE_RSA
-    /* Always support SHA256 */
-    ADD_SIG_HASH(HASH_SIG_SHA256, HASH_SIG_RSA);
-
-#    ifdef USE_SHA512
-    ADD_SIG_HASH(HASH_SIG_SHA512, HASH_SIG_RSA);
-#    endif
-#    ifdef USE_SHA384
-    ADD_SIG_HASH(HASH_SIG_SHA384, HASH_SIG_RSA);
-#    endif
-#    ifdef USE_SHA1
-    ADD_SIG_HASH(HASH_SIG_SHA1, HASH_SIG_RSA);
-#    endif
-#   endif /* USE_RSA */
-
-#   ifdef USE_ONLY_PSK_CIPHER_SUITE
-    /* Have to  pass something */
-    ADD_SIG_HASH(HASH_SIG_SHA1, HASH_SIG_RSA);
-#   endif
-
+    for (i = 0; i < ssl->supportedSigAlgsLen; i++)
+    {
+        ADD_SIG_HASH((ssl->supportedSigAlgs[i] & 0xff00) >> 8,
+                     ssl->supportedSigAlgs[i] & 0xff);
+    }
 #   undef ADD_SIG_HASH
 
     /* First two bytes is the byte count of remaining data */
@@ -5942,10 +6158,13 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
     /* On the client side, the value is set to the algorithms offered */
     ssl->hashSigAlg = sigHashFlags;
 
+# ifdef USE_SSL_INFORMATIONAL_TRACE_VERBOSE
     psTracePrintSigAlgs(ssl->hashSigAlg, "Our ClientHello");
+# endif
 #  endif /* USE_TLS_1_2 */
 
-    /* Add any user-provided extensions */
+    /* Add any user-provided extensions. */
+    psAddUserExtToSession(ssl, userExt);
     ext = userExt;
     if (ext && extLen == 0)
     {
@@ -6035,6 +6254,7 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
         }
 #  endif
     }
+
 /*
     First two fields in the ClientHello message are the maximum major
     and minor SSL protocol versions we support.
@@ -6042,15 +6262,22 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
     *c = ssl->majVer; c++;
     *c = ssl->minVer; c++;
 
-    psTracePrintProtocolVersion("Encoded ClientHello.client_version",
+    psTracePrintProtocolVersion(INDENT_HS_MSG,
+            "client_version",
             ssl->majVer, ssl->minVer, 1);
 
 /*
     The next 32 bytes are the server's random value, to be combined with
     the client random and premaster for key generation later
  */
-    memcpy(c, ssl->sec.clientRandom, SSL_HS_RANDOM_SIZE);
+    Memcpy(c, ssl->sec.clientRandom, SSL_HS_RANDOM_SIZE);
     c += SSL_HS_RANDOM_SIZE;
+    psTracePrintHex(INDENT_HS_MSG,
+            "client_random",
+            ssl->sec.clientRandom,
+            SSL_HS_RANDOM_SIZE,
+            PS_TRUE);
+
 /*
     The next data is a single byte containing the session ID length,
     and up to 32 bytes containing the session id.
@@ -6060,19 +6287,25 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
     *c = (unsigned char) ssl->sessionIdLen; c++;
     if (ssl->sessionIdLen > 0)
     {
-        memcpy(c, ssl->sessionId, ssl->sessionIdLen);
+        Memcpy(c, ssl->sessionId, ssl->sessionIdLen);
         c += ssl->sessionIdLen;
 #  ifdef USE_MATRIXSSL_STATS
         matrixsslUpdateStat(ssl, RESUMPTIONS_STAT, 1);
 #  endif
     }
+    psTracePrintHex(INDENT_HS_MSG,
+            "session_id",
+            ssl->sessionId,
+            ssl->sessionIdLen,
+            PS_TRUE);
+
 #  ifdef USE_DTLS
     if (ssl->flags & SSL_FLAGS_DTLS)
     {
         if (ssl->haveCookie)
         {
             *c = (unsigned char) ssl->cookieLen; c++;
-            memcpy(c, ssl->cookie, ssl->cookieLen);
+            Memcpy(c, ssl->cookie, ssl->cookieLen);
             c += ssl->cookieLen;
         }
         else
@@ -6081,6 +6314,11 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
                 send a zero length specifier. */
             *c = 0; c++;
         }
+        psTracePrintHex(INDENT_HS_MSG,
+                "cookie",
+                ssl->cookie,
+                ssl->haveCookie ? ssl->cookieLen : 0,
+                PS_TRUE);
     }
 #  endif
 /*
@@ -6089,10 +6327,16 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
  */
     if (cipherSpecLen == 0 || cipherSpecs == NULL || cipherSpecs[0] == 0)
     {
-        if ((rc = sslGetCipherSpecList(ssl, c, (int32) (end - c), addRenegotiationScsv)) < 0)
+        rc = sslGetCipherSpecList(ssl, c, (int32) (end - c), addRenegotiationScsv);
+        if (rc < 0)
         {
             return SSL_FULL;
         }
+        psTracePrintEncodedCipherList(INDENT_HS_MSG,
+                "cipher_suites",
+                c + 2, /* Skip over length encoding. */
+                (psSize_t)rc - 2,
+                PS_FALSE);
         c += rc;
     }
     else
@@ -6106,6 +6350,11 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
         *c = cipherLen & 0xFF; c++;
         /* Safe to include all cipher suites in the list because they were
             checked above */
+        psTracePrintCipherList(INDENT_HS_MSG,
+                "cipher_suites",
+                cipherSpecs,
+                cipherSpecLen,
+                PS_FALSE);
         for (i = 0; i < cipherSpecLen; i++)
         {
             *c = (cipherSpecs[i] & 0xFF00) >> 8; c++;
@@ -6123,6 +6372,8 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
         {
             *c = (TLS_FALLBACK_SCSV >> 8) & 0xFF; c++;
             *c = TLS_FALLBACK_SCSV & 0xFF; c++;
+            psTracePrintCiphersuiteName(INDENT_HS_MSG + 1,
+                    NULL, TLS_FALLBACK_SCSV, PS_TRUE);
         }
     }
 /*
@@ -6160,6 +6411,8 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
         if (userExt)
         {
             ext = userExt;
+            psTracePrintExtensionCreate(ssl, ext->extType);
+
             while (ext)
             {
                 switch (ext->extType)
@@ -6187,11 +6440,11 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
                 *c = ext->extLen & 0xFF; c++;
                 if (ext->extLen == 1 && ext->extData == NULL)
                 {
-                    memset(c, 0x0, 1);
+                    Memset(c, 0x0, 1);
                 }
                 else
                 {
-                    memcpy(c, ext->extData, ext->extLen);
+                    Memcpy(c, ext->extData, ext->extLen);
                 }
                 c += ext->extLen;
                 ext = ext->next;
@@ -6201,6 +6454,8 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
         /* Max fragment extension */
         if (ssl->maxPtFrag & 0x10000)
         {
+            psTracePrintExtensionCreate(ssl, EXT_MAX_FRAGMENT_LEN);
+
             ssl->extFlags.req_max_fragment_len = 1;
             *c = 0x00; c++;
             *c = 0x01; c++;
@@ -6229,13 +6484,14 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
  */
         if (ssl->myVerifyDataLen > 0)
         {
+            psTracePrintExtensionCreate(ssl, EXT_RENEGOTIATION_INFO);
             ssl->extFlags.req_renegotiation_info = 1;
             *c = (EXT_RENEGOTIATION_INFO & 0xFF00) >> 8; c++;
             *c = EXT_RENEGOTIATION_INFO & 0xFF; c++;
             *c = ((ssl->myVerifyDataLen + 1) & 0xFF00) >> 8; c++;
             *c = (ssl->myVerifyDataLen + 1) & 0xFF; c++;
             *c = ssl->myVerifyDataLen & 0xFF; c++;
-            memcpy(c, ssl->myVerifyData, ssl->myVerifyDataLen);
+            Memcpy(c, ssl->myVerifyData, ssl->myVerifyDataLen);
             c += ssl->myVerifyDataLen;
             ssl->secureRenegotiationInProgress = PS_TRUE;
         }
@@ -6244,6 +6500,7 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
 #  ifdef USE_ECC_CIPHER_SUITE
         if (curveListLen > 0)
         {
+            psTracePrintExtensionCreate(ssl, EXT_ELLIPTIC_CURVE);
             ssl->extFlags.req_elliptic_curve = 1;
             *c = (EXT_ELLIPTIC_CURVE & 0xFF00) >> 8; c++;
             *c = EXT_ELLIPTIC_CURVE & 0xFF; c++;
@@ -6251,9 +6508,10 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
             *c = (curveListLen + 2) & 0xFF; c++;
             *c = 0; c++;    /* High byte always zero */
             *c = curveListLen & 0xFF; c++;
-            memcpy(c, eccCurveList, curveListLen);
+            Memcpy(c, eccCurveList, curveListLen);
             c += curveListLen;
 
+            psTracePrintExtensionCreate(ssl, EXT_ELLIPTIC_POINTS);
             ssl->extFlags.req_elliptic_points = 1;
             *c = (EXT_ELLIPTIC_POINTS & 0xFF00) >> 8; c++;
             *c = EXT_ELLIPTIC_POINTS & 0xFF; c++;
@@ -6266,12 +6524,13 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
 
 #  ifdef USE_TLS_1_2
         /* Will always exist in some form if TLS 1.2 is enabled */
+        psTracePrintExtensionCreate(ssl, EXT_SIGNATURE_ALGORITHMS);
         ssl->extFlags.req_signature_algorithms = 1;
         *c = (EXT_SIGNATURE_ALGORITHMS & 0xFF00) >> 8; c++;
         *c = EXT_SIGNATURE_ALGORITHMS & 0xFF; c++;
         *c = (sigHashLen & 0xFF00) >> 8; c++;
         *c = sigHashLen & 0xFF; c++;
-        memcpy(c, sigHash, sigHashLen);
+        Memcpy(c, sigHash, sigHashLen);
         c += sigHashLen;
 #  endif
 
@@ -6282,7 +6541,7 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
             if (ssl->sid->sessionTicketLen == 0 ||
                 ssl->sid->sessionTicketState != SESS_TICKET_STATE_USING_TICKET)
             {
-
+                psTracePrintExtensionCreate(ssl, EXT_SESSION_TICKET);
                 ssl->extFlags.req_session_ticket = 1;
                 *c = (EXT_SESSION_TICKET & 0xFF00) >> 8; c++;
                 *c = EXT_SESSION_TICKET & 0xFF; c++;
@@ -6292,12 +6551,13 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
             }
             else
             {
+                psTracePrintExtensionCreate(ssl, EXT_SESSION_TICKET);
                 ssl->extFlags.req_session_ticket = 1;
                 *c = (EXT_SESSION_TICKET & 0xFF00) >> 8; c++;
                 *c = EXT_SESSION_TICKET & 0xFF; c++;
                 *c = (ssl->sid->sessionTicketLen & 0xFF00) >> 8; c++;
                 *c = ssl->sid->sessionTicketLen & 0xFF; c++;
-                memcpy(c, ssl->sid->sessionTicket, ssl->sid->sessionTicketLen);
+                Memcpy(c, ssl->sid->sessionTicket, ssl->sid->sessionTicketLen);
                 c += ssl->sid->sessionTicketLen;
                 ssl->sid->sessionTicketState = SESS_TICKET_STATE_SENT_TICKET;
 #   ifdef USE_MATRIXSSL_STATS
@@ -6310,6 +6570,7 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
 #  ifdef USE_OCSP_RESPONSE
         if (options->OCSPstapling)
         {
+            psTracePrintExtensionCreate(ssl, EXT_STATUS_REQUEST);
             ssl->extFlags.req_status_request = 1;
             *c = (EXT_STATUS_REQUEST & 0xFF00) >> 8; c++;
             *c = EXT_STATUS_REQUEST & 0xFF; c++;
@@ -6326,6 +6587,7 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
 #  ifdef USE_TRUSTED_CA_INDICATION
         if (options->trustedCAindication)
         {
+            psTracePrintExtensionCreate(ssl, EXT_TRUSTED_CA_KEYS);
             *c = (EXT_TRUSTED_CA_KEYS & 0xFF00) >> 8; c++;
             *c = EXT_TRUSTED_CA_KEYS & 0xFF; c++;
             writeTrustedCAindication(ssl->keys->CAcerts, &c);
@@ -6333,6 +6595,7 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
 #  endif
         if (options->truncHmac)
         {
+            psTracePrintExtensionCreate(ssl, EXT_TRUNCATED_HMAC);
             ssl->extFlags.req_truncated_hmac = 1;
             *c = (EXT_TRUNCATED_HMAC & 0xFF00) >> 8; c++;
             *c = EXT_TRUNCATED_HMAC & 0xFF; c++;
@@ -6347,6 +6610,7 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
                 /* User is REQUIRING the server to support it */
                 ssl->extFlags.require_extended_master_secret = 1;
             }
+            psTracePrintExtensionCreate(ssl, EXT_EXTENDED_MASTER_SECRET);
             ssl->extFlags.req_extended_master_secret = 1;
             *c = (EXT_EXTENDED_MASTER_SECRET & 0xFF00) >> 8; c++;
             *c = EXT_EXTENDED_MASTER_SECRET & 0xFF; c++;
@@ -6357,7 +6621,7 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
     }
 
 #  ifdef USE_DTLS
-    if ((ssl->flags & SSL_FLAGS_DTLS) && (extLen > 0))
+    if ((ssl->flags & SSL_FLAGS_DTLS) && (extLen > 0) && extStart)
     {
         if (ssl->helloExtLen == 0)
         {
@@ -6367,14 +6631,17 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
             {
                 return SSL_MEM_ERROR;
             }
-            memcpy(ssl->helloExt, extStart, ssl->helloExtLen);
+            Memcpy(ssl->helloExt, extStart, ssl->helloExtLen);
         }
         else
         {
             /* Forget the extensions we wrote above and use the saved ones */
-            c = extStart;
-            memcpy(c, ssl->helloExt, ssl->helloExtLen);
-            c += ssl->helloExtLen;
+            if (ssl->helloExt)
+            {
+                c = extStart;
+                Memcpy(c, ssl->helloExt, ssl->helloExtLen);
+                c += ssl->helloExtLen;
+            }
         }
     }
 #  endif /* USE_DTLS */
@@ -6433,7 +6700,7 @@ static int32 writeClientKeyExchange(ssl_t *ssl, sslBuf_t *out)
 #   endif  /* USE_ECC_CIPHER_SUITE || USE_RSA_CIPHER_SUITE */
 #  endif   /* !USE_ONLY_PSK_CIPHER_SUITE */
 
-    psTraceHs("<<< Client creating CLIENT_KEY_EXCHANGE message\n");
+    psTracePrintHsMessageCreate(ssl, SSL_HS_CLIENT_KEY_EXCHANGE);
 
     c = out->end;
     end = out->buf + out->size;
@@ -6617,7 +6884,7 @@ static int32 writeClientKeyExchange(ssl_t *ssl, sslBuf_t *out)
 /*
             The cke message begins with the ID of the desired key
  */
-            memcpy(c, pskId, pskIdLen);
+            Memcpy(c, pskId, pskIdLen);
             c += pskIdLen;
         }
 #  endif /* USE_PSK_CIPHER_SUITE */
@@ -6638,7 +6905,7 @@ static int32 writeClientKeyExchange(ssl_t *ssl, sslBuf_t *out)
          Retransmit case.  Must use the cached encrypted msg from
          the first flight to keep handshake hash same
  */
-        memcpy(c, ssl->ckeMsg, ssl->ckeSize);
+        Memcpy(c, ssl->ckeMsg, ssl->ckeSize);
         c += ssl->ckeSize;
     }
     else
@@ -6675,7 +6942,7 @@ static int32 writeClientKeyExchange(ssl_t *ssl, sslBuf_t *out)
                 {
                     return SSL_MEM_ERROR;
                 }
-                memcpy(ssl->ckeMsg, c - 1, ssl->ckeSize);
+                Memcpy(ssl->ckeMsg, c - 1, ssl->ckeSize);
             }
 #    endif
             c += keyLen;
@@ -6722,7 +6989,7 @@ static int32 writeClientKeyExchange(ssl_t *ssl, sslBuf_t *out)
             {
                 return SSL_MEM_ERROR;
             }
-            memcpy(ssl->ckeMsg, c, ssl->ckeSize);
+            Memcpy(ssl->ckeMsg, c, ssl->ckeSize);
         }
 #    endif
         c += keyLen;
@@ -6740,7 +7007,7 @@ static int32 writeClientKeyExchange(ssl_t *ssl, sslBuf_t *out)
             {
                 return PS_MEM_FAIL;
             }
-            memcpy(pkaAfter->inbuf, pskId, pskIdLen);
+            Memcpy(pkaAfter->inbuf, pskId, pskIdLen);
         }
 #    endif
         pkaAfter->outbuf = ssl->sec.premaster;
@@ -6768,8 +7035,8 @@ static int32 writeClientKeyExchange(ssl_t *ssl, sslBuf_t *out)
             a second uint16 with the value N, and the PSK itself.
             @note pskIdLen will contain the length of pskKey after this call.
  */
-        matrixSslPskGetKey(ssl, pskId, pskIdLen, &pskKey, &pskIdLen);
-        if (pskKey == NULL)
+        rc = matrixSslPskGetKey(ssl, pskId, pskIdLen, &pskKey, &pskIdLen);
+        if (rc < 0 || pskKey == NULL)
         {
             return MATRIXSSL_ERROR;
         }
@@ -6779,13 +7046,13 @@ static int32 writeClientKeyExchange(ssl_t *ssl, sslBuf_t *out)
         {
             return SSL_MEM_ERROR;
         }
-        memset(ssl->sec.premaster, 0, ssl->sec.premasterSize);
+        Memset(ssl->sec.premaster, 0, ssl->sec.premasterSize);
         ssl->sec.premaster[0] = 0;
         ssl->sec.premaster[1] = (pskIdLen & 0xFF);
         /* memset to 0 handled middle portion */
         ssl->sec.premaster[2 + pskIdLen] = 0;
         ssl->sec.premaster[3 + pskIdLen] = (pskIdLen & 0xFF);
-        memcpy(&ssl->sec.premaster[4 + pskIdLen], pskKey, pskIdLen);
+        Memcpy(&ssl->sec.premaster[4 + pskIdLen], pskKey, pskIdLen);
         /*      Now that we've got the premaster secret, derive the various
             symmetrics.  Correct this is only a PSK requirement here because
             there is no pkaAfter to call it later
@@ -6960,7 +7227,7 @@ static int32_t handleAsyncCvSigOp(ssl_t *ssl, pkaAfter_t *pka, unsigned char *ha
             return MATRIXSSL_ERROR;
         }
 
-        memcpy(ssl->extCvHash,
+        Memcpy(ssl->extCvHash,
             hash_tbs,
             hash_tbs_len);
         ssl->extCvHashLen = hash_tbs_len;
@@ -6985,7 +7252,7 @@ static int32_t handleAsyncCvSigOp(ssl_t *ssl, pkaAfter_t *pka, unsigned char *ha
     {
         if (ssl->extCvSigAlg == PS_RSA)
         {
-            memcpy(pka->outbuf,
+            Memcpy(pka->outbuf,
                 ssl->extCvSig,
                 ssl->extCvSigLen);
             psFree(ssl->extCvHash, NULL);
@@ -7057,6 +7324,12 @@ static int nowDoCvPkaInnerECDSA(ssl_t *ssl, pkaAfter_t *pka,
     unsigned char *tmpEcdsa;
     psSize_t len, hashTbsLen;
     unsigned char *hashTbs;
+    sslIdentity_t *chosen = ssl->chosenIdentity;
+
+    if (chosen == NULL)
+    {
+        return PS_UNSUPPORTED_FAIL;
+    }
 
 #     ifdef USE_EXT_CERTIFICATE_VERIFY_SIGNING
     if (ssl->extCvSigOpInUse)
@@ -7133,7 +7406,7 @@ static int nowDoCvPkaInnerECDSA(ssl_t *ssl, pkaAfter_t *pka,
        Length of outbuf is increased by 1.
      */
     len = pka->user + 1;
-    rc = psEccDsaSign(pkiPool, &ssl->keys->privKey.key.ecc,
+    rc = psEccDsaSign(pkiPool, &chosen->privKey.key.ecc,
         hashTbs, hashTbsLen, tmpEcdsa, &len, 1, pka->data);
     if (rc != PS_SUCCESS)
     {
@@ -7159,12 +7432,12 @@ static int nowDoCvPkaInnerECDSA(ssl_t *ssl, pkaAfter_t *pka,
 #     ifdef USE_EXT_CERTIFICATE_VERIFY_SIGNING
         if (ssl->extCvSigOpInUse)
         {
-            memcpy(pka->outbuf, ssl->extCvSig, pka->user);
+            Memcpy(pka->outbuf, ssl->extCvSig, pka->user);
         }
         else
         {
 #     endif /* USE_EXT_CERTIFICATE_VERIFY_SIGNING */
-        memcpy(pka->outbuf, tmpEcdsa, pka->user);
+        Memcpy(pka->outbuf, tmpEcdsa, pka->user);
     }
 #     ifdef USE_EXT_CERTIFICATE_VERIFY_SIGNING
 }
@@ -7213,7 +7486,7 @@ static int nowDoCvPkaInnerECDSA(ssl_t *ssl, pkaAfter_t *pka,
             rc = SSL_MEM_ERROR;
             goto out;
         }
-        memcpy(ssl->certVerifyMsg, pka->outbuf, saveSize);
+        Memcpy(ssl->certVerifyMsg, pka->outbuf, saveSize);
     }
 #     endif /* USE_DTLS */
 
@@ -7244,9 +7517,14 @@ static int nowDoCvPkaInnerRSA(ssl_t *ssl, pkaAfter_t *pka,
     unsigned char msgHash[SHA512_HASH_SIZE], psBuf_t *out)
 {
     psPool_t *pkiPool = NULL;
-
+    sslIdentity_t *chosen = ssl->chosenIdentity;
     int32_t rc;
     int32_t using_tls_1_2;
+
+    if (chosen == NULL)
+    {
+        return PS_UNSUPPORTED_FAIL;
+    }
 
 #     ifdef USE_EXT_CERTIFICATE_VERIFY_SIGNING
     if (ssl->extCvSigOpInUse)
@@ -7305,16 +7583,16 @@ static int nowDoCvPkaInnerRSA(ssl_t *ssl, pkaAfter_t *pka,
      */
     if (using_tls_1_2)
     {
-        rc = privRsaEncryptSignedElement(pkiPool, &ssl->keys->privKey.key.rsa,
+        rc = privRsaEncryptSignedElement(pkiPool, &chosen->privKey.key.rsa,
             msgHash, pka->inlen, pka->outbuf,
-            ssl->keys->privKey.keysize, pka->data);
+            chosen->privKey.keysize, pka->data);
     }
 #     endif /* USE_TLS_1_2 */
 
     if (!using_tls_1_2)
     {
-        rc = psRsaEncryptPriv(pkiPool, &ssl->keys->privKey.key.rsa, msgHash,
-            pka->inlen, pka->outbuf, ssl->keys->privKey.keysize,
+        rc = psRsaEncryptPriv(pkiPool, &chosen->privKey.key.rsa, msgHash,
+            pka->inlen, pka->outbuf, chosen->privKey.keysize,
             pka->data);
     }
 
@@ -7332,7 +7610,7 @@ static int nowDoCvPkaInnerRSA(ssl_t *ssl, pkaAfter_t *pka,
     {
         int32_t saveSize;
 
-        saveSize = ssl->keys->privKey.keysize;
+        saveSize = chosen->privKey.keysize;
 
         ssl->certVerifyMsgLen = saveSize;
         ssl->certVerifyMsg = psMalloc(ssl->hsPool, saveSize);
@@ -7341,7 +7619,7 @@ static int nowDoCvPkaInnerRSA(ssl_t *ssl, pkaAfter_t *pka,
             rc = SSL_MEM_ERROR;
             goto out;
         }
-        memcpy(ssl->certVerifyMsg, pka->outbuf, saveSize);
+        Memcpy(ssl->certVerifyMsg, pka->outbuf, saveSize);
     }
 #     endif /* USE_DTLS */
 
@@ -7436,8 +7714,15 @@ static int32 writeCertificateVerify(ssl_t *ssl, sslBuf_t *out)
     pkaAfter_t *pkaAfter;
     void *pkiData = ssl->userPtr;
     int32_t sigAlg;
+    sslIdentity_t *chosen = ssl->chosenIdentity;
 
-    psTraceHs("<<< Client creating CERTIFICATE_VERIFY  message\n");
+    if (chosen == NULL)
+    {
+        return PS_UNSUPPORTED_FAIL;
+    }
+
+    psTracePrintHsMessageCreate(ssl, SSL_HS_CERTIFICATE_VERIFY);
+
     c = out->end;
     end = out->buf + out->size;
 
@@ -7448,11 +7733,11 @@ static int32 writeCertificateVerify(ssl_t *ssl, sslBuf_t *out)
     }
 
     messageSize = ssl->recordHeadLen + ssl->hshakeHeadLen +
-                  2 + ssl->keys->privKey.keysize;
+                  2 + chosen->privKey.keysize;
 
 #    ifdef USE_ECC
     /* Additional ASN.1 overhead from psEccSignHash */
-    if (ssl->keys->cert->pubKeyAlgorithm == OID_ECDSA_KEY_ALG)
+    if (chosen->cert->pubKeyAlgorithm == OID_ECDSA_KEY_ALG)
     {
         messageSize += 6;
         /* NEGATIVE ECDSA - Adding ONE spot for a 0x0 byte in the
@@ -7464,7 +7749,7 @@ static int32 writeCertificateVerify(ssl_t *ssl, sslBuf_t *out)
             bytes are needed because there can only be a single
             low bit for that sig size.  So subtract that byte
             back out to stay around the 50% no-move goal */
-        if (ssl->keys->privKey.keysize != 132)
+        if (chosen->privKey.keysize != 132)
         {
             messageSize += 1;
         }
@@ -7473,7 +7758,7 @@ static int32 writeCertificateVerify(ssl_t *ssl, sslBuf_t *out)
             1 byte INT, 1 byte rLen, r, 1 byte INT, 1 byte sLen, s.
             So the +4 here are the 2 INT and 2 rLen/sLen bytes on
             top of the keysize */
-        if (ssl->keys->privKey.keysize + 4 >= 128)
+        if (chosen->privKey.keysize + 4 >= 128)
         {
             messageSize++; /* Extra byte for 'long' asn.1 encode */
         }
@@ -7527,8 +7812,7 @@ static int32 writeCertificateVerify(ssl_t *ssl, sslBuf_t *out)
           the basis for the selection, because we have checked
           in parseCertificateRequest that the server supports that.
         */
-        sigAlg = chooseSigAlg(ssl->keys->cert,
-                &ssl->keys->privKey,
+        sigAlg = chooseSigAlg(chosen->cert, &chosen->privKey,
                 ssl->serverSigAlgs);
         if (sigAlg <= 0)
         {
@@ -7545,7 +7829,7 @@ static int32 writeCertificateVerify(ssl_t *ssl, sslBuf_t *out)
 #   endif /* USE_TLS_1_2 */
 
 #    ifdef USE_ECC
-    if (ssl->keys->cert->pubKeyAlgorithm == OID_ECDSA_KEY_ALG)
+    if (chosen->cert->pubKeyAlgorithm == OID_ECDSA_KEY_ALG)
     {
 #     ifdef USE_TLS_1_2
         if (ssl->flags & SSL_FLAGS_TLS_1_2)
@@ -7566,7 +7850,7 @@ static int32 writeCertificateVerify(ssl_t *ssl, sslBuf_t *out)
 #     ifdef USE_DTLS
         if (ssl->flags & SSL_FLAGS_DTLS && ssl->retransmit)
         {
-            memcpy(c, ssl->certVerifyMsg, ssl->certVerifyMsgLen);
+            Memcpy(c, ssl->certVerifyMsg, ssl->certVerifyMsgLen);
             c += ssl->certVerifyMsgLen;
         }
         else
@@ -7577,10 +7861,10 @@ static int32 writeCertificateVerify(ssl_t *ssl, sslBuf_t *out)
         pkaAfter->type = PKA_AFTER_ECDSA_SIG_GEN;
         pkaAfter->data = pkiData;
         pkaAfter->outbuf = c;
-        rc = ssl->keys->privKey.keysize + 8;
+        rc = chosen->privKey.keysize + 8;
         /* NEGATIVE ECDSA - Adding spot for ONE 0x0 byte in ECDSA so we'll
             be right 50% of the time.  521 curve doesn't need */
-        if (ssl->keys->privKey.keysize != 132)
+        if (chosen->privKey.keysize != 132)
         {
             rc += 1;
         }
@@ -7607,7 +7891,7 @@ static int32 writeCertificateVerify(ssl_t *ssl, sslBuf_t *out)
     {
         unsigned char b1, b2;
 
-        if (ssl->keys->cert->sigAlgorithm != OID_RSASSA_PSS)
+        if (chosen->cert->sigAlgorithm != OID_RSASSA_PSS)
         {
             if (getSignatureAndHashAlgorithmEncoding(sigAlg,
                             &b1, &b2, &hashSize) < 0)
@@ -7621,28 +7905,28 @@ static int32 writeCertificateVerify(ssl_t *ssl, sslBuf_t *out)
 #      ifdef USE_PKCS1_PSS
         /* Special handling for OID_RSASSA_PSS, since it is not yet
            supported by the sigAlg functions. */
-        else if (ssl->keys->cert->sigAlgorithm == OID_RSASSA_PSS)
+        else if (chosen->cert->sigAlgorithm == OID_RSASSA_PSS)
         {
-            if (ssl->keys->cert->pssHash == PKCS1_SHA1_ID ||
-                ssl->keys->cert->pssHash == PKCS1_MD5_ID)
+            if (chosen->cert->pssHash == PKCS1_SHA1_ID ||
+                chosen->cert->pssHash == PKCS1_MD5_ID)
             {
                 *c = 0x2; c++;
                 hashSize = SHA1_HASH_SIZE;
             }
-            else if (ssl->keys->cert->pssHash == PKCS1_SHA256_ID)
+            else if (chosen->cert->pssHash == PKCS1_SHA256_ID)
             {
                 *c = 0x4; c++;
                 hashSize = SHA256_HASH_SIZE;
 #       ifdef USE_SHA384
             }
-            else if (ssl->keys->cert->pssHash == PKCS1_SHA384_ID)
+            else if (chosen->cert->pssHash == PKCS1_SHA384_ID)
             {
                 *c = 0x5; c++;
                 hashSize = SHA384_HASH_SIZE;
 #       endif
 #       ifdef USE_SHA512
             }
-            else if (ssl->keys->cert->pssHash == PKCS1_SHA512_ID)
+            else if (chosen->cert->pssHash == PKCS1_SHA512_ID)
             {
                 *c = 0x6; c++;
                 hashSize = SHA512_HASH_SIZE;
@@ -7672,14 +7956,14 @@ static int32 writeCertificateVerify(ssl_t *ssl, sslBuf_t *out)
     pkaAfter->type = PKA_AFTER_RSA_SIG_GEN;
 #     endif /* USE_TLS_1_2 */
 
-    *c = (ssl->keys->privKey.keysize & 0xFF00) >> 8; c++;
-    *c = (ssl->keys->privKey.keysize & 0xFF); c++;
+    *c = (chosen->privKey.keysize & 0xFF00) >> 8; c++;
+    *c = (chosen->privKey.keysize & 0xFF); c++;
 
 #     ifdef USE_DTLS
     if (ssl->flags & SSL_FLAGS_DTLS && ssl->retransmit)
     {
         pkaAfter->type = 0;     /* reset so AFTER logic doesn't trigger */
-        memcpy(c, ssl->certVerifyMsg, ssl->certVerifyMsgLen);
+        Memcpy(c, ssl->certVerifyMsg, ssl->certVerifyMsgLen);
         c += ssl->certVerifyMsgLen;
     }
     else
@@ -7688,7 +7972,7 @@ static int32 writeCertificateVerify(ssl_t *ssl, sslBuf_t *out)
     pkaAfter->data = pkiData;
     pkaAfter->inlen = hashSize;
     pkaAfter->outbuf = c;
-    c += ssl->keys->privKey.keysize;
+    c += chosen->privKey.keysize;
 #     ifdef USE_DTLS
 }
 #     endif
@@ -7746,7 +8030,8 @@ static int32 writeCertificateRequest(ssl_t *ssl, sslBuf_t *out, int32 certLen,
     psSize_t messageSize, sigHashLen = 0;
     int32_t rc;
 
-    psTraceHs("<<< Server creating CERTIFICATE_REQUEST message\n");
+    psTracePrintHsMessageCreate(ssl, SSL_HS_CERTIFICATE_REQUEST);
+
     c = out->end;
     end = out->buf + out->size;
 
@@ -7892,7 +8177,7 @@ static int32 writeCertificateRequest(ssl_t *ssl, sslBuf_t *out, int32 certLen,
             }
             *c = (cert->subject.dnencLen & 0xFF00) >> 8; c++;
             *c = cert->subject.dnencLen & 0xFF; c++;
-            memcpy(c, cert->subject.dnenc, cert->subject.dnencLen);
+            Memcpy(c, cert->subject.dnenc, cert->subject.dnencLen);
             c += cert->subject.dnencLen;
             cert = cert->next;
         }
@@ -8003,6 +8288,11 @@ static int32 writeMultiRecordCertRequest(ssl_t *ssl, sslBuf_t *out,
             countDown -= ssl->hshakeHeadLen + 2;
             while (cert)
             {
+                if (cert->parseStatus != PS_X509_PARSE_SUCCESS)
+                {
+                    cert = cert->next;
+                    continue;
+                }
                 if (cert->subject.dnenc == NULL)
                 {
                     return PS_FAIL;
@@ -8027,7 +8317,7 @@ static int32 writeMultiRecordCertRequest(ssl_t *ssl, sslBuf_t *out,
                         countDown -= 2;
                     }
                     midWrite = min(dnencLen, countDown);
-                    memcpy(c, cert->subject.dnenc, midWrite);
+                    Memcpy(c, cert->subject.dnenc, midWrite);
                     dnencLen -= midWrite;
                     c += midWrite;
                     certLen -= midWrite;
@@ -8106,7 +8396,7 @@ static int32 writeMultiRecordCertRequest(ssl_t *ssl, sslBuf_t *out,
             midSizeWrite = 0;
             if (countDown < dnencLen)
             {
-                memcpy(c, cert->subject.dnenc + midWrite, countDown);
+                Memcpy(c, cert->subject.dnenc + midWrite, countDown);
                 dnencLen -= countDown;
                 c += countDown;
                 certLen -= countDown;
@@ -8115,7 +8405,7 @@ static int32 writeMultiRecordCertRequest(ssl_t *ssl, sslBuf_t *out,
             }
             else
             {
-                memcpy(c, cert->subject.dnenc + midWrite, dnencLen);
+                Memcpy(c, cert->subject.dnenc + midWrite, dnencLen);
                 c += dnencLen;
                 certLen -= dnencLen;
                 countDown -= dnencLen;
@@ -8145,7 +8435,7 @@ static int32 writeMultiRecordCertRequest(ssl_t *ssl, sslBuf_t *out,
                     countDown -= 2;
                 }
                 midWrite = min(dnencLen, countDown);
-                memcpy(c, cert->subject.dnenc, midWrite);
+                Memcpy(c, cert->subject.dnenc, midWrite);
                 dnencLen -= midWrite;
                 c += midWrite;
                 certLen -= midWrite;
@@ -8185,7 +8475,8 @@ static int32 writeHelloVerifyRequest(ssl_t *ssl, sslBuf_t *out)
     psSize_t messageSize;
     int32_t rc;
 
-    psTraceHs("<<< Server creating HELLO_VERIFY_REQUEST message\n");
+    psTracePrintHsMessageCreate(ssl, SSL_HS_HELLO_VERIFY_REQUEST);
+
     c = out->end;
     end = out->buf + out->size;
 /*
@@ -8214,7 +8505,7 @@ static int32 writeHelloVerifyRequest(ssl_t *ssl, sslBuf_t *out)
     *c++ = ssl->rec.majVer;
     *c++ = ssl->rec.minVer;
     *c++ = DTLS_COOKIE_SIZE;
-    memcpy(c, ssl->srvCookie, DTLS_COOKIE_SIZE);
+    Memcpy(c, ssl->srvCookie, DTLS_COOKIE_SIZE);
     c += DTLS_COOKIE_SIZE;
 
     if ((rc = postponeEncryptRecord(ssl, SSL_RECORD_TYPE_HANDSHAKE,

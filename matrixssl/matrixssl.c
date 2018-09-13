@@ -5,7 +5,7 @@
  *      The session and authentication management portions of the MatrixSSL library.
  */
 /*
- *      Copyright (c) 2013-2017 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 INSIDE Secure Corporation
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -31,18 +31,20 @@
  *      http://www.gnu.org/copyleft/gpl.html
  */
 /******************************************************************************/
+#ifndef _POSIX_C_SOURCE
+# define _POSIX_C_SOURCE 200112L
+#endif
 
+#ifndef _DEFAULT_SOURCE
+# define _DEFAULT_SOURCE
+#endif
+
+#include "osdep_stdio.h"
 #include "matrixsslImpl.h"
 /******************************************************************************/
 
 static const char copyright[] =
     "Copyright Inside Secure Corporation. All rights reserved.";
-
-#if defined(USE_RSA) || defined(USE_ECC)
-# if defined(USE_SERVER_SIDE_SSL) || defined(USE_CLIENT_AUTH)
-static int32 verifyReadKeys(psPool_t *pool, sslKeys_t *keys, void *poolUserPtr);
-# endif /* USE_SERVER_SIDE_SSL || USE_CLIENT_AUTH */
-#endif  /* USE_RSA || USE_ECC */
 
 #ifdef USE_SERVER_SIDE_SSL
 
@@ -61,8 +63,8 @@ static psMutex_t g_sessTicketLock;
 #  endif
 
 #  ifdef USE_SHARED_SESSION_CACHE
-#   include <sys/mman.h>
-#   include <fcntl.h>
+#   include "osdep_sys_mman.h"
+#   include "osdep_fcntl.h"
 static sslSessionEntry_t *g_sessionTable;
 #  else
 static sslSessionEntry_t g_sessionTable[SSL_SESSION_TABLE_SIZE];
@@ -73,18 +75,21 @@ static void initSessionEntryChronList(void);
 
 #endif  /* USE_SERVER_SIDE_SSL */
 
-#if defined(USE_RSA) || defined(USE_ECC)
-# ifdef MATRIX_USE_FILE_SYSTEM
-static int32 matrixSslLoadKeyMaterial(sslKeys_t *keys, const char *certFile,
-                                      const char *privFile, const char *privPass, const char *CAfile,
-                                      int32 privKeyType);
-# endif
-static int32 matrixSslLoadKeyMaterialMem(sslKeys_t *keys,
-                                         const unsigned char *certBuf, int32 certLen,
-                                         const unsigned char *privBuf,
-                                         int32 privLen, const unsigned char *CAbuf, int32 CAlen,
-                                         int32 privKeyType);
-#endif /* USE_RSA || USE_ECC */
+static int32 initSupportedVersions(ssl_t *ssl, sslSessOpts_t *options);
+#ifdef USE_TLS_1_3
+static int32 initSupportedGroups(ssl_t *ssl, sslSessOpts_t *options);
+#endif
+static int32 initSignatureAlgorithms(ssl_t *ssl, sslSessOpts_t *options);
+
+extern int32 getDefaultSigAlgs(ssl_t *ssl);
+extern psBool_t tlsVersionSupported(ssl_t *ssl, const uint8_t minVersion);
+extern psBool_t psIsSigAlgSupported(uint16_t sigAlg);
+extern int32 getClientDefaultVersions(ssl_t *ssl);
+extern int32 getServerDefaultVersions(ssl_t *ssl);
+#ifdef USE_TLS_1_3
+extern int32 tls13GetDefaultSigAlgsCert(ssl_t *ssl);
+extern int32 tls13GetDefaultGroups(ssl_t *ssl);
+#endif
 
 /******************************************************************************/
 /*
@@ -99,8 +104,10 @@ static char g_config[32] = "N";
 int32_t matrixSslOpenWithConfig(const char *config)
 {
     unsigned long clen;
+#ifdef USE_SERVER_SIDE_SSL
     uint32_t shared;
     int32_t rc;
+#endif
 
     (void) copyright;      /* Prevent compiler warning. */
     if (*g_config == 'Y')
@@ -108,9 +115,9 @@ int32_t matrixSslOpenWithConfig(const char *config)
         return PS_SUCCESS; /* Function has been called previously */
     }
     /* config parameter is matrixconfig + cryptoconfig + coreconfig */
-    strncpy(g_config, MATRIXSSL_CONFIG, sizeof(g_config) - 1);
-    clen = strlen(MATRIXSSL_CONFIG) - strlen(PSCRYPTO_CONFIG);
-    if (strncmp(g_config, config, clen) != 0)
+    Strncpy(g_config, MATRIXSSL_CONFIG, sizeof(g_config) - 1);
+    clen = Strlen(MATRIXSSL_CONFIG) - Strlen(PSCRYPTO_CONFIG);
+    if (Strncmp(g_config, config, clen) != 0)
     {
         psErrorStr( "MatrixSSL config mismatch.\n" \
             "Library: " MATRIXSSL_CONFIG \
@@ -140,7 +147,7 @@ int32_t matrixSslOpenWithConfig(const char *config)
     /* To prevent warning if multithreading support is disabled. */
     PS_VARIABLE_SET_BUT_UNUSED(shared);
 #  endif
-    memset(g_sessionTable, 0x0,
+    Memset(g_sessionTable, 0x0,
         sizeof(sslSessionEntry_t) * SSL_SESSION_TABLE_SIZE);
     initSessionEntryChronList();
 
@@ -185,7 +192,7 @@ void matrixSslClose(void)
             psTraceInfo("Warning: closing while session still in use\n");
         }
     }
-    memset(g_sessionTable, 0x0,
+    Memset(g_sessionTable, 0x0,
         sizeof(sslSessionEntry_t) * SSL_SESSION_TABLE_SIZE);
     psUnlockMutex(&g_sessionTableLock);
     psDestroyMutex(&g_sessionTableLock);
@@ -201,1148 +208,20 @@ void matrixSslClose(void)
     *g_config = 'N';
 }
 
-/******************************************************************************/
-/*
-    Must call to allocate the key structure now.  After which, LoadRsaKeys,
-    LoadDhParams and/or LoadPskKey can be called
-
-    Memory info:
-    Caller must free keys with matrixSslDeleteKeys on function success
-    Caller does not need to free keys on function failure
- */
-int32_t matrixSslNewKeys(sslKeys_t **keys, void *memAllocUserPtr)
-{
-    psPool_t *pool = NULL;
-    sslKeys_t *lkeys;
-
-#if  defined(USE_ECC) || defined(REQUIRE_DH_PARAMS)
-    int32_t rc;
-#endif
-
-    lkeys = psMalloc(pool, sizeof(sslKeys_t));
-    if (lkeys == NULL)
-    {
-        return PS_MEM_FAIL;
-    }
-    memset(lkeys, 0x0, sizeof(sslKeys_t));
-    lkeys->pool = pool;
-    lkeys->poolUserPtr = memAllocUserPtr;
-
-#if  defined(USE_ECC) || defined(REQUIRE_DH_PARAMS)
-    rc = psCreateMutex(&lkeys->cache.lock, 0);
-    if (rc < 0)
-    {
-        psFree(lkeys, pool);
-        return rc;
-    }
-#endif
-    *keys = lkeys;
-    return PS_SUCCESS;
-}
-
-#ifdef USE_ECC
-/* User is specifying EC curves that are supported so check that against the
-    keys they are supporting */
-int32 psTestUserEcID(int32 id, int32 ecFlags)
-{
-    if (id == 19)
-    {
-        if (!(ecFlags & IS_SECP192R1))
-        {
-            return PS_FAILURE;
-        }
-    }
-    else if (id == 21)
-    {
-        if (!(ecFlags & IS_SECP224R1))
-        {
-            return PS_FAILURE;
-        }
-    }
-    else if (id == 23)
-    {
-        if (!(ecFlags & IS_SECP256R1))
-        {
-            return PS_FAILURE;
-        }
-    }
-    else if (id == 24)
-    {
-        if (!(ecFlags & IS_SECP384R1))
-        {
-            return PS_FAILURE;
-        }
-    }
-    else if (id == 25)
-    {
-        if (!(ecFlags & IS_SECP521R1))
-        {
-            return PS_FAILURE;
-        }
-    }
-    else if (id == 255)
-    {
-        if (!(ecFlags & IS_BRAIN224R1))
-        {
-            return PS_FAILURE;
-        }
-    }
-    else if (id == 26)
-    {
-        if (!(ecFlags & IS_BRAIN256R1))
-        {
-            return PS_FAILURE;
-        }
-    }
-    else if (id == 27)
-    {
-        if (!(ecFlags & IS_BRAIN384R1))
-        {
-            return PS_FAILURE;
-        }
-    }
-    else if (id == 28)
-    {
-        if (!(ecFlags & IS_BRAIN512R1))
-        {
-            return PS_FAILURE;
-        }
-    }
-    else
-    {
-        return PS_UNSUPPORTED_FAIL;
-    }
-    return PS_SUCCESS;
-}
-
-int32 curveIdToFlag(int32 id)
-{
-    if (id == 19)
-    {
-        return IS_SECP192R1;
-    }
-    else if (id == 21)
-    {
-        return IS_SECP224R1;
-    }
-    else if (id == 23)
-    {
-        return IS_SECP256R1;
-    }
-    else if (id == 24)
-    {
-        return IS_SECP384R1;
-    }
-    else if (id == 25)
-    {
-        return IS_SECP521R1;
-    }
-    else if (id == 255)
-    {
-        return IS_BRAIN224R1;
-    }
-    else if (id == 26)
-    {
-        return IS_BRAIN256R1;
-    }
-    else if (id == 27)
-    {
-        return IS_BRAIN384R1;
-    }
-    else if (id == 28)
-    {
-        return IS_BRAIN512R1;
-    }
-    return 0;
-}
-
-static int32 testUserEc(int32 ecFlags, const sslKeys_t *keys)
-{
-    const psEccKey_t *eccKey;
-
-# ifdef USE_CERT_PARSE
-    psX509Cert_t *cert;
-# endif /* USE_CERT_PARSE */
-
-# if defined(USE_SERVER_SIDE_SSL) || defined(USE_CLIENT_AUTH)
-    if (keys->privKey.type == PS_ECC)
-    {
-        eccKey = &keys->privKey.key.ecc;
-        if (psTestUserEcID(eccKey->curve->curveId, ecFlags) < 0)
-        {
-            return PS_FAILURE;
-        }
-    }
-
-#  ifdef USE_CERT_PARSE
-    cert = keys->cert;
-    while (cert)
-    {
-        if (cert->publicKey.type == PS_ECC)
-        {
-            eccKey = &cert->publicKey.key.ecc;
-            if (psTestUserEcID(eccKey->curve->curveId, ecFlags) < 0)
-            {
-                return PS_FAILURE;
-            }
-        }
-        cert = cert->next;
-    }
-#  endif /* USE_CERT_PARSE */
-# endif  /* USE_SERVER_SIDE_SSL || USE_CLIENT_AUTH */
-
-# if defined(USE_CLIENT_SIDE_SSL) || defined(USE_CLIENT_AUTH)
-    cert = keys->CAcerts;
-    while (cert)
-    {
-        if (cert->publicKey.type == PS_ECC)
-        {
-            eccKey = &cert->publicKey.key.ecc;
-            if (psTestUserEcID(eccKey->curve->curveId, ecFlags) < 0)
-            {
-                return PS_FAILURE;
-            }
-        }
-        cert = cert->next;
-    }
-# endif /* USE_CLIENT_SIDE_SSL || USE_CLIENT_AUTH */
-
-    return PS_SUCCESS;
-}
-#endif /* USE_ECC */
-
-
-#ifdef MATRIX_USE_FILE_SYSTEM
-# ifdef USE_PKCS12
-
-#  ifdef USE_CERT_PARSE
-/* Have seen cases where the PKCS#12 files are not in a child-to-parent order */
-static void ReorderCertChain(psX509Cert_t *a_cert)
-{
-    psX509Cert_t *prevCert = NULL;
-    psX509Cert_t *nextCert = NULL;
-    psX509Cert_t *currCert = a_cert;
-
-    while (currCert)
-    {
-        nextCert = currCert->next;
-        while (nextCert && memcmp(currCert->issuer.hash, nextCert->subject.hash,
-                   SHA1_HASH_SIZE) != 0)
-        {
-            prevCert = nextCert;
-            nextCert = nextCert->next;
-
-            if (nextCert && memcmp(currCert->issuer.hash,
-                    nextCert->subject.hash, SHA1_HASH_SIZE) == 0)
-            {
-                prevCert->next = nextCert->next;
-                nextCert->next = currCert->next;
-                currCert->next = nextCert;
-                break;
-            }
-        }
-        currCert = currCert->next;
-    }
-}
-#  endif /* USE_CERT_PARSE */
-
-/******************************************************************************/
-/*
-    File should be a binary .p12 or .pfx
- */
-int32 matrixSslLoadPkcs12(sslKeys_t *keys, const unsigned char *certFile,
-    const unsigned char *importPass, int32 ipasslen,
-    const unsigned char *macPass, int32 mpasslen, int32 flags)
-{
-    unsigned char *mPass;
-    psPool_t *pool;
-    int32 rc;
-
-    if (keys == NULL)
-    {
-        return PS_ARG_FAIL;
-    }
-    pool = keys->pool;
-    PS_POOL_USED(pool);
-
-    if (macPass == NULL)
-    {
-        mPass = (unsigned char *) importPass;
-        mpasslen = ipasslen;
-    }
-    else
-    {
-        mPass = (unsigned char *) macPass;
-    }
-
-    if ((rc = psPkcs12Parse(pool, &keys->cert, &keys->privKey, certFile, flags,
-             (unsigned char *) importPass, ipasslen, mPass, mpasslen)) < 0)
-    {
-        if (keys->cert)
-        {
-            psX509FreeCert(keys->cert);
-            keys->cert = NULL;
-        }
-        psClearPubKey(&keys->privKey);
-        return rc;
-    }
-#  ifdef USE_CERT_PARSE
-    ReorderCertChain(keys->cert);
-#  endif /* USE_CERT_PARSE */
-#  if defined(USE_SERVER_SIDE_SSL) || defined(USE_CLIENT_AUTH)
-    if (verifyReadKeys(pool, keys, keys->poolUserPtr) < PS_SUCCESS)
-    {
-        psTraceInfo("PKCS#12 parse success but material didn't validate\n");
-        psX509FreeCert(keys->cert);
-        psClearPubKey(&keys->privKey);
-        keys->cert = NULL;
-        return PS_CERT_AUTH_FAIL;
-    }
-#  endif /* USE_SERVER_SIDE_SSL || USE_CLIENT_AUTH */
-    return PS_SUCCESS;
-}
-# endif /* USE_PKCS12 */
-
-/******************************************************************************/
-
-# ifdef USE_RSA
-int32 matrixSslLoadRsaKeys(sslKeys_t *keys, const char *certFile,
-    const char *privFile, const char *privPass, const char *CAfile)
-{
-    return matrixSslLoadKeyMaterial(keys, certFile, privFile, privPass, CAfile,
-        PS_RSA);
-
-}
-# endif /* USE_RSA */
-
-/******************************************************************************/
-
-# ifdef USE_ECC
-
-/******************************************************************************/
-
-int32 matrixSslLoadEcKeys(sslKeys_t *keys, const char *certFile,
-    const char *privFile, const char *privPass, const char *CAfile)
-{
-    return matrixSslLoadKeyMaterial(keys, certFile, privFile, privPass, CAfile,
-        PS_ECC);
-
-}
-# endif /* USE_ECC */
-
-# if defined(USE_RSA) || defined(USE_ECC)
-int32_t matrixSslLoadKeysMem(sslKeys_t *keys,
-        const unsigned char *certBuf, int32 certLen,
-        const unsigned char *privBuf, int32 privLen,
-        const unsigned char *CAbuf, int32 CAlen,
-        matrixSslLoadKeysOpts_t *opts)
-{
-    psPubKey_t tmp_privkey;
-    int32_t keytype = 0;
-
-    if (opts)
-        keytype = opts->key_type;
-
-    if (privBuf == NULL)
-        keytype = 1;
-
-    if (privBuf != NULL && keytype == 0)
-    {
-        /*
-          Caller did not tell us the type of privkey to expect, so try
-          to find it out.*/
-        memset(&tmp_privkey, 0, sizeof(psPubKey_t));
-        keytype = psParseUnknownPrivKeyMem(NULL,
-                (unsigned char*)privBuf, privLen,
-                NULL, &tmp_privkey);
-        if (keytype < 0)
-        {
-            psTraceInfo("Could not load private key from file\n");
-            return keytype;
-        }
-        psClearPubKey(&tmp_privkey);
-    }
-
-    switch (keytype)
-    {
-    case 1: /* RSA */
-        return matrixSslLoadKeyMaterialMem(keys, certBuf, certLen,
-                privBuf, privLen, CAbuf, CAlen, PS_RSA);
-        break;
-    case 2: /* ECC */
-        return matrixSslLoadKeyMaterialMem(keys, certBuf, certLen,
-                privBuf, privLen, CAbuf, CAlen, PS_ECC);
-        break;
-    }
-
-    return PS_FAILURE;
-}
-
-int32_t matrixSslLoadKeys(sslKeys_t *keys, const char *certFile,
-        const char *privFile, const char *privPass, const char *CAfile,
-        matrixSslLoadKeysOpts_t *opts)
-{
-    psPubKey_t tmp_privkey;
-    int32_t keytype = 0;
-
-    if (opts)
-        keytype = opts->key_type;
-
-    if (privFile == NULL)
-        keytype = 1;
-
-    if (keytype == 0)
-    {
-        /*
-          Caller did not tell us the type of privkey to expect, so try
-          to find it out.*/
-        memset(&tmp_privkey, 0, sizeof(psPubKey_t));
-        keytype = psParseUnknownPrivKey(NULL, 1, privFile, privPass,
-                &tmp_privkey);
-        if (keytype < 0)
-        {
-            psTraceInfo("Could not load private key from file\n");
-            return keytype;
-        }
-        psClearPubKey(&tmp_privkey);
-    }
-
-    switch (keytype)
-    {
-    case 1: /* RSA */
-        return matrixSslLoadKeyMaterial(keys, certFile, privFile, privPass,
-                CAfile, PS_RSA);
-        break;
-    case 2: /* ECC */
-        return matrixSslLoadKeyMaterial(keys, certFile, privFile, privPass,
-                CAfile, PS_ECC);
-        break;
-    }
-
-    return PS_FAILURE;
-}
-
-static int32 matrixSslLoadKeyMaterial(sslKeys_t *keys, const char *certFile,
-    const char *privFile, const char *privPass, const char *CAfile,
-    int32 privKeyType)
-{
-    psPool_t *pool;
-    int32 err, flags;
-
-    if (keys == NULL)
-    {
-        return PS_ARG_FAIL;
-    }
-    pool = keys->pool;
-
-/*
-    Setting flags to store raw ASN.1 stream for SSL CERTIFICATE message use
- */
-    flags = CERT_STORE_UNPARSED_BUFFER;
-
-#  ifdef USE_CLIENT_AUTH
-/*
-     If the CERTIFICATE_REQUEST message will possibly be needed we must
-     save aside the Distiguished Name portion of the certs for that message.
- */
-    flags |= CERT_STORE_DN_BUFFER;
-#  endif /* USE_CLIENT_AUTH */
-
-    if (certFile)
-    {
-#  if defined(USE_SERVER_SIDE_SSL) || defined(USE_CLIENT_AUTH)
-        if (keys->cert != NULL)
-        {
-            return PS_UNSUPPORTED_FAIL;
-        }
-        if ((err = psX509ParseCertFile(pool, (char *) certFile,
-                 &keys->cert, flags)) < 0)
-        {
-            return err;
-        }
-#   ifdef USE_CERT_PARSE
-        if (keys->cert->authFailFlags)
-        {
-            psAssert(keys->cert->authFailFlags == PS_CERT_AUTH_FAIL_DATE_FLAG);
-            psTraceStrInfo("Certificate out-of-date: %s\n", (char *)certFile);
-#    ifdef POSIX /* TODO - implement date check on WIN32, etc. */
-            psX509FreeCert(keys->cert);
-            keys->cert = NULL;
-            return PS_CERT_AUTH_FAIL_EXTENSION;
-#    endif /* POSIX */
-        }
-#   endif  /* USE_CERT_PARSE */
-#  else
-        psTraceStrInfo("Ignoring %s certFile in matrixSslReadKeys\n",
-            (char *) certFile);
-#  endif /* USE_SERVER_SIDE_SSL || USE_CLIENT_AUTH */
-    }
-/*
-    Parse the private key file
- */
-    if (privFile)
-    {
-#  if defined(USE_SERVER_SIDE_SSL) || defined(USE_CLIENT_AUTH)
-        /* See if private key already exists */
-        if (keys->privKey.keysize > 0)
-        {
-            if (keys->cert)
-            {
-                psX509FreeCert(keys->cert);
-                keys->cert = NULL;
-                return PS_UNSUPPORTED_FAIL;
-            }
-        }
-#   ifdef USE_RSA
-        if (privKeyType == PS_RSA)
-        {
-            psInitPubKey(pool, &keys->privKey, PS_RSA);
-            if ((err = psPkcs1ParsePrivFile(pool, (char *) privFile,
-                     (char *) privPass, &keys->privKey.key.rsa)) < 0)
-            {
-                if (keys->cert)
-                {
-                    psX509FreeCert(keys->cert);
-                    keys->cert = NULL;
-                }
-                return err;
-            }
-            keys->privKey.keysize = psRsaSize(&keys->privKey.key.rsa);
-        }
-#   endif /* USE_RSA */
-#   ifdef USE_ECC
-        if (privKeyType == PS_ECC)
-        {
-            psInitPubKey(pool, &keys->privKey, PS_ECC);
-            if ((err = psEccParsePrivFile(pool, (char *) privFile,
-                     (char *) privPass, &keys->privKey.key.ecc)) < 0)
-            {
-                if (keys->cert)
-                {
-                    psX509FreeCert(keys->cert);
-                    keys->cert = NULL;
-                }
-                return err;
-            }
-            keys->privKey.keysize = psEccSize(&keys->privKey.key.ecc);
-        }
-#   endif /* USE_ECC */
-#  else
-        psTraceStrInfo("Ignoring %s privFile in matrixSslReadKeys\n",
-            (char *) privFile);
-#  endif /* USE_SERVER_SIDE_SSL || USE_CLIENT_AUTH */
-    }
-
-#  if defined(USE_SERVER_SIDE_SSL) || defined(USE_CLIENT_AUTH)
-    if (verifyReadKeys(pool, keys, keys->poolUserPtr) < PS_SUCCESS)
-    {
-        psTraceInfo("Cert parse success but material didn't validate\n");
-        psX509FreeCert(keys->cert);
-        psClearPubKey(&keys->privKey);
-        keys->cert = NULL;
-        return PS_CERT_AUTH_FAIL;
-    }
-#  endif /* USE_SERVER_SIDE_SSL || USE_CLIENT_AUTH */
-
-    /* Not necessary to store binary representations of CA certs */
-    flags &= ~CERT_STORE_UNPARSED_BUFFER;
-
-    if (CAfile)
-    {
-#  if defined(USE_CLIENT_SIDE_SSL) || defined(USE_CLIENT_AUTH)
-        if (keys->CAcerts != NULL)
-        {
-            return PS_UNSUPPORTED_FAIL;
-        }
-#ifdef ALLOW_CA_BUNDLE_PARTIAL_PARSE
-        flags |= CERT_ALLOW_BUNDLE_PARTIAL_PARSE;
-#endif /* ALLOW_CA_BUNDLE_PARTIAL_PARSE */
-        err = psX509ParseCertFile(pool, (char *) CAfile, &keys->CAcerts, flags);
-        if (err >= 0)
-        {
-#ifdef ALLOW_CA_BUNDLE_PARTIAL_PARSE
-            if (err == 0)
-            {
-                psTraceInfo("Failed to load any CA certs.\n");
-                err = PS_PARSE_FAIL;
-                goto ca_load_failed;
-            }
-            else
-            {
-                psTraceIntInfo("Loaded %d CA certs\n", err);
-            }
-#endif /* ALLOW_CA_BUNDLE_PARTIAL_PARSE */
-            if (keys->CAcerts->authFailFlags)
-            {
-                /* This should be the only no err, FailFlags case currently */
-                psAssert(keys->CAcerts->authFailFlags ==
-                    PS_CERT_AUTH_FAIL_DATE_FLAG);
-                psTraceStrInfo("Certificate out-of-date: %s\n", (char *)CAfile);
-#   ifdef POSIX /* TODO - implement date check on WIN32, etc. */
-                psX509FreeCert(keys->CAcerts);
-                keys->CAcerts = NULL;
-                err = PS_CERT_AUTH_FAIL_EXTENSION;
-#   endif
-            }
-        }
-
-#ifdef ALLOW_CA_BUNDLE_PARTIAL_PARSE
-ca_load_failed:
-#endif /* ALLOW_CA_BUNDLE_PARTIAL_PARSE */
-
-        if (err < 0)
-        {
-#   if defined(USE_SERVER_SIDE_SSL) || defined(USE_CLIENT_AUTH)
-            if (keys->cert)
-            {
-                psX509FreeCert(keys->cert);
-                keys->cert = NULL;
-            }
-            psClearPubKey(&keys->privKey);
-#   endif   /* USE_SERVER_SIDE_SSL || USE_CLIENT_AUTH */
-            return err;
-        }
-#  else
-        psTraceStrInfo("Ignoring %s CAfile in matrixSslReadKeys\n", (char *) CAfile);
-#  endif /* USE_CLIENT_SIDE_SSL || USE_CLIENT_AUTH */
-    }
-
-    return PS_SUCCESS;
-}
-
-# endif /* USE_RSA || USE_ECC */
-#endif  /* MATRIX_USE_FILE_SYSTEM */
-
-/******************************************************************************/
-/*
-    Memory buffer versions of ReadKeys
-
-    This function supports cert chains and multiple CAs.  Just need to
-    string them together and let psX509ParseCert handle it
- */
-#ifdef USE_RSA
-int32 matrixSslLoadRsaKeysMem(sslKeys_t *keys, const unsigned char *certBuf,
-    int32 certLen, const unsigned char *privBuf, int32 privLen,
-    const unsigned char *CAbuf, int32 CAlen)
-{
-    return matrixSslLoadKeyMaterialMem(keys, certBuf, certLen, privBuf, privLen,
-        CAbuf, CAlen, PS_RSA);
-
-}
-#endif /* USE_RSA */
-
-#ifdef USE_ECC
-int32 matrixSslLoadEcKeysMem(sslKeys_t *keys, const unsigned char *certBuf,
-    int32 certLen, const unsigned char *privBuf, int32 privLen,
-    const unsigned char *CAbuf, int32 CAlen)
-{
-    return matrixSslLoadKeyMaterialMem(keys, certBuf, certLen, privBuf, privLen,
-        CAbuf, CAlen, PS_ECC);
-
-}
-/**
-    Generate and cache an ephemeral ECC key for later use in ECDHE key exchange.
-    @param[out] keys Keys structure to hold ephemeral keys
-    @param[in] curve ECC curve to generate key on, or NULL to generate for all
-        supported curves.
-    @param[in] hwCtx Context for hardware crypto.
- */
-int32_t matrixSslGenEphemeralEcKey(sslKeys_t *keys, psEccKey_t *ecc,
-    const psEccCurve_t *curve, void *hwCtx)
-{
-# if ECC_EPHEMERAL_CACHE_USAGE > 0
-    psTime_t t;
-# endif
-    int32_t rc;
-
-    psAssert(keys && curve);
-# if ECC_EPHEMERAL_CACHE_USAGE > 0
-    psGetTime(&t, keys->poolUserPtr);
-    psLockMutex(&keys->cache.lock);
-    if (keys->cache.eccPrivKey.curve != curve)
-    {
-        psTraceStrInfo("Generating ephemeral %s key (new curve)\n",
-            curve->name);
-        goto L_REGEN;
-    }
-    if (keys->cache.eccPrivKeyUse > ECC_EPHEMERAL_CACHE_USAGE)
-    {
-        psTraceStrInfo("Generating ephemeral %s key (usage exceeded)\n",
-            curve->name);
-        goto L_REGEN;
-    }
-    if (psDiffMsecs(keys->cache.eccPrivKeyTime, t, keys->poolUserPtr) >
-        (1000 * ECC_EPHEMERAL_CACHE_SECONDS))
-    {
-        psTraceStrInfo("Generating ephemeral %s key (time exceeded)\n",
-            curve->name);
-        goto L_REGEN;
-    }
-    keys->cache.eccPrivKeyUse++;
-    rc = PS_SUCCESS;
-    if (ecc)
-    {
-        rc = psEccCopyKey(ecc, &keys->cache.eccPrivKey);
-    }
-    psUnlockMutex(&keys->cache.lock);
-    return rc;
-L_REGEN:
-    if (keys->cache.eccPrivKeyUse)
-    {
-        /* We use eccPrivKeyUse == 0 as a flag to note the key not allocated */
-        psEccClearKey(&keys->cache.eccPrivKey);
-        keys->cache.eccPrivKeyUse = 0;
-    }
-    rc = psEccGenKey(keys->pool, &keys->cache.eccPrivKey, curve, hwCtx);
-    if (rc < 0)
-    {
-        psUnlockMutex(&keys->cache.lock);
-        return rc;
-    }
-    keys->cache.eccPrivKeyTime = t;
-    keys->cache.eccPrivKeyUse = 1;
-    rc = PS_SUCCESS;
-    if (ecc)
-    {
-        rc = psEccCopyKey(ecc, &keys->cache.eccPrivKey);
-    }
-    psUnlockMutex(&keys->cache.lock);
-    return rc;
-# else
-    /* Not using ephemeral caching. */
-    if (ecc)
-    {
-        rc = psEccGenKey(keys->pool, ecc, curve, hwCtx);
-        return rc;
-    }
-    rc = PS_SUCCESS;
-    return rc;
-# endif /* ECC_EPHEMERAL_CACHE_USAGE > 0 */
-}
-
-#endif  /* USE_ECC */
-
-#if defined(USE_RSA) || defined(USE_ECC)
-static int32 matrixSslLoadKeyMaterialMem(sslKeys_t *keys,
-    const unsigned char *certBuf, int32 certLen,
-    const unsigned char *privBuf,
-    int32 privLen, const unsigned char *CAbuf, int32 CAlen,
-    int32 privKeyType)
-{
-    psPool_t *pool;
-    int32 err, flags = 0;
-
-    if (certBuf == NULL && privBuf == NULL && CAbuf == NULL)
-    {
-        return PS_ARG_FAIL;
-    }
-
-    if (keys == NULL)
-    {
-        return PS_ARG_FAIL;
-    }
-    pool = keys->pool;
-
-/*
-    Setting flags to store raw ASN.1 stream for SSL CERTIFICATE message use
- */
-    flags = CERT_STORE_UNPARSED_BUFFER;
-
-# ifdef USE_CLIENT_AUTH
-/*
-    Setting flag to store raw ASN.1 DN stream for CERTIFICATE_REQUEST
- */
-    flags |= CERT_STORE_DN_BUFFER;
-# endif /* USE_CLIENT_AUTH */
-
-    if (certBuf)
-    {
-# if defined(USE_SERVER_SIDE_SSL) || defined(USE_CLIENT_AUTH)
-        if (keys->cert != NULL)
-        {
-            psTraceInfo("WARNING: An identity certificate already exists\n");
-            return PS_UNSUPPORTED_FAIL;
-        }
-        if ((err = psX509ParseCert(pool, (unsigned char *) certBuf,
-                 (uint32) certLen, &keys->cert, flags)) < 0)
-        {
-            psX509FreeCert(keys->cert);
-            keys->cert = NULL;
-            return err;
-        }
-# else
-        psTraceInfo("Ignoring certBuf in matrixSslReadKeysMem\n");
-# endif /* USE_SERVER_SIDE_SSL || USE_CLIENT_AUTH */
-    }
-
-    if (privBuf)
-    {
-# if defined(USE_SERVER_SIDE_SSL) || defined(USE_CLIENT_AUTH)
-#  ifdef USE_RSA
-        if (privKeyType == PS_RSA)
-        {
-            psInitPubKey(pool, &keys->privKey, PS_RSA);
-            if ((err = psRsaParsePkcs1PrivKey(pool, privBuf,
-                     privLen, &keys->privKey.key.rsa)) < 0)
-            {
-#   ifdef USE_PKCS8
-                /* Attempt a PKCS#8 but mem parse doesn't take password */
-                if ((err = psPkcs8ParsePrivBin(pool, (unsigned char *) privBuf,
-                         (uint32) privLen, NULL, &keys->privKey)) < 0)
-                {
-                    psX509FreeCert(keys->cert); keys->cert = NULL;
-                    return err;
-                }
-#   else
-                psX509FreeCert(keys->cert); keys->cert = NULL;
-                return err;
-#   endif
-            }
-            keys->privKey.keysize = psRsaSize(&keys->privKey.key.rsa);
-        }
-#  endif /* USE_RSA */
-#  ifdef USE_ECC
-        if (privKeyType == PS_ECC)
-        {
-            psInitPubKey(pool, &keys->privKey, PS_ECC);
-            if ((err = psEccParsePrivKey(pool, (unsigned char *) privBuf,
-                     (uint32) privLen, &keys->privKey.key.ecc, NULL)) < 0)
-            {
-#   ifdef USE_PKCS8
-                /* Attempt a PKCS#8 but mem parse doesn't take password */
-                if ((err = psPkcs8ParsePrivBin(pool, (unsigned char *) privBuf,
-                         (uint32) privLen, NULL, &keys->privKey)) < 0)
-                {
-                    psX509FreeCert(keys->cert); keys->cert = NULL;
-                    return err;
-                }
-#   else
-                psX509FreeCert(keys->cert); keys->cert = NULL;
-                return err;
-#   endif
-            }
-            keys->privKey.keysize = psEccSize(&keys->privKey.key.ecc);
-        }
-#  endif /* USE_ECC */
-# else
-        psTraceInfo("Ignoring privBuf in matrixSslReadKeysMem\n");
-# endif /* USE_SERVER_SIDE_SSL || USE_CLIENT_AUTH */
-    }
-
-# if defined(USE_SERVER_SIDE_SSL) || defined(USE_CLIENT_AUTH)
-    if (verifyReadKeys(pool, keys, keys->poolUserPtr) < PS_SUCCESS)
-    {
-        psX509FreeCert(keys->cert);
-        psClearPubKey(&keys->privKey);
-        keys->cert = NULL;
-        return PS_CERT_AUTH_FAIL;
-    }
-# endif /* USE_SERVER_SIDE_SSL || USE_CLIENT_AUTH */
-
-/*
-     Not necessary to store binary representations of CA certs
- */
-    flags &= ~CERT_STORE_UNPARSED_BUFFER;
-
-    if (CAbuf)
-    {
-# if defined(USE_CLIENT_SIDE_SSL) || defined(USE_CLIENT_AUTH)
-        if (keys->CAcerts != NULL)
-        {
-            return PS_UNSUPPORTED_FAIL;
-        }
-#ifdef ALLOW_CA_BUNDLE_PARTIAL_PARSE
-        flags |= CERT_ALLOW_BUNDLE_PARTIAL_PARSE;
-#endif /* ALLOW_CA_BUNDLE_PARTIAL_PARSE */
-        err = psX509ParseCert(pool, (unsigned char *) CAbuf, (uint32) CAlen,
-            &keys->CAcerts, flags);
-        if (err < 0)
-        {
-#ifdef ALLOW_CA_BUNDLE_PARTIAL_PARSE
-            if (err == 0)
-            {
-                psTraceInfo("Failed to load any CA certs.\n");
-                err = PS_PARSE_FAIL;
-                goto ca_load_failed;
-            }
-            else
-            {
-                psTraceIntInfo("Loaded %d CA certs\n", err);
-            }
-#endif /* ALLOW_CA_BUNDLE_PARTIAL_PARSE */
-        }
-# else
-        psTraceInfo("Ignoring CAbuf in matrixSslReadKeysMem\n");
-# endif /* USE_CLIENT_SIDE_SSL || USE_CLIENT_AUTH */
-    }
-
-#ifdef ALLOW_CA_BUNDLE_PARTIAL_PARSE
-ca_load_failed:
-#endif /* ALLOW_CA_BUNDLE_PARTIAL_PARSE */
-
-    if (err < 0)
-    {
-#   if defined(USE_SERVER_SIDE_SSL) || defined(USE_CLIENT_AUTH)
-        psClearPubKey(&keys->privKey);
-        psX509FreeCert(keys->cert);
-        keys->cert = NULL;
-#   endif
-#   if defined(USE_CLIENT_SIDE_SSL) || defined(USE_CLIENT_AUTH)
-        psX509FreeCert(keys->CAcerts);
-        keys->CAcerts = NULL;
-#   endif
-        return err;
-    }
-
-    return PS_SUCCESS;
-}
-#endif /* USE_RSA || USE_ECC */
-
-
-#if defined(USE_OCSP_RESPONSE) && defined(USE_SERVER_SIDE_SSL)
-int32_t matrixSslLoadOCSPResponse(sslKeys_t *keys,
-    const unsigned char *OCSPResponseBuf, psSize_t OCSPResponseBufLen)
-{
-    psPool_t *pool;
-
-    if (keys == NULL || OCSPResponseBuf == NULL || OCSPResponseBufLen == 0)
-    {
-        return PS_ARG_FAIL;
-    }
-    pool = keys->pool;
-    PS_POOL_USED(pool);
-
-    /* Overwrite/Update any response being set */
-    if (keys->OCSPResponseBuf != NULL)
-    {
-        psFree(keys->OCSPResponseBuf, pool);
-        keys->OCSPResponseBufLen = 0;
-    }
-
-    keys->OCSPResponseBufLen = OCSPResponseBufLen;
-    if ((keys->OCSPResponseBuf = psMalloc(pool, OCSPResponseBufLen)) == NULL)
-    {
-        return PS_MEM_FAIL;
-    }
-
-    memcpy(keys->OCSPResponseBuf, OCSPResponseBuf, OCSPResponseBufLen);
-    return PS_SUCCESS;
-}
-#endif /* USE_OCSP_RESPONSE && USE_SERVER_SIDE_SSL */
-
-/******************************************************************************/
-/*
-    This will free the struct and any key material that was loaded via:
-        matrixSslLoadRsaKeys
-        matrixSslLoadEcKeys
-        matrixSslLoadDhParams
-        matrixSslLoadPsk
-        matrixSslLoadOCSPResponse
- */
-void matrixSslDeleteKeys(sslKeys_t *keys)
-{
-#ifdef USE_PSK_CIPHER_SUITE
-    psPsk_t *psk, *next;
-#endif /* USE_PSK_CIPHER_SUITE */
-#if defined(USE_STATELESS_SESSION_TICKETS) && defined(USE_SERVER_SIDE_SSL)
-    psSessionTicketKeys_t *tick, *nextTick;
-#endif
-
-    if (keys == NULL)
-    {
-        return;
-    }
-#ifndef USE_ONLY_PSK_CIPHER_SUITE
-# if defined(USE_SERVER_SIDE_SSL) || defined(USE_CLIENT_AUTH)
-    if (keys->cert)
-    {
-        psX509FreeCert(keys->cert);
-    }
-
-    psClearPubKey(&keys->privKey);
-# endif /* USE_SERVER_SIDE_SSL || USE_CLIENT_AUTH */
-
-# if defined(USE_CLIENT_SIDE_SSL) || defined(USE_CLIENT_AUTH)
-    if (keys->CAcerts)
-    {
-        psX509FreeCert(keys->CAcerts);
-    }
-# endif /* USE_CLIENT_SIDE_SSL || USE_CLIENT_AUTH */
-#endif  /* !USE_ONLY_PSK_CIPHER_SUITE */
-
-#ifdef REQUIRE_DH_PARAMS
-    psPkcs3ClearDhParams(&keys->dhParams);
-#endif /* REQUIRE_DH_PARAMS */
-
-#ifdef USE_PSK_CIPHER_SUITE
-    if (keys->pskKeys)
-    {
-        psk = keys->pskKeys;
-        while (psk)
-        {
-            psFree(psk->pskKey, keys->pool);
-            psFree(psk->pskId, keys->pool);
-            next = psk->next;
-            psFree(psk, keys->pool);
-            psk = next;
-        }
-    }
-#endif /* USE_PSK_CIPHER_SUITE */
-
-#if defined(USE_STATELESS_SESSION_TICKETS) && defined(USE_SERVER_SIDE_SSL)
-    if (keys->sessTickets)
-    {
-        tick = keys->sessTickets;
-        while (tick)
-        {
-            nextTick = tick->next;
-            psFree(tick, keys->pool);
-            tick = nextTick;
-        }
-    }
-#endif
-
-#if defined(USE_ECC) || defined(REQUIRE_DH_PARAMS)
-    psDestroyMutex(&keys->cache.lock);
-# ifdef USE_ECC
-    if (keys->cache.eccPrivKeyUse > 0)
-    {
-        psEccClearKey(&keys->cache.eccPrivKey);
-        psEccClearKey(&keys->cache.eccPubKey);
-    }
-# endif
-    /* Remainder of structure is cleared below */
-#endif
-
-#if defined(USE_OCSP_RESPONSE) && defined(USE_SERVER_SIDE_SSL)
-    if (keys->OCSPResponseBuf != NULL)
-    {
-        psFree(keys->OCSPResponseBuf, keys->pool);
-        keys->OCSPResponseBufLen = 0;
-    }
-#endif
-
-    memzero_s(keys, sizeof(sslKeys_t));
-    psFree(keys, NULL);
-}
-
-#if defined(USE_SERVER_SIDE_SSL) || defined(USE_CLIENT_AUTH)
-# if defined(USE_RSA) || defined(USE_ECC)
-/*
-    Validate the cert chain and the private key for the material passed
-    to matrixSslReadKeys.  Good to catch any user certifiate errors as
-    soon as possible
-
-    When the client private key is stored externally, skip all tests
-    involving the private key, since MatrixSSL does not have direct
-    access to the key.
- */
-static int32 verifyReadKeys(psPool_t *pool, sslKeys_t *keys, void *poolUserPtr)
-{
-#  ifdef USE_CERT_PARSE
-    psX509Cert_t *tmp, *found;
-#  endif
-
-    if (keys->cert == NULL && keys->privKey.type == 0)
-    {
-        return PS_SUCCESS;
-    }
-
-#  ifndef USE_EXT_CERTIFICATE_VERIFY_SIGNING
-/*
-     Not allowed to have a certificate with no matching private key or
-     private key with no cert to match with
- */
-    if (keys->cert != NULL && keys->privKey.type == 0)
-    {
-        psTraceInfo("No private key given to matrixSslReadKeys cert\n");
-        return PS_CERT_AUTH_FAIL;
-    }
-    if (keys->privKey.type != 0 && keys->cert == NULL)
-    {
-        psTraceInfo("No cert given with private key to matrixSslReadKeys\n");
-        return PS_CERT_AUTH_FAIL;
-    }
-#  endif /* USE_EXT_CERTIFICATE_VERIFY_SIGNING */
-
-#  ifdef USE_CERT_PARSE
-/*
-    If this is a chain, we can validate it here with psX509AuthenticateCert
-    Don't check the error return code from this call because the chaining
-    usage restrictions will test parent-most cert for self-signed.
-
-    But we can look at 'authStatus' on all but the final cert to see
-    if the rest looks good
- */
-    if (keys->cert != NULL && keys->cert->next != NULL)
-    {
-        found = NULL;
-        psX509AuthenticateCert(pool, keys->cert, NULL, &found, NULL,
-            poolUserPtr);
-        tmp = keys->cert;
-        while (tmp->next != NULL)
-        {
-            if (tmp->authStatus != PS_TRUE)
-            {
-                psTraceInfo("Failed to authenticate cert chain\n");
-                return PS_CERT_AUTH_FAIL;
-            }
-            tmp = tmp->next;
-        }
-    }
-
-#   ifndef USE_EXT_CERTIFICATE_VERIFY_SIGNING
-#    ifdef USE_RSA
-    if (keys->privKey.type == PS_RSA)
-    {
-        if (psRsaCmpPubKey(&keys->privKey.key.rsa,
-                &keys->cert->publicKey.key.rsa) < 0)
-        {
-            psTraceInfo("Private key doesn't match cert\n");
-            return PS_CERT_AUTH_FAIL;
-        }
-    }
-#    endif /* USE_RSA */
-#   endif  /* !USE_EXT_CERTIFICATE_VERIFY_SIGNING */
-#  endif   /* USE_CERT_PARSE */
-    return PS_SUCCESS;
-}
-# endif /* USE_RSA || USE_ECC */
-#endif  /* USE_SERVER_SIDE_SSL || USE_CLIENT_AUTH */
-/******************************************************************************/
-
-#ifdef REQUIRE_DH_PARAMS
-/******************************************************************************/
-/*
-    User level API to assign the DH parameter file to the server application.
- */
-# ifdef MATRIX_USE_FILE_SYSTEM
-int32 matrixSslLoadDhParams(sslKeys_t *keys, const char *paramFile)
-{
-    if (keys == NULL)
-    {
-        return PS_ARG_FAIL;
-    }
-    return psPkcs3ParseDhParamFile(keys->pool, (char *) paramFile, &keys->dhParams);
-}
-# endif /* MATRIX_USE_FILE_SYSTEM */
-
-/******************************************************************************/
-int32 matrixSslLoadDhParamsMem(sslKeys_t *keys,  const unsigned char *dhBin,
-    int32 dhBinLen)
-{
-    if (keys == NULL)
-    {
-        return PS_ARG_FAIL;
-    }
-    return psPkcs3ParseDhParamBin(keys->pool, (unsigned char *) dhBin, dhBinLen,
-        &keys->dhParams);
-}
-#endif /* REQUIRE_DH_PARAMS */
-
 psBool_t matrixSslTlsVersionRangeSupported(int32_t low,
         int32_t high)
 {
+#ifdef USE_TLS_1_3
+    /* TODO:Document/handle case where range contains legacy versions and
+       draft versions for example 3 - 23. Currently not supported */
+    /* Handle TLS1.3 draft versions */
+    if (low >= MIN_ENABLED_TLS_1_3_DRAFT_VERSION &&
+        high <= MAX_ENABLED_TLS_1_3_DRAFT_VERSION &&
+        low <= high)
+    {
+        return PS_TRUE;
+    }
+#endif
     if (low < MIN_ENABLED_TLS_VER)
     {
         psTraceIntInfo("Minimum of version range not supported " \
@@ -1364,136 +243,431 @@ psBool_t matrixSslTlsVersionRangeSupported(int32_t low,
     return PS_TRUE;
 }
 
-#ifdef USE_CLIENT_SIDE_SSL
-static
-int32 tlsVerToVersionFlag(int32_t ver)
+int32 tlsMinVerToVersionFlag(int32_t minVer)
 {
-    switch (ver)
+    switch (minVer)
     {
+    case tls_v_1_3_draft_28:
+        return SSL_FLAGS_TLS_1_3_DRAFT_28;
+    case tls_v_1_3_draft_26:
+        return SSL_FLAGS_TLS_1_3_DRAFT_26;
+    case tls_v_1_3_draft_24:
+        return SSL_FLAGS_TLS_1_3_DRAFT_24;
+    case tls_v_1_3_draft_23:
+        return SSL_FLAGS_TLS_1_3_DRAFT_23;
+    case tls_v_1_3_draft_22:
+        return SSL_FLAGS_TLS_1_3_DRAFT_22;
+    case tls_v_1_3:
+        return SSL_FLAGS_TLS_1_3;
     case tls_v_1_2:
         return SSL_FLAGS_TLS_1_2;
     case tls_v_1_1:
         return SSL_FLAGS_TLS_1_1;
     case tls_v_1_0:
         return SSL_FLAGS_TLS_1_0;
+    case 0:
+        return SSL_FLAGS_SSLV3;
+    default:
+        psTraceIntInfo("Unsupported minor version: %d\n", minVer);
+        return SSL_FLAGS_TLS_1_3;
     }
-
-    return 0;
 }
 
+#ifdef USE_CLIENT_SIDE_SSL
 int32_t matrixSslSessOptsSetClientTlsVersionRange(sslSessOpts_t *options,
         int32_t low, int32_t high)
 {
+    int32_t versions[TLS_MAX_SUPPORTED_VERSIONS];
+    uint8_t numVersions = 0;
+    uint32_t i;
+
+    if (low < tls_v_1_0)
+    {
+        psTraceErrr("matrixSslSessOptsSetClientTlsVersionRange only " \
+                "supports TLS 1.0 to TLS 1.3. SSL 3.0 is not supported\n");
+        return PS_ARG_FAIL;
+    }
+    /* Copy the range to array for SetClientTlsVersions */
+    i = 0;
+    do
+    {
+        versions[i] = high;
+        numVersions++;
+        i++;
+        high--;
+    } while (high >= low);
+    return matrixSslSessOptsSetClientTlsVersions(options,
+                                                 versions,
+                                                 numVersions);
+}
+
+PSPUBLIC int32_t matrixSslSessOptsSetClientTlsVersions(sslSessOpts_t *options,
+                                                     const int32_t versions[],
+                                                     int32_t versionsLen)
+{
+    uint8_t i, k;
+    int32_t highestVersion = 0;
+# ifdef USE_TLS_1_3
+    psBool_t haveTls13Draft28 = PS_FALSE;
+# endif
+
     if (options == NULL)
     {
         return PS_ARG_FAIL;
     }
-    if (!matrixSslTlsVersionRangeSupported(low, high))
+    if (versionsLen == 0)
     {
-        psTraceInfo("Please enable more versions in matrixsslConfig.h.\n");
+        psTraceErrr("Please enable at least one version.\n");
         return PS_ARG_FAIL;
     }
-    if (low < tls_v_1_0)
+    if (versionsLen > TLS_MAX_SUPPORTED_VERSIONS)
     {
-        psTraceInfo("matrixSslSessOptsSetClientTlsVersionRange only " \
-                "supports TLS 1.0 to TLS 1.2. SSL 3.0 is not supported\n");
+        psTraceErrr("Too many supported versions. Increase " \
+                    "TLS_MAX_SUPPORTED_VERSIONS.\n");
         return PS_ARG_FAIL;
     }
-
-    if (low == high)
+# ifdef USE_TLS_1_3
+    for (i = 0; i < versionsLen; i++)
     {
-        /* Single version. */
-        options->clientRejectVersionDowngrade = 1;
-    }
-    else
-    {
-        if (low > tls_v_1_0)
+        if (versions[i] == tls_v_1_3_draft_28)
         {
-            /* Range: TLS 1.1 - TLS 1.2. */
-#        ifdef USE_TLS_1_0_TOGGLE
-            options->disableTls1_0 = PS_TRUE;
-#        else
-            psTraceInfo("Need USE_TLS_1_0_TOGGLE for this version range\n");
-            return PS_UNSUPPORTED_FAIL;
-#        endif /* USE_TLS_1_0_TOGGLE */
+            haveTls13Draft28 = PS_TRUE;
         }
     }
+# endif
 
-    /* Always put the highest version we support to ClientHello.client_version,
-       as recommended by the RFC. */
-    options->versionFlag = tlsVerToVersionFlag(high);
+    options->supportedVersionsLen = 0;
+    for (i = 0, k = 0; i < versionsLen; i++)
+    {
+        if (!matrixSslTlsVersionRangeSupported(versions[i], versions[i]))
+        {
+            psTraceErrr("Unsupported version. Please enable more " \
+                        "versions in matrixsslConfig.h.\n");
+            return PS_ARG_FAIL;
+        }
+        options->supportedVersions[k++] = versions[i];
+        options->supportedVersionsLen++;
+        if (versions[i] > highestVersion)
+        {
+            highestVersion = versions[i];
+        }
+# ifdef USE_TLS_1_3
+        if (versions[i] == tls_v_1_3 && !haveTls13Draft28)
+        {
+            /* Very little support in the wild for TLS 1.3 RFC version,
+               so add draft #28 as well. TODO: remove.*/
+            options->supportedVersions[k++] = tls_v_1_3_draft_28;
+            options->supportedVersionsLen++;
+        }
+# endif
+    }
+
+    /* Set the versionFlag always to highest version. Note that
+       versionFlag is not the same as the legacy version field
+       so it can contain also the 1.3 version.
+       Note that the priority order of the versions only affects to order of
+       versions in the TLS1.3 supportedVersions extension, nothing else */
+    options->versionFlag = tlsMinVerToVersionFlag(highestVersion);
 
     return PS_SUCCESS;
 }
+
 #endif /* USE_CLIENT_SIDE_SSL */
 
 #ifdef USE_SERVER_SIDE_SSL
+
 int32_t matrixSslSessOptsSetServerTlsVersionRange(sslSessOpts_t *options,
         int32_t low, int32_t high)
 {
+    int32_t versions[TLS_MAX_SUPPORTED_VERSIONS];
+    uint8_t numVersions = 0;
+    uint32_t i;
+
+    if (low < tls_v_1_0)
+    {
+        psTraceErrr("matrixSslSessOptsSetServerTlsVersionRange only " \
+                "supports TLS 1.0 to TLS 1.3. SSL 3.0 is not supported\n");
+        return PS_ARG_FAIL;
+    }
+    /* Copy the range to array for SetClientTlsVersions */
+    i = 0;
+    do
+    {
+        versions[i] = high;
+        numVersions++;
+        i++;
+        high--;
+    } while (high >= low);
+
+    return matrixSslSessOptsSetServerTlsVersions(options,
+                                                 versions,
+                                                 numVersions);
+}
+PSPUBLIC int32_t matrixSslSessOptsSetServerTlsVersions(sslSessOpts_t *options,
+        const int32_t versions[],
+        int32_t versionsLen)
+{
+    uint8_t i, k;
+# ifdef USE_TLS_1_3
+    psBool_t haveTls13Draft28 = PS_FALSE;
+# endif
+
+    /*
+      On the server side the version handling goes either of two
+      ways:
+      1. If single version is selected it is set to versionFlag
+      2. If multiple versions are selected then the non-enabled
+      versions are disabled through the disable flags and
+      the versionFlag = 0
+    */
     if (options == NULL)
     {
         return PS_ARG_FAIL;
     }
-    if (!matrixSslTlsVersionRangeSupported(low, high))
+    if (versionsLen == 0)
     {
-        psTraceInfo("Please enable more versions in matrixsslConfig.h.\n");
+        psTraceErrr("Please enable at least one version.\n");
         return PS_ARG_FAIL;
     }
-    if (low < tls_v_1_0)
+    if (versionsLen > TLS_MAX_SUPPORTED_VERSIONS)
     {
-        psTraceInfo("matrixSslSessOptsSetServerTlsVersionRange only " \
-                "supports TLS 1.0 to TLS 1.2. SSL 3.0 is not supported\n");
+        psTraceErrr("Too many supported versions. Increase " \
+                    "TLS_MAX_SUPPORTED_VERSIONS.\n");
         return PS_ARG_FAIL;
     }
 
-    if (low == high)
+# ifdef USE_TLS_1_3
+    for (i = 0; i < versionsLen; i++)
     {
-        /* Single version. */
-        if (low == tls_v_1_2)
+        if (versions[i] == tls_v_1_3_draft_28)
         {
-            options->versionFlag = SSL_FLAGS_TLS_1_2;
-        }
-        else if (low == tls_v_1_1)
-        {
-            options->versionFlag = SSL_FLAGS_TLS_1_1;
-        }
-        else if (low == tls_v_1_0)
-        {
-            options->versionFlag = SSL_FLAGS_TLS_1_0;
-        }
-        else
-        {
-            return PS_ARG_FAIL;
+            haveTls13Draft28 = PS_TRUE;
         }
     }
-    else
+# endif
+    for (i = 0, k = 0; i < versionsLen; i++)
     {
-        /* Version range. */
-        options->versionFlag = 0;
-        if (low > tls_v_1_0)
+        if (!matrixSslTlsVersionRangeSupported(versions[i], versions[i]))
         {
-#        ifdef USE_TLS_1_0_TOGGLE
-            options->disableTls1_0 = PS_TRUE;
-#        else
-            psTraceInfo("Need USE_TLS_1_0_TOGGLE for this version range\n");
-            return PS_UNSUPPORTED_FAIL;
-#        endif /* USE_TLS_1_0_TOGGLE */
+            psTraceErrr("Unsupported version. Please enable more " \
+                        "versions in matrixsslConfig.h.\n");
+            return PS_ARG_FAIL;
         }
-        if (high < tls_v_1_2)
+        options->supportedVersions[k++] = versions[i];
+        options->supportedVersionsLen++;
+# ifdef USE_TLS_1_3
+        if (versions[i] == tls_v_1_3 && !haveTls13Draft28)
         {
-#        ifdef USE_TLS_1_2_TOGGLE
-            options->serverDisableTls1_2 = PS_TRUE;
-#        else
-            psTraceInfo("Need USE_TLS_1_2_TOGGLE for this version range\n");
-            return PS_UNSUPPORTED_FAIL;
-#        endif /* USE_TLS_1_2_TOGGLE */
+            /* Very little support in the wild for TLS 1.3 RFC version,
+               so add draft #28 as well. TODO: remove.*/
+            options->supportedVersions[k++] = tls_v_1_3_draft_28;
+            options->supportedVersionsLen++;
         }
+# endif
+    }
+
+    if (versionsLen == 1)
+    {
+        /* If on the server side only one version is enabled then it
+         * is handled through the versionFlag. If there are many versions
+         * enabled then they are handled through the supportedVersions */
+        options->versionFlag = tlsMinVerToVersionFlag(versions[0]);
     }
 
     return PS_SUCCESS;
 }
+
 #endif /* USE_SERVER_SIDE_SSL */
+
+# ifdef USE_TLS_1_3
+/** Set the (EC)DHE groups to support for key exchange.
+
+    The groups should be given in priority order. Initial ClientHello
+    key shares will be generated for the top [numClientHelloKeyShares]
+    entries.
+
+    Allowed group IDs are:
+    namedgroup_secp256r1
+    namedgroup_secp384r1
+    namedgroup_secp521r1
+    namedgroup_x25519
+    namedgroup_ffdhe2048
+    namedgroup_ffdhe3072
+    namedgroup_ffdhe4096
+*/
+int32_t matrixSslSessOptsSetKeyExGroups(sslSessOpts_t *options,
+    uint16_t *namedGroups,
+    psSize_t namedGroupsLen,
+    psSize_t numClientHelloKeyShares)
+{
+    psSize_t i;
+
+    if (namedGroupsLen == 0)
+    {
+        return PS_ARG_FAIL;
+    }
+    if (numClientHelloKeyShares > namedGroupsLen)
+    {
+        return PS_ARG_FAIL;
+    }
+
+    /* Set the groups to support. */
+    for (i = 0; i < namedGroupsLen; i++)
+    {
+        if (i >= TLS_1_3_MAX_GROUPS || namedGroups[i] == 0)
+        {
+            return PS_ARG_FAIL;
+        }
+        if (!psIsGroupSupported(namedGroups[i]))
+        {
+            psTracePrintTls13NamedGroup(0,
+                    "matrixSslSessOptsSetKeyExGroups: unsupported group",
+                    namedGroups[i],
+                    PS_TRUE);
+            return PS_ARG_FAIL;
+        }
+        options->tls13SupportedGroups[i] = namedGroups[i];
+    }
+    options->tls13SupportedGroupsLen = namedGroupsLen;
+
+    /* Set number of key shares to generate. */
+    if (numClientHelloKeyShares == 0)
+    {
+        options->tls13NumClientHelloKeyShares = 1;
+    }
+    else
+    {
+        options->tls13NumClientHelloKeyShares = numClientHelloKeyShares;
+    }
+
+    return MATRIXSSL_SUCCESS;
+}
+
+/** In TLS1.3 sets the allowed signature_algoritms to be used by the client or server
+    in the certificates. Used in the signature_algorithms_cert extension */
+int32_t matrixSslSessOptsSetSigAlgsCert(sslSessOpts_t *options,
+        uint16_t *sigAlgs,
+        psSize_t sigAlgsLen)
+{
+    psSize_t i;
+
+    if (sigAlgsLen == 0 || sigAlgs == NULL || options == NULL)
+    {
+        return PS_ARG_FAIL;
+    }
+
+    /* Set the signature_algorithms to support. */
+    for (i = 0; i < sigAlgsLen; i++)
+    {
+        if (i >= TLS_MAX_SIGNATURE_ALGORITHMS || sigAlgs[i] == 0)
+        {
+            return PS_ARG_FAIL;
+        }
+        if (!psIsSigAlgSupported(sigAlgs[i]))
+        {
+            psTraceIntInfo("matrixSslSessOptsSetSigAlgsCert: " \
+                    "unsupported sig_alg: %hu\n", sigAlgs[i]);
+            return PS_ARG_FAIL;
+        }
+        options->tls13SupportedSigAlgsCert[i] = sigAlgs[i];
+    }
+    options->tls13SupportedSigAlgsCertLen = sigAlgsLen;
+    return MATRIXSSL_SUCCESS;
+}
+
+/* In TLS1.3 either the client or server can call this to retrieve
+   early_data status during or after the handshake */
+int32_t matrixSslGetEarlyDataStatus(ssl_t *ssl)
+{
+    if (ssl == NULL)
+    {
+        return PS_ARG_FAIL;
+    }
+
+    return ssl->tls13EarlyDataStatus;
+}
+
+/* Returns the maximum early data amount that can be sent (client)
+   or received (server) */
+int32_t matrixSslGetMaxEarlyData(ssl_t *ssl)
+{
+    if (ssl == NULL)
+    {
+        return PS_ARG_FAIL;
+    }
+
+    if (IS_SERVER(ssl))
+    {
+        /* For server this is not really relevant but return the global
+           maximum */
+        return ssl->tls13SessionMaxEarlyData;
+    }
+    else
+    {
+        /* For client return the maxEarlyData from the first PSK in the
+           session list because that is the one to use for early data */
+        if (ssl->sec.tls13SessionPskList != NULL &&
+            ssl->sec.tls13SessionPskList->params != NULL)
+        {
+            return ssl->sec.tls13SessionPskList->params->maxEarlyData;
+        }
+        else
+        {
+            return 0;
+        }
+    }
+}
+# endif /* USE_TLS_1_3 */
+
+/** Sets the allowed signature_algoritms to be used by the client or server.
+    In TLS1.2 this means both the certificate signature and CertificateVerify.
+    In TLS1.3 this means just the CertificateVerify as the certificate
+    signatures are handled using matrixSslSessOptsSetSigAlgsCert. */
+int32_t matrixSslSessOptsSetSigAlgs(sslSessOpts_t *options,
+        uint16_t *sigAlgs,
+        psSize_t sigAlgsLen)
+{
+    psSize_t i;
+
+    if (sigAlgsLen == 0 || sigAlgs == NULL || options == NULL)
+    {
+        return PS_ARG_FAIL;
+    }
+
+    /* Set the signature_algorithms to support. */
+    for (i = 0; i < sigAlgsLen; i++)
+    {
+        if (i >= TLS_MAX_SIGNATURE_ALGORITHMS || sigAlgs[i] == 0)
+        {
+            return PS_ARG_FAIL;
+        }
+        if (!psIsSigAlgSupported(sigAlgs[i]))
+        {
+            psTraceIntInfo("matrixSslSessOptsSetSigAlgs: " \
+                    "unsupported sig_alg: %hu\n", sigAlgs[i]);
+            return PS_ARG_FAIL;
+        }
+        options->supportedSigAlgs[i] = sigAlgs[i];
+    }
+    options->supportedSigAlgsLen = sigAlgsLen;
+    return MATRIXSSL_SUCCESS;
+}
+
+int32_t matrixSslSessOptsSetMinDhBits(sslSessOpts_t *options,
+        psSize_t minDhBits)
+{
+# ifdef USE_DH
+    if (options == NULL)
+    {
+        return PS_ARG_FAIL;
+    }
+    options->minDhBits = minDhBits;
+    return MATRIXSSL_SUCCESS;
+# else
+    psTraceErrr("USE_DH needed for matrixSslSessOptsSetMinDHBits\n");
+    return PS_UNSUPPORTED_FAIL;
+# endif
+}
 
 /******************************************************************************/
 /*
@@ -1510,14 +684,20 @@ int32 matrixSslNewSession(ssl_t **ssl, const sslKeys_t *keys,
 {
     psPool_t *pool = NULL;
     ssl_t *lssl;
-    int32_t specificVersion, flags;
-
+    int32_t specificVersion, flags, rc;
 #ifdef USE_STATELESS_SESSION_TICKETS
     uint32_t i;
 #endif
 
     /* SERVER_SIDE and CLIENT_AUTH and others will have been added to
         versionFlag by callers */
+    /* TLS1.3 draft version handling */
+    if (options->versionFlag & SSL_FLAGS_TLS_1_3)
+    {
+        /* Substitute TLS_1_3 flag with latest draft flag */
+        options->versionFlag &= ~SSL_FLAGS_TLS_1_3;
+        options->versionFlag |= SSL_FLAGS_TLS_1_3_DRAFT_28;
+    }
     flags = options->versionFlag;
 
 /*
@@ -1527,7 +707,7 @@ int32 matrixSslNewSession(ssl_t **ssl, const sslKeys_t *keys,
 #ifndef USE_SERVER_SIDE_SSL
     if (flags & SSL_FLAGS_SERVER)
     {
-        psTraceInfo("SSL_FLAGS_SERVER passed to matrixSslNewSession but MatrixSSL lib was not compiled with server support\n");
+        psTraceErrr("SSL_FLAGS_SERVER passed to matrixSslNewSession but MatrixSSL lib was not compiled with server support\n");
         return PS_ARG_FAIL;
     }
 #endif
@@ -1535,7 +715,7 @@ int32 matrixSslNewSession(ssl_t **ssl, const sslKeys_t *keys,
 #ifndef USE_CLIENT_SIDE_SSL
     if (!(flags & SSL_FLAGS_SERVER))
     {
-        psTraceInfo("SSL_FLAGS_SERVER was not passed to matrixSslNewSession but MatrixSSL was not compiled with client support\n");
+        psTraceErrr("SSL_FLAGS_SERVER was not passed to matrixSslNewSession but MatrixSSL was not compiled with client support\n");
         return PS_ARG_FAIL;
     }
 #endif
@@ -1543,7 +723,7 @@ int32 matrixSslNewSession(ssl_t **ssl, const sslKeys_t *keys,
 #ifndef USE_CLIENT_AUTH
     if (flags & SSL_FLAGS_CLIENT_AUTH)
     {
-        psTraceInfo("SSL_FLAGS_CLIENT_AUTH passed to matrixSslNewSession but MatrixSSL was not compiled with USE_CLIENT_AUTH enabled\n");
+        psTraceErrr("SSL_FLAGS_CLIENT_AUTH passed to matrixSslNewSession but MatrixSSL was not compiled with USE_CLIENT_AUTH enabled\n");
         return PS_ARG_FAIL;
     }
 #endif
@@ -1553,7 +733,7 @@ int32 matrixSslNewSession(ssl_t **ssl, const sslKeys_t *keys,
 # ifndef USE_PSK_CIPHER_SUITE
         if (keys == NULL)
         {
-            psTraceInfo("NULL keys parameter passed to matrixSslNewSession\n");
+            psTraceErrr("NULL keys parameter passed to matrixSslNewSession\n");
             return PS_ARG_FAIL;
         }
 # endif /* USE_PSK_CIPHER_SUITE */
@@ -1563,19 +743,21 @@ int32 matrixSslNewSession(ssl_t **ssl, const sslKeys_t *keys,
         }
     }
 
+# ifndef USE_TLS_1_3
     if (flags & SSL_FLAGS_INTERCEPTOR)
     {
-        psTraceInfo("SSL_FLAGS_INTERCEPTOR not supported\n");
+        psTraceErrr("SSL_FLAGS_INTERCEPTOR not supported\n");
         return PS_ARG_FAIL;
     }
+# endif
 
     lssl = psMalloc(pool, sizeof(ssl_t));
     if (lssl == NULL)
     {
-        psTraceInfo("Out of memory for ssl_t in matrixSslNewSession\n");
+        psTraceErrr("Out of memory for ssl_t in matrixSslNewSession\n");
         return PS_MEM_FAIL;
     }
-    memset(lssl, 0x0, sizeof(ssl_t));
+    Memset(lssl, 0x0, sizeof(ssl_t));
     lssl->memAllocPtr = options->memAllocPtr;
 
 #ifdef USE_X509
@@ -1605,7 +787,7 @@ int32 matrixSslNewSession(ssl_t **ssl, const sslKeys_t *keys,
         would not have loaded at all */
     if (options->ecFlags)
     {
-        if (testUserEc(options->ecFlags, keys) < 0)
+        if (psTestUserEc(options->ecFlags, keys) < 0)
         {
             psTraceIntInfo("ERROR: Only EC 0x%x specified in options.ecFlags ",
                 options->ecFlags);
@@ -1638,7 +820,7 @@ int32 matrixSslNewSession(ssl_t **ssl, const sslKeys_t *keys,
 
     if (lssl->outbuf == NULL)
     {
-        psTraceInfo("Buffer pool is too small\n");
+        psTraceErrr("Buffer pool is too small\n");
         psFree(lssl, pool);
         return PS_MEM_FAIL;
     }
@@ -1652,7 +834,7 @@ int32 matrixSslNewSession(ssl_t **ssl, const sslKeys_t *keys,
     lssl->inbuf = psMalloc(lssl->bufferPool, lssl->insize);
     if (lssl->inbuf == NULL)
     {
-        psTraceInfo("Buffer pool is too small\n");
+        psTraceErrr("Buffer pool is too small\n");
         psFree(lssl->outbuf, lssl->bufferPool);
         psFree(lssl, pool);
         return PS_MEM_FAIL;
@@ -1682,8 +864,8 @@ int32 matrixSslNewSession(ssl_t **ssl, const sslKeys_t *keys,
 # ifdef USE_EXT_CERTIFICATE_VERIFY_SIGNING
         if (options->useExtCvSigOp)
         {
-            psTraceInfo("Error: External CertificateVerify signing ");
-            psTraceInfo("not supported with the DTLS protocol\n");
+            psTraceErrr("Error: External CertificateVerify signing ");
+            psTraceErrr("not supported with the DTLS protocol\n");
             return PS_ARG_FAIL;
         }
 # endif /* USE_EXT_CERTIFICATE_VERIFY_SIGNING */
@@ -1763,12 +945,34 @@ int32 matrixSslNewSession(ssl_t **ssl, const sslKeys_t *keys,
             specificVersion = 1; /* TLS_1_2 disabled */
 #endif
         }
-
+        if (flags & SSL_FLAGS_TLS_1_3_DRAFT_22 ||
+                flags & SSL_FLAGS_TLS_1_3_DRAFT_23 ||
+                flags & SSL_FLAGS_TLS_1_3_DRAFT_24 ||
+                flags & SSL_FLAGS_TLS_1_3_DRAFT_26 ||
+                flags & SSL_FLAGS_TLS_1_3_DRAFT_28)
+        {
+#ifdef USE_TLS_1_3
+            lssl->majVer = TLS_MAJ_VER;
+            lssl->minVer = TLS_1_2_MIN_VER;
+#else
+            specificVersion = 1; /* TLS_1_3 disabled */
+#endif
+        }
         if (specificVersion)
         {
-            psTraceInfo("ERROR: protocol version isn't compiled into matrix\n");
+            psTraceErrr("ERROR: protocol version isn't compiled into matrix\n");
             matrixSslDeleteSession(lssl);
             return PS_ARG_FAIL;
+        }
+        else if (options->supportedVersionsLen == 0)
+        {
+            /* Caller did not specify either versionFlags or supportedVersions */
+            if (getServerDefaultVersions(lssl) < 0)
+            {
+                psTraceErrr("ERROR: Setting default versions failed\n");
+                matrixSslDeleteSession(lssl);
+                return PS_ARG_FAIL;
+            }
         }
 
 #ifdef USE_DTLS
@@ -1779,7 +983,7 @@ int32 matrixSslNewSession(ssl_t **ssl, const sslKeys_t *keys,
             {
                 if (lssl->minVer == SSL3_MIN_VER || lssl->minVer == TLS_MIN_VER)
                 {
-                    psTraceInfo("ERROR: Can't use SSLv3 or TLS1.0 with DTLS\n");
+                    psTraceErrr("ERROR: Can't use SSLv3 or TLS1.0 with DTLS\n");
                     matrixSslDeleteSession(lssl);
                     return PS_ARG_FAIL;
                 }
@@ -1794,7 +998,7 @@ int32 matrixSslNewSession(ssl_t **ssl, const sslKeys_t *keys,
                 }
                 else
                 {
-                    psTraceInfo("ERROR: Protocol version parse error\n");
+                    psTraceErrr("ERROR: Protocol version parse error\n");
                     matrixSslDeleteSession(lssl);
                     return PS_ARG_FAIL;
                 }
@@ -1814,7 +1018,6 @@ int32 matrixSslNewSession(ssl_t **ssl, const sslKeys_t *keys,
         has been compiled to support it
  */
         specificVersion = 0;
-
         if (flags & SSL_FLAGS_SSLV3)
         {
 #ifndef DISABLE_SSLV3
@@ -1832,7 +1035,12 @@ int32 matrixSslNewSession(ssl_t **ssl, const sslKeys_t *keys,
 # ifndef DISABLE_TLS_1_0
             lssl->majVer = TLS_MAJ_VER;
             lssl->minVer = TLS_MIN_VER;
-            lssl->flags |= SSL_FLAGS_TLS;
+            /* Set flags here if caller has not entered supportedVersions.
+               Otherwise set them in initSupportedVersions */
+            if (options->supportedVersionsLen == 0)
+            {
+                lssl->flags |= SSL_FLAGS_TLS;
+            }
             specificVersion = 1;
 # else
             specificVersion = 2; /* TLS enabled but TLS_1_0 disabled */
@@ -1848,7 +1056,12 @@ int32 matrixSslNewSession(ssl_t **ssl, const sslKeys_t *keys,
 # ifndef DISABLE_TLS_1_1
             lssl->majVer = TLS_MAJ_VER;
             lssl->minVer = TLS_1_1_MIN_VER;
-            lssl->flags |= SSL_FLAGS_TLS | SSL_FLAGS_TLS_1_1;
+            /* Set flags here if caller has not entered supportedVersions.
+               Otherwise set them in initSupportedVersions */
+            if (options->supportedVersionsLen == 0)
+            {
+                lssl->flags |= SSL_FLAGS_TLS | SSL_FLAGS_TLS_1_1;
+            }
             specificVersion = 1;
 # else
             specificVersion = 2; /* TLS_1_1 enabled but TLS_1_1 disabled */
@@ -1861,69 +1074,62 @@ int32 matrixSslNewSession(ssl_t **ssl, const sslKeys_t *keys,
         if (flags & SSL_FLAGS_TLS_1_2)
         {
 #ifdef USE_TLS_1_2
+# ifndef DISABLE_TLS_1_2
             lssl->majVer = TLS_MAJ_VER;
             lssl->minVer = TLS_1_2_MIN_VER;
-            lssl->flags |= SSL_FLAGS_TLS | SSL_FLAGS_TLS_1_1 | SSL_FLAGS_TLS_1_2;
+            /* Set flags here if caller has not entered supportedVersions.
+               Otherwise set them in initSupportedVersions */
+            if (options->supportedVersionsLen == 0)
+            {
+                lssl->flags |= SSL_FLAGS_TLS | SSL_FLAGS_TLS_1_1 | SSL_FLAGS_TLS_1_2;
+            }
+            specificVersion = 1;
+# else
+            specificVersion = 2; /* TLS_1_2 disabled */
+# endif
+#else
+            specificVersion = 2; /* TLS 1.2 not even enabled */
+#endif
+        }
+        if (flags & SSL_FLAGS_TLS_1_3 ||
+                flags & SSL_FLAGS_TLS_1_3_DRAFT_22 ||
+                flags & SSL_FLAGS_TLS_1_3_DRAFT_23 ||
+                flags & SSL_FLAGS_TLS_1_3_DRAFT_24 ||
+                flags & SSL_FLAGS_TLS_1_3_DRAFT_26 ||
+                flags & SSL_FLAGS_TLS_1_3_DRAFT_28)
+        {
+#ifdef USE_TLS_1_3
+            /* majVer, minVer is what we are going to encode as the version
+               number in record, ClientHello and ServerHello legacy_version
+               fields. The TLS 1.3 spec says that we MUST use the TLS 1.2
+               version number. The version flag can be used to check
+               whether we are actually talking 1.3. */
+            lssl->majVer = TLS_MAJ_VER;
+            lssl->minVer = TLS_1_2_MIN_VER;
             specificVersion = 1;
 #else
-            specificVersion = 2; /* TLS_1_2 disabled */
+            specificVersion = 2; /* TLS 1.3 not even enabled */
 #endif
         }
 
         if (specificVersion == 2)
         {
-            psTraceInfo("ERROR: protocol version isn't compiled into matrix\n");
+            psTraceErrr("ERROR: protocol version isn't compiled into matrix\n");
             matrixSslDeleteSession(lssl);
             return PS_ARG_FAIL;
         }
 
         if (specificVersion == 0)
         {
-            /* Highest available if not specified (or not legal value) */
-#ifdef USE_TLS
-# ifndef DISABLE_TLS_1_0
-            lssl->majVer = TLS_MAJ_VER;
-            lssl->minVer = TLS_MIN_VER;
-# endif
-# if defined(USE_TLS_1_1) && !defined(DISABLE_TLS_1_1)
-            lssl->majVer = TLS_MAJ_VER;
-            lssl->minVer = TLS_1_1_MIN_VER;
-            lssl->flags |= SSL_FLAGS_TLS_1_1;
-# endif     /* USE_TLS_1_1 */
-# ifdef USE_TLS_1_2
-            lssl->majVer = TLS_MAJ_VER;
-            lssl->minVer = TLS_1_2_MIN_VER;
-            lssl->flags |= SSL_FLAGS_TLS_1_2 | SSL_FLAGS_TLS_1_1;
-# endif
-            if (lssl->majVer == 0)
+            /* Highest available if not specified (or not legal value)
+               so set default values */
+            if (getClientDefaultVersions(lssl) < 0)
             {
-                /* USE_TLS enabled but all DISABLE_TLS versions are enabled so
-                    use SSLv3.  Compile time tests would catch if no versions
-                    are enabled at all */
-                lssl->majVer = SSL3_MAJ_VER;
-                lssl->minVer = SSL3_MIN_VER;
-            }
-            else
-            {
-                lssl->flags |= SSL_FLAGS_TLS;
+                psTraceErrr("ERROR: Setting default versions failed\n");
+                matrixSslDeleteSession(lssl);
+                return PS_ARG_FAIL;
             }
 
-# ifdef USE_DTLS
-            /* ssl->flags will have already been set above.  Just set version */
-            if (flags & SSL_FLAGS_DTLS)
-            {
-                lssl->minVer = DTLS_MIN_VER;
-                lssl->majVer = DTLS_MAJ_VER;
-#  ifdef USE_TLS_1_2
-                lssl->minVer = DTLS_1_2_MIN_VER;
-#  endif
-            }
-# endif     /* USE_DTLS */
-
-#else /* USE_TLS */
-            lssl->majVer = SSL3_MAJ_VER;
-            lssl->minVer = SSL3_MIN_VER;
-#endif      /* USE_TLS */
         } /* end non-specific version */
 
 #ifdef USE_DTLS
@@ -1940,7 +1146,7 @@ int32 matrixSslNewSession(ssl_t **ssl, const sslKeys_t *keys,
             }
             else
             {
-                psTraceInfo("ERROR: DTLS must be TLS 1.1 or TLS 1.2\n");
+                psTraceErrr("ERROR: DTLS must be TLS 1.1 or TLS 1.2\n");
                 matrixSslDeleteSession(lssl);
                 return PS_ARG_FAIL;
             }
@@ -1957,10 +1163,10 @@ int32 matrixSslNewSession(ssl_t **ssl, const sslKeys_t *keys,
             }
             else
             {
-                memcpy(lssl->sec.masterSecret, session->masterSecret,
+                Memcpy(lssl->sec.masterSecret, session->masterSecret,
                     SSL_HS_MASTER_SIZE);
                 lssl->sessionIdLen = SSL_MAX_SESSION_ID_SIZE;
-                memcpy(lssl->sessionId, session->id, SSL_MAX_SESSION_ID_SIZE);
+                Memcpy(lssl->sessionId, session->id, SSL_MAX_SESSION_ID_SIZE);
 #ifdef USE_STATELESS_SESSION_TICKETS
                 /* Possible no sessionId here at all if tickets used instead.
                     Will know if all 0s */
@@ -1978,14 +1184,338 @@ int32 matrixSslNewSession(ssl_t **ssl, const sslKeys_t *keys,
         }
         lssl->sid = session;
     }
+
+# ifdef USE_TLS_1_3
+    if (options->tls13CiphersuitesEnabledClient)
+    {
+        lssl->tls13CiphersuitesEnabledClient = PS_TRUE;
+    }
+# endif
+    rc = initSupportedVersions(lssl, options);
+    if (rc < 0)
+    {
+        matrixSslDeleteSession(lssl);
+        return PS_FAILURE;
+    }
+#ifdef USE_TLS_1_3
+    rc = initSupportedGroups(lssl, options);
+    if (rc < 0)
+    {
+        matrixSslDeleteSession(lssl);
+        return PS_FAILURE;
+    }
+    rc = tls13LoadSessionPsks(lssl);
+    if (rc < 0)
+    {
+        matrixSslDeleteSession(lssl);
+        return PS_FAILURE;
+    }
+    lssl->tls13EarlyDataStatus = MATRIXSSL_EARLY_DATA_NOT_SENT;
+    lssl->tls13PadLen = options->tls13PadLen;
+    lssl->tls13BlockSize = options->tls13BlockSize;
+#endif
+    rc = initSignatureAlgorithms(lssl, options);
+    if (rc < 0)
+    {
+        matrixSslDeleteSession(lssl);
+        return PS_FAILURE;
+    }
+#ifdef USE_DH
+    if (options->minDhBits != 0)
+    {
+        lssl->minDhBits = options->minDhBits;
+    }
+    else
+    {
+        lssl->minDhBits = MIN_DH_BITS;
+    }
+#endif
+
     /* Clear these to minimize damage on a protocol parsing bug */
-    memset(lssl->inbuf, 0x0, lssl->insize);
-    memset(lssl->outbuf, 0x0, lssl->outsize);
+    Memset(lssl->inbuf, 0x0, lssl->insize);
+    Memset(lssl->outbuf, 0x0, lssl->outsize);
     lssl->err = SSL_ALERT_NONE;
     lssl->encState = SSL_HS_NONE;
     lssl->decState = SSL_HS_NONE;
     *ssl = lssl;
     return PS_SUCCESS;
+}
+
+static void addVersion(ssl_t *ssl, uint16_t ver)
+{
+# ifdef USE_TLS_1_3
+    /*
+      Don't include TLS 1.3 in ClientHello supported_versions if the
+      user did not enable any 1.3 suites.
+
+      Without TLS 1.3 suites in ClientHello, TLS 1.3 cannot be
+      negotiated. And if the server then chooses <1.3, the TLS 1.3
+      downgrade protection mechanism will be triggered on the client-side,
+      causing handshake failure.
+*/
+    if (IS_CLIENT(ssl)
+            && !ssl->tls13CiphersuitesEnabledClient
+            && ver >= TLS_1_3_VER)
+    {
+        psTraceInfo("Warning: tried to enable TLS 1.3 without enabling " \
+                "any TLS 1.3 ciphersuites. Disabling TLS 1.3 for this " \
+                "connection.\n");
+        return;
+    }
+# endif
+
+    ssl->supportedVersions[ssl->supportedVersionsLen] = ver;
+    ssl->supportedVersionsLen++;
+}
+
+static void addVersionMin(ssl_t *ssl, uint8_t min)
+{
+    uint16_t ver;
+    uint8_t maj = TLS_MAJ_VER;
+
+# ifdef USE_TLS_1_3
+    if (min >= MIN_ENABLED_TLS_1_3_DRAFT_VERSION)
+    {
+        maj = TLS_1_3_DRAFT_MAJ_VER;
+    }
+# endif
+
+    ver = (maj << 8) | min;
+    addVersion(ssl, ver);
+}
+
+/*
+  Convert 32-bit tls_v_1* enum values to official 2-byte version ids.
+*/
+uint16_t tlsMinVerToOfficialVer(int32_t minVer)
+{
+    uint16_t val;
+
+    switch (minVer)
+    {
+    case tls_v_1_3_draft_28:
+        val = TLS_1_3_DRAFT_MAJ_VER << 8;
+        val |= TLS_1_3_DRAFT_28_MIN_VER;
+        break;
+    case tls_v_1_3_draft_26:
+        val = TLS_1_3_DRAFT_MAJ_VER << 8;
+        val |= TLS_1_3_DRAFT_26_MIN_VER;
+        break;
+    case tls_v_1_3_draft_24:
+        val = TLS_1_3_DRAFT_MAJ_VER << 8;
+        val |= TLS_1_3_DRAFT_24_MIN_VER;
+        break;
+    case tls_v_1_3_draft_23:
+        val = TLS_1_3_DRAFT_MAJ_VER << 8;
+        val |= TLS_1_3_DRAFT_23_MIN_VER;
+        break;
+    case tls_v_1_3_draft_22:
+        val = TLS_1_3_DRAFT_MAJ_VER << 8;
+        val |= TLS_1_3_DRAFT_22_MIN_VER;
+        break;
+    case tls_v_1_3:
+        val = TLS_MAJ_VER << 8;
+        val |= TLS_1_3_MIN_VER;
+        break;
+    case tls_v_1_2:
+        val = TLS_MAJ_VER << 8;
+        val |= TLS_1_2_MIN_VER;
+        break;
+    case tls_v_1_1:
+        val = TLS_MAJ_VER << 8;
+        val |= TLS_1_1_MIN_VER;
+        break;
+    case tls_v_1_0:
+        val = TLS_MAJ_VER << 8;
+        val |= TLS_MIN_VER;
+        break;
+    case 0:
+    default:
+        val = SSL3_MAJ_VER << 8;
+        val |= SSL3_MIN_VER;
+        break;
+    }
+
+    return val;
+}
+
+/* Gets the supportedVersions list from options and saves it to ssl struct.
+   Also makes sure the ssl->flags and supportedVersions are synced. */
+static int32 initSupportedVersions(ssl_t *ssl, sslSessOpts_t *options)
+{
+    psSize_t i;
+    uint32 flags;
+    int32_t flag;
+    uint16_t ver;
+
+    for (i = 0; i < options->supportedVersionsLen; i++)
+    {
+        ver = tlsMinVerToOfficialVer(options->supportedVersions[i]);
+        addVersion(ssl, ver);
+    }
+
+    /* Unfortunately API user can bypass the API and just set the
+       version flags in options struct directly without settings
+       supportedVersions, in which case we must do it here. */
+
+    if (options->supportedVersionsLen == 0)
+    {
+        flags = options->versionFlag;
+        if ((flags & SSL_FLAGS_TLS_1_0) &&
+                !tlsVersionSupported(ssl, tls_v_1_0))
+        {
+            addVersionMin(ssl, TLS_1_0_MIN_VER);
+        }
+        if ((flags & SSL_FLAGS_TLS_1_1) &&
+                !tlsVersionSupported(ssl, tls_v_1_1))
+        {
+            addVersionMin(ssl, TLS_1_1_MIN_VER);
+        }
+        if ((flags & SSL_FLAGS_TLS_1_2) &&
+                !tlsVersionSupported(ssl, tls_v_1_2))
+        {
+            addVersionMin(ssl, TLS_1_2_MIN_VER);
+        }
+#ifdef USE_TLS_1_3
+        if ((flags & SSL_FLAGS_TLS_1_3) &&
+                !tlsVersionSupported(ssl, tls_v_1_3))
+        {
+            addVersionMin(ssl, TLS_1_3_MIN_VER);
+        }
+        if ((flags & SSL_FLAGS_TLS_1_3_DRAFT_22) &&
+                !tlsVersionSupported(ssl, tls_v_1_3_draft_22))
+        {
+            addVersionMin(ssl, TLS_1_3_DRAFT_22_MIN_VER);
+        }
+        if ((flags & SSL_FLAGS_TLS_1_3_DRAFT_23) &&
+                !tlsVersionSupported(ssl, tls_v_1_3_draft_23))
+        {
+            addVersionMin(ssl, TLS_1_3_DRAFT_23_MIN_VER);
+        }
+        if ((flags & SSL_FLAGS_TLS_1_3_DRAFT_24) &&
+                !tlsVersionSupported(ssl, tls_v_1_3_draft_24))
+        {
+            addVersionMin(ssl, TLS_1_3_DRAFT_24_MIN_VER);
+        }
+        if ((flags & SSL_FLAGS_TLS_1_3_DRAFT_26) &&
+                !tlsVersionSupported(ssl, tls_v_1_3_draft_26))
+        {
+            addVersionMin(ssl, TLS_1_3_DRAFT_26_MIN_VER);
+        }
+        if ((flags & SSL_FLAGS_TLS_1_3_DRAFT_28) &&
+                !tlsVersionSupported(ssl, tls_v_1_3_draft_28))
+        {
+            addVersionMin(ssl, TLS_1_3_DRAFT_28_MIN_VER);
+        }
+#endif
+    }
+
+    /* Client and server handle the flags differently.
+       One place of refactoring is to unify those */
+    if (!(ssl->flags & SSL_FLAGS_SERVER))
+    {
+        for (i = 0; i < ssl->supportedVersionsLen; i++)
+        {
+            flag = tlsMinVerToVersionFlag(
+                        ssl->supportedVersions[i] & 0xff);
+            if (flag > 0)
+            {
+                ssl->flags |= flag;
+            }
+        }
+    }
+
+    /* It seems the SSL_FLAGS_TLS is used as a flag for
+       TLS in general. On the other hand it is the same value
+       as SSL_FLAGS_TLS_1_0. TODO: Check that it does not mean
+       that it is allowed to negotiate 1.0 at any time! */
+    ssl->flags |= SSL_FLAGS_TLS;
+
+    /* In some places, the <1.3 code expects that flags for lesser
+       versions are enabled as well. TODO: the whole version flag
+       mechanism is a mess. */
+    if (USING_TLS_1_3(ssl))
+    {
+        ssl->flags |= SSL_FLAGS_TLS_1_2;
+        ssl->flags |= SSL_FLAGS_TLS_1_1;
+    }
+    else if (ssl->flags & SSL_FLAGS_TLS_1_2)
+    {
+        ssl->flags |= SSL_FLAGS_TLS_1_1;
+    }
+
+    return MATRIXSSL_SUCCESS;
+}
+
+#ifdef USE_TLS_1_3
+/* Copy the supplied supportedGroups to ssl struct. Use defaults if nothing supplied */
+static int32 initSupportedGroups(ssl_t *ssl, sslSessOpts_t *options)
+{
+    psSize_t j;
+    int32 rc;
+    for (j = 0; j < options->tls13SupportedGroupsLen; j++)
+    {
+        ssl->tls13SupportedGroups[j] = options->tls13SupportedGroups[j];
+    }
+    ssl->tls13SupportedGroupsLen = options->tls13SupportedGroupsLen;
+
+    if (ssl->tls13SupportedGroups[0] == 0)
+    {
+        /* User did not specify any groups --> add default groups. */
+        rc = tls13GetDefaultGroups(ssl);
+        if (rc < 0)
+        {
+            matrixSslDeleteSession(ssl);
+            return PS_FAILURE;
+        }
+    }
+    else
+    {
+        ssl->tls13NumClientHelloKeyShares
+            = options->tls13NumClientHelloKeyShares;
+    }
+    return MATRIXSSL_SUCCESS;
+}
+#endif
+
+static int32 initSignatureAlgorithms(ssl_t *ssl, sslSessOpts_t *options)
+{
+    psSize_t j;
+    int32 rc;
+#ifdef USE_TLS_1_3
+    /* Signature algorithm configuration for certs */
+    for (j = 0; j < options->tls13SupportedSigAlgsCertLen; j++)
+    {
+        ssl->tls13SupportedSigAlgsCert[j] = options->tls13SupportedSigAlgsCert[j];
+    }
+    ssl->tls13SupportedSigAlgsCertLen = options->tls13SupportedSigAlgsCertLen;
+
+    if (ssl->tls13SupportedSigAlgsCertLen == 0)
+    {
+        /* User did not specify any sig_alg_certs --> add defaults */
+        rc = tls13GetDefaultSigAlgsCert(ssl);
+        if (rc < 0)
+        {
+            return PS_FAILURE;
+        }
+    }
+# endif
+    /* Signature algorithm configuration for CertificateVerify */
+    for (j = 0; j < options->supportedSigAlgsLen; j++)
+    {
+        ssl->supportedSigAlgs[j] = options->supportedSigAlgs[j];
+    }
+    ssl->supportedSigAlgsLen = options->supportedSigAlgsLen;
+    if (ssl->supportedSigAlgsLen == 0)
+    {
+        /* User did not specify any sig_algs --> add defaults */
+        rc = getDefaultSigAlgs(ssl);
+        if (rc < 0)
+        {
+            return PS_FAILURE;
+        }
+    }
+    return MATRIXSSL_SUCCESS;
 }
 
 /******************************************************************************/
@@ -2042,7 +1572,16 @@ void matrixSslDeleteSession(ssl_t *ssl)
     {
         psFree(ssl->expectedName, ssl->sPool);
     }
+#ifdef USE_CLIENT_SIDE_SSL
+    if (ssl->userExt)
+    {
+        matrixSslDeleteHelloExtension(ssl->userExt);
+    }
+#endif
+
 #ifndef USE_ONLY_PSK_CIPHER_SUITE
+    psFree(ssl->sec.keySelect.caNames, ssl->sPool);
+    psFree(ssl->sec.keySelect.caNameLens, ssl->sPool);
 # if defined(USE_CLIENT_SIDE_SSL) || defined(USE_CLIENT_AUTH)
     if (ssl->sec.cert)
     {
@@ -2053,6 +1592,32 @@ void matrixSslDeleteSession(ssl_t *ssl)
 # endif /* USE_CLIENT_SIDE_SSL || USE_CLIENT_AUTH */
 #endif  /* !USE_ONLY_PSK_CIPHER_SUITE */
 
+#ifdef USE_TLS_1_3
+    {
+        psSize_t i;
+
+        for (i = 0; i < TLS_1_3_MAX_GROUPS; i++)
+        {
+            if (ssl->sec.tls13KeyAgreeKeys[i] != NULL)
+            {
+                psDeletePubKey(&ssl->sec.tls13KeyAgreeKeys[i]);
+            }
+        }
+        if (ssl->tls13CertRequestContext)
+        {
+            psFree(ssl->tls13CertRequestContext, ssl->hsPool);
+            ssl->tls13CertRequestContext = NULL;
+        }
+
+        tls13FreePsk(ssl->sec.tls13SessionPskList, ssl->hsPool);
+        if (ssl->sec.tls13CookieFromServer)
+        {
+            psFree(ssl->sec.tls13CookieFromServer, ssl->hsPool);
+        }
+
+        psFree(ssl->tls13ClientCipherSuites, ssl->hsPool);
+    }
+#endif
 #ifdef REQUIRE_DH_PARAMS
     if (ssl->sec.dhP)
     {
@@ -2085,6 +1650,12 @@ void matrixSslDeleteSession(ssl_t *ssl)
     {
         psEccDeleteKey(&ssl->sec.eccKeyPriv);
     }
+#  ifdef USE_X25519
+    if (ssl->sec.x25519KeyPub)
+    {
+        psFree(ssl->sec.x25519KeyPub, ssl->hsPool);
+    }
+#  endif
 #endif /* USE_ECC_CIPHER_SUITE */
 
 /*
@@ -2131,8 +1702,8 @@ void matrixSslDeleteSession(ssl_t *ssl)
 /*
     Free the data buffers, clear any remaining user data
  */
-    memset(ssl->inbuf, 0x0, ssl->insize);
-    memset(ssl->outbuf, 0x0, ssl->outsize);
+    Memset(ssl->inbuf, 0x0, ssl->insize);
+    Memset(ssl->outbuf, 0x0, ssl->outsize);
     psFree(ssl->outbuf, ssl->bufferPool);
     psFree(ssl->inbuf, ssl->bufferPool);
 
@@ -2145,11 +1716,12 @@ void matrixSslDeleteSession(ssl_t *ssl)
         psFree(ssl->alpn, ssl->sPool); ssl->alpn = NULL;
     }
 #endif
+
 /*
     The cipher and mac contexts are inline in the ssl structure, so
     clearing the structure clears those states as well.
  */
-    memset(ssl, 0x0, sizeof(ssl_t));
+    Memset(ssl, 0x0, sizeof(ssl_t));
     psFree(ssl, pool);
 }
 
@@ -2170,7 +1742,7 @@ void matrixSslSetSessionOption(ssl_t *ssl, int32 option, void *arg)
         }
 #endif  /* USE_SERVER_SIDE_SSL */
         ssl->sessionIdLen = 0;
-        memset(ssl->sessionId, 0x0, SSL_MAX_SESSION_ID_SIZE);
+        Memset(ssl->sessionId, 0x0, SSL_MAX_SESSION_ID_SIZE);
     }
 
 #ifdef SSL_REHANDSHAKES_ENABLED
@@ -2210,190 +1782,6 @@ void matrixSslGetAnonStatus(ssl_t *ssl, int32 *certArg)
 {
     *certArg = ssl->sec.anon;
 }
-
-
-#ifdef USE_SSL_INFORMATIONAL_TRACE
-void matrixSslPrintHSDetails(ssl_t *ssl)
-{
-    if (ssl->hsState == SSL_HS_DONE)
-    {
-        psTraceInfo("\n");
-        psTracePrintProtocolVersion(NULL, ssl->majVer, ssl->minVer, 0);
-        _psTrace(" connection established: ");
-        switch (ssl->cipher->ident)
-        {
-        case SSL_RSA_WITH_NULL_MD5:
-            _psTrace("SSL_RSA_WITH_NULL_MD5\n");
-            break;
-        case SSL_RSA_WITH_NULL_SHA:
-            _psTrace("SSL_RSA_WITH_NULL_SHA\n");
-            break;
-        case SSL_RSA_WITH_RC4_128_MD5:
-            _psTrace("SSL_RSA_WITH_RC4_128_MD5\n");
-            break;
-        case SSL_RSA_WITH_RC4_128_SHA:
-            _psTrace("SSL_RSA_WITH_RC4_128_SHA\n");
-            break;
-        case SSL_RSA_WITH_3DES_EDE_CBC_SHA:
-            _psTrace("SSL_RSA_WITH_3DES_EDE_CBC_SHA\n");
-            break;
-        case TLS_RSA_WITH_AES_128_CBC_SHA:
-            _psTrace("TLS_RSA_WITH_AES_128_CBC_SHA\n");
-            break;
-        case TLS_RSA_WITH_AES_256_CBC_SHA:
-            _psTrace("TLS_RSA_WITH_AES_256_CBC_SHA\n");
-            break;
-        case SSL_DHE_RSA_WITH_3DES_EDE_CBC_SHA:
-            _psTrace("SSL_DHE_RSA_WITH_3DES_EDE_CBC_SHA\n");
-            break;
-        case SSL_DH_anon_WITH_RC4_128_MD5:
-            _psTrace("SSL_DH_anon_WITH_RC4_128_MD5\n");
-            break;
-        case SSL_DH_anon_WITH_3DES_EDE_CBC_SHA:
-            _psTrace("SSL_DH_anon_WITH_3DES_EDE_CBC_SHA\n");
-            break;
-        case TLS_DHE_RSA_WITH_AES_128_CBC_SHA:
-            _psTrace("TLS_DHE_RSA_WITH_AES_128_CBC_SHA\n");
-            break;
-        case TLS_DHE_RSA_WITH_AES_256_CBC_SHA:
-            _psTrace("TLS_DHE_RSA_WITH_AES_256_CBC_SHA\n");
-            break;
-        case TLS_DHE_RSA_WITH_AES_128_CBC_SHA256:
-            _psTrace("TLS_DHE_RSA_WITH_AES_128_CBC_SHA256\n");
-            break;
-        case TLS_DHE_RSA_WITH_AES_256_CBC_SHA256:
-            _psTrace("TLS_DHE_RSA_WITH_AES_256_CBC_SHA256\n");
-            break;
-        case TLS_DH_anon_WITH_AES_128_CBC_SHA:
-            _psTrace("TLS_DH_anon_WITH_AES_128_CBC_SHA\n");
-            break;
-        case TLS_DH_anon_WITH_AES_256_CBC_SHA:
-            _psTrace("TLS_DH_anon_WITH_AES_256_CBC_SHA\n");
-            break;
-        case TLS_RSA_WITH_AES_128_CBC_SHA256:
-            _psTrace("TLS_RSA_WITH_AES_128_CBC_SHA256\n");
-            break;
-        case TLS_RSA_WITH_AES_256_CBC_SHA256:
-            _psTrace("TLS_RSA_WITH_AES_256_CBC_SHA256\n");
-            break;
-        case TLS_RSA_WITH_SEED_CBC_SHA:
-            _psTrace("TLS_RSA_WITH_SEED_CBC_SHA\n");
-            break;
-        case TLS_RSA_WITH_IDEA_CBC_SHA:
-            _psTrace("TLS_RSA_WITH_IDEA_CBC_SHA\n");
-            break;
-        case TLS_PSK_WITH_AES_128_CBC_SHA:
-            _psTrace("TLS_PSK_WITH_AES_128_CBC_SHA\n");
-            break;
-        case TLS_PSK_WITH_AES_128_CBC_SHA256:
-            _psTrace("TLS_PSK_WITH_AES_128_CBC_SHA256\n");
-            break;
-        case TLS_PSK_WITH_AES_256_CBC_SHA384:
-            _psTrace("TLS_PSK_WITH_AES_256_CBC_SHA384\n");
-            break;
-        case TLS_PSK_WITH_AES_256_CBC_SHA:
-            _psTrace("TLS_PSK_WITH_AES_256_CBC_SHA\n");
-            break;
-        case TLS_DHE_PSK_WITH_AES_128_CBC_SHA:
-            _psTrace("TLS_DHE_PSK_WITH_AES_128_CBC_SHA\n");
-            break;
-        case TLS_DHE_PSK_WITH_AES_256_CBC_SHA:
-            _psTrace("TLS_DHE_PSK_WITH_AES_256_CBC_SHA\n");
-            break;
-        case TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA:
-            _psTrace("TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA\n");
-            break;
-        case TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA:
-            _psTrace("TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA\n");
-            break;
-        case TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA:
-            _psTrace("TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA\n");
-            break;
-        case TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA:
-            _psTrace("TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA\n");
-            break;
-        case TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA:
-            _psTrace("TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA\n");
-            break;
-        case TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA:
-            _psTrace("TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA\n");
-            break;
-        case TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256:
-            _psTrace("TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256\n");
-            break;
-        case TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384:
-            _psTrace("TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384\n");
-            break;
-        case TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA:
-            _psTrace("TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA\n");
-            break;
-        case TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256:
-            _psTrace("TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256\n");
-            break;
-        case TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384:
-            _psTrace("TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384\n");
-            break;
-        case TLS_ECDH_RSA_WITH_AES_128_CBC_SHA:
-            _psTrace("TLS_ECDH_RSA_WITH_AES_128_CBC_SHA\n");
-            break;
-        case TLS_ECDH_RSA_WITH_AES_128_GCM_SHA256:
-            _psTrace("TLS_ECDH_RSA_WITH_AES_128_GCM_SHA256\n");
-            break;
-        case TLS_ECDH_RSA_WITH_AES_256_GCM_SHA384:
-            _psTrace("TLS_ECDH_RSA_WITH_AES_256_GCM_SHA384\n");
-            break;
-        case TLS_ECDH_RSA_WITH_AES_128_CBC_SHA256:
-            _psTrace("TLS_ECDH_RSA_WITH_AES_128_CBC_SHA256\n");
-            break;
-        case TLS_ECDH_RSA_WITH_AES_256_CBC_SHA384:
-            _psTrace("TLS_ECDH_RSA_WITH_AES_256_CBC_SHA384\n");
-            break;
-        case TLS_ECDH_RSA_WITH_AES_256_CBC_SHA:
-            _psTrace("TLS_ECDH_RSA_WITH_AES_256_CBC_SHA\n");
-            break;
-        case TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256:
-            _psTrace("TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256\n");
-            break;
-        case TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384:
-            _psTrace("TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384\n");
-            break;
-        case TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA256:
-            _psTrace("TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA256\n");
-            break;
-        case TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA384:
-            _psTrace("TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA384\n");
-            break;
-        case TLS_RSA_WITH_AES_128_GCM_SHA256:
-            _psTrace("TLS_RSA_WITH_AES_128_GCM_SHA256\n");
-            break;
-        case TLS_RSA_WITH_AES_256_GCM_SHA384:
-            _psTrace("TLS_RSA_WITH_AES_256_GCM_SHA384\n");
-            break;
-        case TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256:
-            _psTrace("TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256\n");
-            break;
-        case TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384:
-            _psTrace("TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384\n");
-            break;
-        case TLS_ECDH_ECDSA_WITH_AES_128_GCM_SHA256:
-            _psTrace("TLS_ECDH_ECDSA_WITH_AES_128_GCM_SHA256\n");
-            break;
-        case TLS_ECDH_ECDSA_WITH_AES_256_GCM_SHA384:
-            _psTrace("TLS_ECDH_ECDSA_WITH_AES_256_GCM_SHA384\n");
-            break;
-        case TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256:
-            _psTrace("TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256\n");
-            break;
-        case TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256:
-            _psTrace("TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256\n");
-            break;
-        default:
-            psTraceIntInfo("!!!! DEFINE ME %d !!!!\n", ssl->cipher->ident);
-        }
-    }
-    return;
-}
-#endif
 
 /******************************************************************************/
 /**
@@ -2556,7 +1944,7 @@ int32 matrixRegisterSession(ssl_t *ssl)
     Register the incoming masterSecret and cipher, which could still be null,
     depending on when we're called.
  */
-    memcpy(g_sessionTable[i].masterSecret, ssl->sec.masterSecret,
+    Memcpy(g_sessionTable[i].masterSecret, ssl->sec.masterSecret,
         SSL_HS_MASTER_SIZE);
     g_sessionTable[i].cipher = ssl->cipher;
     g_sessionTable[i].inUse += 1;
@@ -2570,11 +1958,11 @@ int32 matrixRegisterSession(ssl_t *ssl)
     random used to generate the master key, even if he had not seen it
     initially.
  */
-    memcpy(g_sessionTable[i].id + 4, ssl->sec.serverRandom,
+    Memcpy(g_sessionTable[i].id + 4, ssl->sec.serverRandom,
         min(SSL_HS_RANDOM_SIZE, SSL_MAX_SESSION_ID_SIZE) - 4);
     ssl->sessionIdLen = SSL_MAX_SESSION_ID_SIZE;
 
-    memcpy(ssl->sessionId, g_sessionTable[i].id, SSL_MAX_SESSION_ID_SIZE);
+    Memcpy(ssl->sessionId, g_sessionTable[i].id, SSL_MAX_SESSION_ID_SIZE);
 /*
     startTime is used to check expiry of the entry
 
@@ -2625,12 +2013,12 @@ int32 matrixClearSession(ssl_t *ssl, int32 remove)
  */
     if (remove)
     {
-        memset(ssl->sessionId, 0x0, SSL_MAX_SESSION_ID_SIZE);
+        Memset(ssl->sessionId, 0x0, SSL_MAX_SESSION_ID_SIZE);
         ssl->sessionIdLen = 0;
         ssl->flags &= ~SSL_FLAGS_RESUMED;
         /* Always preserve the id for chronList */
-        memset(g_sessionTable[i].id + 4, 0x0, SSL_MAX_SESSION_ID_SIZE - 4);
-        memset(g_sessionTable[i].masterSecret, 0x0, SSL_HS_MASTER_SIZE);
+        Memset(g_sessionTable[i].id + 4, 0x0, SSL_MAX_SESSION_ID_SIZE - 4);
+        Memset(g_sessionTable[i].masterSecret, 0x0, SSL_HS_MASTER_SIZE);
         g_sessionTable[i].extendedMasterSecret = 0;
         g_sessionTable[i].cipher = NULL;
     }
@@ -2671,7 +2059,7 @@ int32 matrixResumeSession(ssl_t *ssl)
     Expiration is done on daily basis (86400 seconds)
  */
     psGetTime(&accessTime, ssl->userPtr);
-    if ((memcmp(g_sessionTable[i].id, id,
+    if ((Memcmp(g_sessionTable[i].id, id,
              (uint32) min(ssl->sessionIdLen, SSL_MAX_SESSION_ID_SIZE)) != 0) ||
         (psDiffMsecs(g_sessionTable[i].startTime,   accessTime, ssl->userPtr) >
          SSL_SESSION_ENTRY_LIFE) || (g_sessionTable[i].majVer != ssl->majVer)
@@ -2698,7 +2086,7 @@ int32 matrixResumeSession(ssl_t *ssl)
     }
 
     /* Looks good */
-    memcpy(ssl->sec.masterSecret, g_sessionTable[i].masterSecret,
+    Memcpy(ssl->sec.masterSecret, g_sessionTable[i].masterSecret,
         SSL_HS_MASTER_SIZE);
     ssl->cipher = g_sessionTable[i].cipher;
     g_sessionTable[i].inUse += 1;
@@ -2749,12 +2137,12 @@ int32 matrixUpdateSession(ssl_t *ssl)
     }
     if (ssl->flags & SSL_FLAGS_ERROR)
     {
-        memset(g_sessionTable[i].masterSecret, 0x0, SSL_HS_MASTER_SIZE);
+        Memset(g_sessionTable[i].masterSecret, 0x0, SSL_HS_MASTER_SIZE);
         g_sessionTable[i].cipher = NULL;
         psUnlockMutex(&g_sessionTableLock);
         return PS_FAILURE;
     }
-    memcpy(g_sessionTable[i].masterSecret, ssl->sec.masterSecret,
+    Memcpy(g_sessionTable[i].masterSecret, ssl->sec.masterSecret,
         SSL_HS_MASTER_SIZE);
     g_sessionTable[i].cipher = ssl->cipher;
     psUnlockMutex(&g_sessionTableLock);
@@ -2781,7 +2169,7 @@ int32 matrixSslDeleteSessionTicketKey(sslKeys_t *keys, unsigned char name[16])
     prev = NULL;
     while (lkey)
     {
-        if (lkey->inUse == 0 && (memcmp(lkey->name, name, 16) == 0))
+        if (lkey->inUse == 0 && (Memcmp(lkey->name, name, 16) == 0))
         {
             if (prev == NULL)
             {
@@ -2871,7 +2259,7 @@ int32 matrixSslLoadSessionTicketKeys(sslKeys_t *keys,
         }
         if (i > SSL_SESSION_TICKET_LIST_LEN)
         {
-            psTraceInfo("Session ticket list > SSL_SESSION_TICKET_LIST_LEN\n");
+            psTraceErrr("Session ticket list > SSL_SESSION_TICKET_LIST_LEN\n");
             psUnlockMutex(&g_sessTicketLock);
             return PS_LIMIT_FAIL;
         }
@@ -2884,12 +2272,12 @@ int32 matrixSslLoadSessionTicketKeys(sslKeys_t *keys,
         prev->next = keylist;
     }
 
-    memset(keylist, 0x0, sizeof(psSessionTicketKeys_t));
+    Memset(keylist, 0x0, sizeof(psSessionTicketKeys_t));
     keylist->hashkeyLen = hashkeyLen;
     keylist->symkeyLen = symkeyLen;
-    memcpy(keylist->name, name, 16);
-    memcpy(keylist->hashkey, hashkey, hashkeyLen);
-    memcpy(keylist->symkey, symkey, symkeyLen);
+    Memcpy(keylist->name, name, 16);
+    Memcpy(keylist->hashkey, hashkey, hashkeyLen);
+    Memcpy(keylist->symkey, symkey, symkeyLen);
     psUnlockMutex(&g_sessTicketLock);
     return PS_SUCCESS;
 }
@@ -2971,9 +2359,9 @@ int32 matrixCreateSessionTicket(ssl_t *ssl, unsigned char *out, int32 *outLen)
     /* Ticket itself */
     keys = ssl->keys->sessTickets;
     /* name */
-    memcpy(c, keys->name, 16);
+    Memcpy(c, keys->name, 16);
     c += 16;
-    memcpy(c, randno, AES_IVLEN);
+    Memcpy(c, randno, AES_IVLEN);
     c += AES_IVLEN;
     enc = c; /* encrypt start */
     *c = ssl->majVer; c++;
@@ -2983,7 +2371,7 @@ int32 matrixCreateSessionTicket(ssl_t *ssl, unsigned char *out, int32 *outLen)
     /* Need to track if original handshake used extended master secret */
     *c = ssl->extFlags.extended_master_secret; c++;
 
-    memcpy(c, ssl->sec.masterSecret, SSL_HS_MASTER_SIZE);
+    Memcpy(c, ssl->sec.masterSecret, SSL_HS_MASTER_SIZE);
     c += SSL_HS_MASTER_SIZE;
 
     *c = (unsigned char) ((timeSecs & 0xFF000000) >> 24); c++;
@@ -3043,13 +2431,13 @@ static int32 getTicketKeys(ssl_t *ssl, unsigned char *c,
     short cachedTicket = 0;
 
     /* First 16 bytes are the key name */
-    memcpy(name, c, 16);
+    Memcpy(name, c, 16);
     *keys = NULL;
     /* check our cached list beginning with our own encryption key */
     lkey = ssl->keys->sessTickets;
     while (lkey)
     {
-        if (memcmp(lkey->name, name, 16) == 0)
+        if (Memcmp(lkey->name, name, 16) == 0)
         {
             lkey->inUse = 1;
             *keys = lkey;
@@ -3096,7 +2484,7 @@ static int32 getTicketKeys(ssl_t *ssl, unsigned char *c,
             {
                 lkey = lkey->next;
             }
-            if (memcmp(lkey->name, c, 16) != 0)
+            if (Memcmp(lkey->name, c, 16) != 0)
             {
                 return PS_FAILURE; /* user claims to have added, but... */
             }
@@ -3140,7 +2528,7 @@ int32 matrixUnlockSessionTicket(ssl_t *ssl, unsigned char *in, int32 inLen)
     if (getTicketKeys(ssl, c, &keys) < 0)
     {
         psUnlockMutex(&g_sessTicketLock);
-        psTraceInfo("No key found for session ticket\n");
+        psTraceErrr("No key found for session ticket\n");
         return PS_FAILURE;
     }
 
@@ -3155,7 +2543,7 @@ int32 matrixUnlockSessionTicket(ssl_t *ssl, unsigned char *in, int32 inLen)
     psHmacSha1Final(&dgst, hash);
 #   endif
 
-    memcpy(name, c, 16);
+    Memcpy(name, c, 16);
     c += 16;
 
     /* out is pointing at IV */
@@ -3170,9 +2558,9 @@ int32 matrixUnlockSessionTicket(ssl_t *ssl, unsigned char *in, int32 inLen)
 
     c += (len - 16 - L_HASHLEN); /* already moved past name */
 
-    if (memcmp(hash, c, L_HASHLEN) != 0)
+    if (Memcmp(hash, c, L_HASHLEN) != 0)
     {
-        psTraceInfo("HMAC check failure on session ticket\n");
+        psTraceErrr("HMAC check failure on session ticket\n");
         return PS_FAILURE;
     }
 #   undef L_HASHLEN
@@ -3183,7 +2571,7 @@ int32 matrixUnlockSessionTicket(ssl_t *ssl, unsigned char *in, int32 inLen)
     /* Match protcol version */
     if (majVer != ssl->majVer || minVer != ssl->minVer)
     {
-        psTraceInfo("Protocol check failure on session ticket\n");
+        psTraceErrr("Protocol check failure on session ticket\n");
         return PS_FAILURE;
     }
 
@@ -3193,7 +2581,7 @@ int32 matrixUnlockSessionTicket(ssl_t *ssl, unsigned char *in, int32 inLen)
     /* Force cipher suite */
     if ((ssl->cipher = sslGetCipherSpec(ssl, cipherSuite)) == NULL)
     {
-        psTraceInfo("Cipher suite check failure on session ticket\n");
+        psTraceErrr("Cipher suite check failure on session ticket\n");
         return PS_FAILURE;
     }
 
@@ -3203,13 +2591,13 @@ int32 matrixUnlockSessionTicket(ssl_t *ssl, unsigned char *in, int32 inLen)
         then we can stop resumption right now */
     if (*enc == 0x0 && ssl->extFlags.require_extended_master_secret == 1)
     {
-        psTraceInfo("Ticket and master secret derivation methods differ\n");
+        psTraceErrr("Ticket and master secret derivation methods differ\n");
         return PS_FAILURE;
     }
     ssl->extFlags.require_extended_master_secret = *enc; enc++;
 
     /* Set aside masterSecret */
-    memcpy(ssl->sid->masterSecret, enc, SSL_HS_MASTER_SIZE);
+    Memcpy(ssl->sid->masterSecret, enc, SSL_HS_MASTER_SIZE);
     enc += SSL_HS_MASTER_SIZE;
 
     /* Check lifetime */
@@ -3223,7 +2611,7 @@ int32 matrixUnlockSessionTicket(ssl_t *ssl, unsigned char *in, int32 inLen)
     if ((now - time) > (SSL_SESSION_ENTRY_LIFE / 1000))
     {
         /* Expired session ticket.  New one will be issued */
-        psTraceInfo("Session ticket was expired\n");
+        psTraceErrr("Session ticket was expired\n");
         return PS_FAILURE;
     }
     ssl->sid->cipherId = cipherSuite;
@@ -3254,6 +2642,13 @@ int32 matrixSslGetSessionId(ssl_t *ssl, sslSessionId_t *session)
         return PS_ARG_FAIL;
     }
 
+# ifdef USE_TLS_1_3
+    if (USING_TLS_1_3(ssl))
+    {
+        return PS_SUCCESS;
+    }
+# endif
+
     if (ssl->cipher != NULL && ssl->cipher->ident != SSL_NULL_WITH_NULL_NULL &&
         ssl->sessionIdLen == SSL_MAX_SESSION_ID_SIZE)
     {
@@ -3270,8 +2665,8 @@ int32 matrixSslGetSessionId(ssl_t *ssl, sslSessionId_t *session)
         }
 # endif
         session->cipherId = ssl->cipher->ident;
-        memcpy(session->id, ssl->sessionId, ssl->sessionIdLen);
-        memcpy(session->masterSecret, ssl->sec.masterSecret,
+        Memcpy(session->id, ssl->sessionId, ssl->sessionIdLen);
+        Memcpy(session->masterSecret, ssl->sec.masterSecret,
             SSL_HS_MASTER_SIZE);
         return PS_SUCCESS;
     }
@@ -3280,7 +2675,7 @@ int32 matrixSslGetSessionId(ssl_t *ssl, sslSessionId_t *session)
         session->sessionTicket != NULL && session->sessionTicketLen > 0)
     {
         session->cipherId = ssl->cipher->ident;
-        memcpy(session->masterSecret, ssl->sec.masterSecret,
+        Memcpy(session->masterSecret, ssl->sec.masterSecret,
             SSL_HS_MASTER_SIZE);
         return PS_SUCCESS;
     }
@@ -3317,7 +2712,7 @@ int32 matrixSslCreateALPNext(psPool_t *pool, int32 protoCount,
     {
         return PS_MEM_FAIL;
     }
-    memset(c, 0, len);
+    Memset(c, 0, len);
     *extOut = c;
     *extLen = len;
 
@@ -3326,7 +2721,7 @@ int32 matrixSslCreateALPNext(psPool_t *pool, int32 protoCount,
     for (i = 0; i < protoCount; i++)
     {
         *c = protoLen[i]; c++;
-        memcpy(c, proto[i], protoLen[i]);
+        Memcpy(c, proto[i], protoLen[i]);
         c += protoLen[i];
     }
     return PS_SUCCESS;
@@ -3345,7 +2740,7 @@ int32 matrixSslCreateSNIext(psPool_t *pool, unsigned char *host, int32 hostLen,
     {
         return PS_MEM_FAIL;
     }
-    memset(c, 0, *extLen);
+    Memset(c, 0, *extLen);
     *extOut = c;
 
     *c = ((hostLen + 3) & 0xFF00) >> 8; c++;
@@ -3353,7 +2748,7 @@ int32 matrixSslCreateSNIext(psPool_t *pool, unsigned char *host, int32 hostLen,
     c++; /* host_name enum */
     *c = (hostLen & 0xFF00) >> 8; c++;
     *c = hostLen  & 0xFF; c++;
-    memcpy(c, host, hostLen);
+    Memcpy(c, host, hostLen);
     return PS_SUCCESS;
 }
 #endif /* USE_CLIENT_SIDE_SSL */
@@ -3364,24 +2759,35 @@ int32 matrixSslCreateSNIext(psPool_t *pool, unsigned char *host, int32 hostLen,
     If client sent a ServerNameIndication extension, see if we have those
     keys to load
  */
-int32 matrixServerSetKeysSNI(ssl_t *ssl, char *host, int32 hostLen)
+sslKeys_t *matrixServerGetKeysSNI(ssl_t *ssl, char *host, int32 hostLen)
 {
-    sslKeys_t *keys;
+    sslKeys_t *keys = NULL;
 
     if (ssl->sni_cb)
     {
         ssl->extFlags.sni = 1; /* extension was actually handled */
-        keys = NULL;
         (ssl->sni_cb)((void *) ssl, host, hostLen, &keys);
-        if (keys)
+    }
+    return keys;
+}
+
+int32 matrixServerSetKeysSNI(ssl_t *ssl, char *host, int32 hostLen)
+{
+    sslKeys_t *keys;
+
+    keys = matrixServerGetKeysSNI(ssl, host, hostLen);
+    if (ssl->extFlags.sni)
+    {
+        if (keys == NULL)
+        {
+            return PS_UNSUPPORTED_FAIL; /* callback didn't provide keys */
+        }
+        else
         {
             ssl->keys = keys;
-            return 0;
         }
-        return PS_UNSUPPORTED_FAIL; /* callback didn't provide keys */
     }
-
-    return 0; /* No callback registered.  Go with default */
+    return PS_SUCCESS;
 }
 #endif /* USE_SERVER_SIDE_SSL */
 
@@ -3471,11 +2877,11 @@ static int wildcardMatch(char *wild, char *s)
         {
             return -1;
         }
-        if (strchr(s, '@'))
+        if (Strchr(s, '@'))
         {
             return -1;
         }
-        if ((e = strchr(s, '.')) == NULL)
+        if ((e = Strchr(s, '.')) == NULL)
         {
             return -1;
         }
@@ -3502,7 +2908,7 @@ static int matchEmail(char *email, int32 emailLen,
 {
     int32_t at_i;
 
-    if (strlen(expectedEmail) != emailLen)
+    if (Strlen(expectedEmail) != emailLen)
     {
         return 0;
     }
@@ -3520,7 +2926,7 @@ static int matchEmail(char *email, int32 emailLen,
         }
         /* Case-sensitive match for the local part,
            case-insensitive for the host part. */
-        if (((strncmp(email,
+        if (((Strncmp(email,
                   expectedEmail, at_i)) == 0) &&
             (strcasecmp(email + at_i,
                  expectedEmail + at_i) == 0))
@@ -3552,7 +2958,7 @@ int32 matrixValidateCerts(psPool_t *pool, psX509Cert_t *subjectCerts,
 {
     matrixValidateCertsOptions_t options;
 
-    memset(&options, 0, sizeof(matrixValidateCertsOptions_t));
+    Memset(&options, 0, sizeof(matrixValidateCertsOptions_t));
 
     /*
        By default, earlier versions of matrixValidateCerts checked
@@ -3616,7 +3022,7 @@ int32 matrixValidateCertsExt(psPool_t *pool, psX509Cert_t *subjectCerts,
         {
             if (psX509ValidateGeneralName(expectedName) < 0)
             {
-                psTraceInfo("expectedName is not a valid GeneralName\n");
+                psTraceErrr("expectedName is not a valid GeneralName\n");
                 return PS_ARG_FAIL;
             }
         }
@@ -3676,7 +3082,7 @@ int32 matrixValidateCertsExt(psPool_t *pool, psX509Cert_t *subjectCerts,
                 /* Make sure the pathLen is not exceeded */
                 if (ic->extensions.bc.pathLenConstraint < pathLen)
                 {
-                    psTraceInfo("Authentication failed due to X.509 pathLen\n");
+                    psTraceErrr("Authentication failed due to X.509 pathLen\n");
                     sc->authStatus = PS_CERT_AUTH_FAIL_PATH_LEN;
                     return PS_CERT_AUTH_FAIL_PATH_LEN;
                 }
@@ -3698,7 +3104,7 @@ int32 matrixValidateCertsExt(psPool_t *pool, psX509Cert_t *subjectCerts,
             /* Make sure the pathLen is not exceeded */
             if (ic->extensions.bc.pathLenConstraint < pathLen)
             {
-                psTraceInfo("Authentication failed due to X.509 pathLen\n");
+                psTraceErrr("Authentication failed due to X.509 pathLen\n");
                 sc->authStatus = PS_CERT_AUTH_FAIL_PATH_LEN;
                 return PS_CERT_AUTH_FAIL_PATH_LEN;
             }
@@ -3732,7 +3138,7 @@ int32 matrixValidateCertsExt(psPool_t *pool, psX509Cert_t *subjectCerts,
                     Subtract one from pathLen in this case since one got
                     added when it was truly just self-authenticating */
                 if (ic->signatureLen == sc->signatureLen &&
-                    (memcmp(ic->signature, sc->signature,
+                    (Memcmp(ic->signature, sc->signature,
                          sc->signatureLen) == 0))
                 {
                     if (pathLen > 0)
@@ -3742,7 +3148,7 @@ int32 matrixValidateCertsExt(psPool_t *pool, psX509Cert_t *subjectCerts,
                 }
                 if (ic->extensions.bc.pathLenConstraint < pathLen)
                 {
-                    psTraceInfo("Authentication failed due to X.509 pathLen\n");
+                    psTraceErrr("Authentication failed due to X.509 pathLen\n");
                     rc = sc->authStatus = PS_CERT_AUTH_FAIL_PATH_LEN;
                     return rc;
                 }
@@ -3832,13 +3238,13 @@ int32 matrixValidateCertsExt(psPool_t *pool, psX509Cert_t *subjectCerts,
                     if (opts->nameType == NAME_TYPE_ANY ||
                         opts->nameType == NAME_TYPE_SAN_IP_ADDRESS)
                     {
-                        snprintf(ip, 15, "%u.%u.%u.%u",
+                        Snprintf(ip, 15, "%u.%u.%u.%u",
                             (unsigned char) (n->data[0]),
                             (unsigned char ) (n->data[1]),
                             (unsigned char ) (n->data[2]),
                             (unsigned char ) (n->data[3]));
                         ip[15] = '\0';
-                        if (strcmp(ip, expectedName) == 0)
+                        if (Strcmp(ip, expectedName) == 0)
                         {
                             return rc;
                         }
@@ -3888,7 +3294,7 @@ int32 matrixValidateCertsExt(psPool_t *pool, psX509Cert_t *subjectCerts,
             }
 # endif     /* ALWAYS_CHECK_SUBJECT_CN_IN_HOSTNAME_VALIDATION */
 
-            psTraceInfo("Authentication failed: no matching subject\n");
+            psTraceErrr("Authentication failed: no matching subject\n");
             subjectCerts->authFailFlags |= PS_CERT_AUTH_FAIL_SUBJECT_FLAG;
             rc = subjectCerts->authStatus = PS_CERT_AUTH_FAIL_EXTENSION;
             return rc;
@@ -3977,4 +3383,3 @@ void matrixsslUpdateStat(ssl_t *ssl, int32 type, int32 value)
 
 #endif /* USE_MATRIXSSL_STATS */
 /******************************************************************************/
-

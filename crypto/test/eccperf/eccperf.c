@@ -31,7 +31,17 @@
  *      http://www.gnu.org/copyleft/gpl.html
  */
 /******************************************************************************/
+#ifndef _POSIX_C_SOURCE
+# define _POSIX_C_SOURCE 200112L
+#endif
 
+#ifndef NEED_PS_TIME_CONCRETE
+# define NEED_PS_TIME_CONCRETE
+#endif
+
+#include "coreApi.h"
+#include "osdep-types.h"
+#include "osdep_stdio.h"
 #include "crypto/cryptoImpl.h"
 
 #ifdef USE_ECC
@@ -199,8 +209,8 @@ const static keyList_t keys[] = {
  */
 
 # ifdef STATS
-#  include <unistd.h>
-#  include <fcntl.h>
+#  include "osdep_unistd.h"
+#  include "osdep_fcntl.h"
 #  ifdef USE_HIGHRES_TIME
 #   define TIME_STRING "\t%lld"
 #  else
@@ -232,14 +242,14 @@ int main(int argc, char **argv)
     }
     _psTraceStr("STARTING ECCPERF\n", NULL);
 # ifdef STATS
-    if ((sfd = fopen("perfstat.txt", "w")) == NULL)
+    if ((sfd = Fopen("perfstat.txt", "w")) == NULL)
     {
         return PS_FAILURE;
     }
 #  ifdef USE_HIGHRES_TIME
-    fprintf(sfd, "Key\tSign(usec)\tVerify\tEncrypt\tDecrypt\n");
+    Fprintf(sfd, "Key\tSign(usec)\tVerify\tEncrypt\tDecrypt\n");
 #  else
-    fprintf(sfd, "Key\tSign(msec)\tVerify\tEncrypt\tDecrypt\n");
+    Fprintf(sfd, "Key\tSign(msec)\tVerify\tEncrypt\tDecrypt\n");
 #  endif
 # endif /* STATS */
 
@@ -247,12 +257,12 @@ int main(int argc, char **argv)
     {
         _psTraceStr("Testing %s...\n", keys[i].name);
 # ifdef STATS
-        fprintf(sfd, "%s", keys[i].name);
+        Fprintf(sfd, "%s", keys[i].name);
 # endif
         if (psEccParsePrivKey(misc, (unsigned char *) keys[i].key, keys[i].len,
                 &privkey, NULL) < 0)
         {
-            _psTrace("	FAILED OPERATION:ParsePriv\n");
+            _psTrace("  FAILED OPERATION:ParsePriv\n");
             exit(0);
         }
 
@@ -272,7 +282,7 @@ int main(int argc, char **argv)
         {
             if (psEccGenKey(pool, &eccKey, privkey.curve, NULL) < 0)
             {
-                _psTrace("	FAILED OPERATION:GenKey\n");
+                _psTrace("      FAILED OPERATION:GenKey\n");
             }
             else
             {
@@ -284,14 +294,14 @@ int main(int argc, char **argv)
         _psTraceInt(TIME_UNITS "/genkey ", t);
         _psTraceInt("(%d per sec)\n", PER_SEC(t));
 #  ifdef STATS
-        fprintf(sfd, TIME_STRING, t);
+        Fprintf(sfd, TIME_STRING, t);
 #  endif
 # endif /* MAKE_KEY_OP */
 
 # ifdef SHARED_SECRET_OP
         if (psEccGenKey(pool, &eccKey, privkey.curve, NULL) < 0)
         {
-            _psTrace("	FAILED OPERATION:GenKeySharedSecret\n");
+            _psTrace("  FAILED OPERATION:GenKeySharedSecret\n");
         }
         psGetTime(&start, NULL);
         for (iter = 0; iter < keys[i].iter; iter++)
@@ -300,7 +310,7 @@ int main(int argc, char **argv)
             if (psEccGenSharedSecret(pool, &privkey, &eccKey,
                     out, &signLen, NULL) < 0 || signLen != privkey.curve->size)
             {
-                _psTrace("	FAILED OPERATION:SharedSecret\n");
+                _psTrace("      FAILED OPERATION:SharedSecret\n");
             }
         }
         psGetTime(&end, NULL);
@@ -309,7 +319,7 @@ int main(int argc, char **argv)
         _psTraceInt(TIME_UNITS "/sharedsecret ", t);
         _psTraceInt("(%d per sec)\n", PER_SEC(t));
 #  ifdef STATS
-        fprintf(sfd, TIME_STRING, t);
+        Fprintf(sfd, TIME_STRING, t);
 #  endif
 # endif /* SHARED_SECRET_OP */
 
@@ -321,7 +331,7 @@ int main(int argc, char **argv)
             if (psEccDsaSign(pool, &privkey,
                     in, sizeof(in), out, &signLen, 1, NULL) < 0)
             {
-                _psTrace("	FAILED OPERATION: SignHash\n");
+                _psTrace("      FAILED OPERATION: SignHash\n");
             }
         }
         psGetTime(&end, NULL);
@@ -329,7 +339,7 @@ int main(int argc, char **argv)
         _psTraceInt(TIME_UNITS "/sign ", t);
         _psTraceInt("(%d per sec)\n", PER_SEC(t));
 #  ifdef STATS
-        fprintf(sfd, TIME_STRING, t);
+        Fprintf(sfd, TIME_STRING, t);
 #  endif
 # endif /* SIGN_OP */
 
@@ -343,7 +353,7 @@ int main(int argc, char **argv)
                     out + 2, signLen - 2,
                     &validateStatus, NULL) < 0 || validateStatus != 1)
             {
-                _psTrace("	FAILED OPERATION:VerifySignature\n");
+                _psTrace("      FAILED OPERATION:VerifySignature\n");
             }
         }
         psGetTime(&end, NULL);
@@ -351,7 +361,7 @@ int main(int argc, char **argv)
         _psTraceInt(TIME_UNITS "/verify ", t);
         _psTraceInt("(%d per sec)\n", PER_SEC(t));
 #  ifdef STATS
-        fprintf(sfd, TIME_STRING, t);
+        Fprintf(sfd, TIME_STRING, t);
 #  endif
 # endif /* VERIFY_OP */
 
@@ -362,7 +372,7 @@ int main(int argc, char **argv)
     }
 
 # ifdef STATS
-    fclose(sfd);
+    Fclose(sfd);
 # endif
 # ifdef WIN32
     _psTrace("Press any key to close");
@@ -376,8 +386,7 @@ int main(int argc, char **argv)
 #else
 int main(int argc, char **argv)
 {
-    printf("USE_ECC not defined.\n");
+    Printf("USE_ECC not defined.\n");
     return 0;
 }
 #endif /* USE_ECC */
-

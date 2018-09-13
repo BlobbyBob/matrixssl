@@ -123,7 +123,7 @@ int32_t psRc2Encrypt(psRc2Cbc_t *ctx, const unsigned char *pt,
         pt += RC2_BLOCKLEN;
     }
 
-    memset(tmp, 0x0, sizeof(tmp));
+    Memset(tmp, 0x0, sizeof(tmp));
     return len;
 }
 
@@ -161,8 +161,8 @@ int32_t psRc2Decrypt(psRc2Cbc_t *ctx, const unsigned char *ct,
         ct += RC2_BLOCKLEN;
         pt += RC2_BLOCKLEN;
     }
-    memset(tmp, 0x0, sizeof(tmp));
-    memset(tmp2, 0x0, sizeof(tmp2));
+    Memset(tmp, 0x0, sizeof(tmp));
+    Memset(tmp2, 0x0, sizeof(tmp2));
 
     return len;
 }

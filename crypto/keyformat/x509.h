@@ -61,6 +61,8 @@ enum
    only comparing date. */
 #  define PS_CRL_TIME_LINGER (24 * 60 * 60)
 
+#  define PS_GENERALIZEDTIME_INDEFINITE "99991231235959Z"
+
 /* Parsing flags */
 #  define CERT_STORE_UNPARSED_BUFFER  0x1
 #  define CERT_STORE_DN_BUFFER        0x2
@@ -583,8 +585,10 @@ typedef struct psCRL
     unsigned char *sig;
     psSize_t sigLen;
     uint16_t expired;
+#ifdef USE_CERT_PARSE
     x509DNattributes_t issuer;
     x509v3extensions_t extensions;
+#endif
     x509revoked_t *revoked;
     struct psCRL *next;
 } psX509Crl_t;
@@ -620,6 +624,10 @@ typedef struct psCert
     int32 certAlgorithm;              /* TBSCertificate sig alg OID */
     unsigned char *signature;
     psSize_t signatureLen;
+#  ifdef USE_ED25519
+    unsigned char *tbsCertStart;
+    psSizeL_t tbsCertLen;
+#  endif
 #  ifdef USE_PKCS1_PSS
     int32 pssHash;               /* RSAPSS sig hash OID */
     int32 maskGen;               /* RSAPSS maskgen OID */
@@ -757,7 +765,7 @@ extern int32_t psX509GetOnelineDN(const x509DNattributes_t *DN,
 
 #  ifdef USE_OCSP_RESPONSE
 #   include <time.h>
-#   include <stdbool.h>
+#   include "osdep_stdbool.h"
 
 /* The default value of allowed mismatch in times in OCSP messages and the local
    clock. */

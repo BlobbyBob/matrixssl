@@ -104,7 +104,7 @@ int32_t dtlsComputeCookie(ssl_t *ssl, unsigned char *helloBytes, int32 helloLen)
     if (rc >= 0)
     {
         /* Truncate hash output if necessary */
-        memcpy(ssl->srvCookie, out, DTLS_COOKIE_SIZE);
+        Memcpy(ssl->srvCookie, out, DTLS_COOKIE_SIZE);
     }
     memzero_s(out, DTLS_COOKIE_SIZE);
     return rc;
@@ -174,9 +174,10 @@ int32 dtlsWriteCertificate(ssl_t *ssl, int32 certLen, int32 lsize,
     *tmp = ((certLen + (lsize - 3)) & 0xFF00) >> 8; tmp++;
     *tmp = ((certLen + (lsize - 3)) & 0xFF); tmp++;
 
+# ifdef USE_IDENTITY_CERTIFICATES
     if (certLen > 0)
     {
-        cert = ssl->keys->cert;
+        cert = ssl->chosenIdentity->cert;
         while (cert)
         {
             certLen = cert->binLen;
@@ -185,13 +186,13 @@ int32 dtlsWriteCertificate(ssl_t *ssl, int32 certLen, int32 lsize,
                 *tmp = (unsigned char) ((certLen & 0xFF0000) >> 16); tmp++;
                 *tmp = (certLen & 0xFF00) >> 8; tmp++;
                 *tmp = (certLen & 0xFF); tmp++;
-                memcpy(tmp, cert->unparsedBin, certLen);
+                Memcpy(tmp, cert->unparsedBin, certLen);
                 tmp += certLen;
             }
             cert = cert->next;
         }
     }
-
+# endif
 /*
     Fragment it
  */
@@ -313,7 +314,7 @@ int32 dtlsWriteCertificateRequest(psPool_t *pool, ssl_t *ssl, int32 certLen,
         {
             *tmp = (cert->subject.dnencLen & 0xFF00) >> 8; tmp++;
             *tmp = cert->subject.dnencLen & 0xFF; tmp++;
-            memcpy(tmp, cert->subject.dnenc, cert->subject.dnencLen);
+            Memcpy(tmp, cert->subject.dnenc, cert->subject.dnencLen);
             tmp += cert->subject.dnencLen;
             cert = cert->next;
         }
@@ -406,7 +407,7 @@ static int32 fragmentHSMessage(ssl_t *ssl, unsigned char *msg, int32 msgLen,
         c += psWriteHandshakeHeader(ssl, (unsigned char) hsType, msgLen,
             ssl->msn, offset, fragLen, c);
 
-        memcpy(c, msg, fragLen);
+        Memcpy(c, msg, fragLen);
         msg += fragLen;
         c += fragLen;
         offset += fragLen;
@@ -447,7 +448,7 @@ static int32 postponeEncryptFragRecord(ssl_t *ssl, int32 padLen,
     {
         return PS_MEM_FAIL;
     }
-    memset(flight, 0x0, sizeof(flightEncode_t));
+    Memset(flight, 0x0, sizeof(flightEncode_t));
     if (ssl->flightEncode == NULL)
     {
         ssl->flightEncode = flight;
@@ -516,7 +517,7 @@ int32 dtlsEncryptFragRecord(ssl_t *ssl, flightEncode_t *msg,
             sent at all.  We deal with this by flaging the first fragment
             and manually tweaking the fragLen value.
          */
-        memcpy(fakeHeader, updateHash, ssl->hshakeHeadLen);
+        Memcpy(fakeHeader, updateHash, ssl->hshakeHeadLen);
 /*
         A bit ugly.  The fragLen is the final three bytes of the header
  */
@@ -592,7 +593,7 @@ int32 dtlsHsHashFragMsg(ssl_t *ssl)
             if (nextOffset == 0)
             {
                 headLen = SSL3_HANDSHAKE_HEADER_LEN + DTLS_HEADER_ADD_LEN;
-                memcpy(fakeHeader, ssl->fragHeaders[i].hsHeader, headLen);
+                Memcpy(fakeHeader, ssl->fragHeaders[i].hsHeader, headLen);
 /*
                 First byte is 'type'.  Next three are total length.  Final
                 three are fragLen.
@@ -689,7 +690,7 @@ int32 dtlsChkReplayWindow(ssl_t *ssl, unsigned char *seq64)
         {
             ssl->lastRsn[0] = 1;       /* This packet has a "way larger" */
         }
-        memcpy(ssl->lastRsn, seq64, 6);
+        Memcpy(ssl->lastRsn, seq64, 6);
         return 1;                   /* larger is good */
     }
     diff = lastSeq - seq;
@@ -855,14 +856,14 @@ static int32 dtlsRevertWriteCipher(ssl_t *ssl)
     ssl->nativeEnMacSize = ssl->oenNativeHmacSize;
     ssl->enIvSize = ssl->oenIvSize;
     ssl->enBlockSize = ssl->oenBlockSize;
-    memcpy(ssl->sec.writeIV, ssl->owriteIV, ssl->oenIvSize);
+    Memcpy(ssl->sec.writeIV, ssl->owriteIV, ssl->oenIvSize);
 # ifdef USE_NATIVE_TLS_ALGS
-    memcpy(ssl->sec.writeMAC, ssl->owriteMAC, ssl->oenMacSize);
-    memcpy(&ssl->sec.encryptCtx, &ssl->oencryptCtx,
+    Memcpy(ssl->sec.writeMAC, ssl->owriteMAC, ssl->oenMacSize);
+    Memcpy(&ssl->sec.encryptCtx, &ssl->oencryptCtx,
         sizeof(psCipherContext_t));
 # endif
 # ifdef ENABLE_SECURE_REHANDSHAKES
-    memcpy(ssl->myVerifyData, ssl->omyVerifyData, ssl->omyVerifyDataLen);
+    Memcpy(ssl->myVerifyData, ssl->omyVerifyData, ssl->omyVerifyDataLen);
     ssl->myVerifyDataLen = ssl->omyVerifyDataLen;
 # endif /* ENABLE_SECURE_REHANDSHAKES */
 
@@ -1232,4 +1233,3 @@ int32 matrixDtlsSentData(ssl_t *ssl, uint32 bytes)
 }
 
 #endif /* USE_DTLS */
-

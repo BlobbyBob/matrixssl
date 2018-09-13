@@ -58,7 +58,7 @@ uint32_t getAsnTagLenUnsafe(const unsigned char *p)
             return 0; /* Too large length. */
         }
         /* Note: */
-        memcpy(lenbytes + 3 - len, p + 2, len);
+        Memcpy(lenbytes + 3 - len, p + 2, len);
         len =
             len + 2 +
             ((lenbytes[0] << 16) |
@@ -80,9 +80,9 @@ uint32_t getAsnTagLenUnsafe(const unsigned char *p)
     Indefinite length formats return ASN_UNKNOWN_LEN and *len will simply
     be updated with the overall remaining length
  */
-int32_t getAsnLength(const unsigned char **pp, psSize_t size, psSize_t *len)
+int32_t getAsnLength(const unsigned char **pp, psSizeL_t size, psSize_t *len)
 {
-    uint32_t len32 = 0;
+    psSize32_t len32 = 0;
     int32_t rc;
 
     if ((rc = getAsnLength32(pp, size, &len32, 0)) < 0)
@@ -93,7 +93,7 @@ int32_t getAsnLength(const unsigned char **pp, psSize_t size, psSize_t *len)
     return PS_SUCCESS;
 }
 
-int32_t getAsnLength32(const unsigned char **pp, uint32_t size, uint32_t *len,
+int32_t getAsnLength32(const unsigned char **pp, psSizeL_t size, psSize32_t *len,
     uint32_t indefinite)
 {
     const unsigned char *c, *end;
@@ -187,8 +187,8 @@ int32_t getAsnLength32(const unsigned char **pp, uint32_t size, uint32_t *len,
     Move pp to the first character in the sequence
  */
 /* #define DISABLE_STRICT_ASN_LENGTH_CHECK */
-int32_t getAsnSequence32(const unsigned char **pp, uint32_t size,
-    uint32_t *len, uint32_t indefinite)
+int32_t getAsnSequence32(const unsigned char **pp, psSizeL_t size,
+    psSize32_t *len, uint32_t indefinite)
 {
     const unsigned char *p = *pp;
     int32_t rc;
@@ -217,7 +217,7 @@ int32_t getAsnSequence32(const unsigned char **pp, uint32_t size,
     return rc;
 }
 
-int32_t getAsnSequence(const unsigned char **pp, psSize_t size, psSize_t *len)
+int32_t getAsnSequence(const unsigned char **pp, psSizeL_t size, psSize_t *len)
 {
     uint32_t len32 = 0;
     int32_t rc;
@@ -235,7 +235,7 @@ int32_t getAsnSequence(const unsigned char **pp, psSize_t size, psSize_t *len)
     Extract a set length from the DER stream.  Will also test that there
     is enough data available to hold it all.  Returns LIMIT_FAIL if not.
  */
-int32_t getAsnSet32(const unsigned char **pp, uint32_t size, uint32_t *len,
+int32_t getAsnSet32(const unsigned char **pp, psSizeL_t size, psSize32_t *len,
     uint32_t indefinite)
 {
     const unsigned char *p = *pp;
@@ -257,7 +257,7 @@ int32_t getAsnSet32(const unsigned char **pp, uint32_t size, uint32_t *len,
     return rc;
 }
 
-int32_t getAsnSet(const unsigned char **pp, psSize_t size, psSize_t *len)
+int32_t getAsnSet(const unsigned char **pp, psSizeL_t size, psSize_t *len)
 {
     uint32_t len32 = 0;
     int32_t rc;
@@ -273,7 +273,7 @@ int32_t getAsnSet(const unsigned char **pp, psSize_t size, psSize_t *len)
 /*
     Get an enumerated value
  */
-int32_t getAsnEnumerated(const unsigned char **pp, uint32_t len, int32_t *val)
+int32_t getAsnEnumerated(const unsigned char **pp, psSizeL_t size, int32_t *val)
 {
     const unsigned char *p = *pp, *end;
     uint32_t ui, slen;
@@ -281,9 +281,9 @@ int32_t getAsnEnumerated(const unsigned char **pp, uint32_t len, int32_t *val)
     uint32_t vlen;
 
     rc = PS_PARSE_FAIL;
-    end = p + len;
-    if (len < 1 || *(p++) != ASN_ENUMERATED ||
-        ((rc = getAsnLength32(&p, len - 1, &vlen, 0)) < 0))
+    end = p + size;
+    if (size < 1 || *(p++) != ASN_ENUMERATED ||
+        ((rc = getAsnLength32(&p, size - 1, &vlen, 0)) < 0))
     {
         psTraceCrypto("ASN getInteger failed from the start\n");
         return rc;
@@ -334,7 +334,7 @@ int32_t getAsnEnumerated(const unsigned char **pp, uint32_t len, int32_t *val)
 /*
     Get an integer
  */
-int32_t getAsnInteger(const unsigned char **pp, uint32_t len, int32_t *val)
+int32_t getAsnInteger(const unsigned char **pp, psSizeL_t size, int32_t *val)
 {
     const unsigned char *p = *pp, *end;
     uint32_t ui, slen;
@@ -342,9 +342,9 @@ int32_t getAsnInteger(const unsigned char **pp, uint32_t len, int32_t *val)
     uint32_t vlen;
 
     rc = PS_PARSE_FAIL;
-    end = p + len;
-    if (len < 1 || *(p++) != ASN_INTEGER ||
-        ((rc = getAsnLength32(&p, len - 1, &vlen, 0)) < 0))
+    end = p + size;
+    if (size < 1 || *(p++) != ASN_INTEGER ||
+        ((rc = getAsnLength32(&p, size - 1, &vlen, 0)) < 0))
     {
         psTraceCrypto("ASN getInteger failed from the start\n");
         return rc;
@@ -395,7 +395,7 @@ int32_t getAsnInteger(const unsigned char **pp, uint32_t len, int32_t *val)
 /*
     Implementation specific OID parser
  */
-int32_t getAsnAlgorithmIdentifier(const unsigned char **pp, uint32_t len,
+int32_t getAsnAlgorithmIdentifier(const unsigned char **pp, psSizeL_t size,
     int32_t *oi, psSize_t *paramLen)
 {
     const unsigned char *p = *pp, *end;
@@ -403,8 +403,8 @@ int32_t getAsnAlgorithmIdentifier(const unsigned char **pp, uint32_t len,
     uint32_t llen;
 
     rc = PS_PARSE_FAIL;
-    end = p + len;
-    if (len < 1 || (rc = getAsnSequence32(&p, len, &llen, 0)) < 0)
+    end = p + size;
+    if (size < 1 || (rc = getAsnSequence32(&p, size, &llen, 0)) < 0)
     {
         psTraceCrypto("getAsnAlgorithmIdentifier failed on inital parse\n");
         return rc;
@@ -428,7 +428,7 @@ int32_t getAsnAlgorithmIdentifier(const unsigned char **pp, uint32_t len,
     at least MAX_OID_LEN elements.
     @return Number of OID elements written to 'oid', 0 on error.
  */
-uint8_t asnParseOid(const unsigned char *der, psSize_t derlen,
+uint8_t asnParseOid(const unsigned char *der, psSizeL_t derlen,
     uint32_t oid[MAX_OID_LEN])
 {
     const unsigned char *end;
@@ -513,8 +513,10 @@ static void checkAsnOidDatabase(int32_t *oi,
         case OID_SHA384_ALG: oid_hex = OID_SHA384_ALG_HEX; break;
         case OID_SHA512_ALG: oid_hex = OID_SHA512_ALG_HEX; break;
         case OID_MD2_ALG: oid_hex = OID_MD2_ALG_HEX; break;
+        case OID_MD4_ALG: oid_hex = OID_MD4_ALG_HEX; break;
         case OID_MD5_ALG: oid_hex = OID_MD5_ALG_HEX; break;
         case OID_MD2_RSA_SIG: oid_hex = OID_MD2_RSA_SIG_HEX; break;
+        case OID_MD4_RSA_SIG: oid_hex = OID_MD4_RSA_SIG_HEX; break;
         case OID_MD5_RSA_SIG: oid_hex = OID_MD5_RSA_SIG_HEX; break;
         case OID_SHA1_RSA_SIG: oid_hex = OID_SHA1_RSA_SIG_HEX; break;
         case OID_SHA1_RSA_SIG2: oid_hex = OID_SHA1_RSA_SIG2_HEX; break;
@@ -533,6 +535,7 @@ static void checkAsnOidDatabase(int32_t *oi,
         case OID_RSA_KEY_ALG: oid_hex = OID_RSA_KEY_ALG_HEX; break;
         case OID_DSA_KEY_ALG: oid_hex = OID_DSA_KEY_ALG_HEX; break;
         case OID_ECDSA_KEY_ALG: oid_hex = OID_ECDSA_KEY_ALG_HEX; break;
+        case OID_ED25519_KEY_ALG: oid_hex = OID_ED25519_KEY_ALG_HEX; break;
         case OID_DES_EDE3_CBC: oid_hex = OID_DES_EDE3_CBC_HEX; break;
         case OID_AES_128_CBC: oid_hex = OID_AES_128_CBC_HEX; break;
         case OID_AES_128_WRAP: oid_hex = OID_AES_128_WRAP_HEX; break;
@@ -587,7 +590,7 @@ static void checkAsnOidDatabase(int32_t *oi,
             return;
         }
         /* Ignore tag, but use length byte and data from binary oid. */
-        if (oidLen == oid_hex[1] && !memcmp(oidStart, &oid_hex[2], oidLen))
+        if (oidLen == oid_hex[1] && !Memcmp(oidStart, &oid_hex[2], oidLen))
         {
             return; /* Success */
         }
@@ -598,7 +601,7 @@ static void checkAsnOidDatabase(int32_t *oi,
 
 /******************************************************************************/
 
-int32_t getAsnOID(const unsigned char **pp, uint32_t len, int32_t *oi,
+int32_t getAsnOID(const unsigned char **pp, psSizeL_t size, int32_t *oi,
     uint8_t checkForParams, psSize_t *paramLen)
 {
     const unsigned char *p = *pp, *end;
@@ -608,16 +611,16 @@ int32_t getAsnOID(const unsigned char **pp, uint32_t len, int32_t *oi,
     uint32_t oidLen;
 
     rc = PS_PARSE_FAIL;
-    end = p + len;
+    end = p + size;
     plen = end - p;
 
-    if (len < 1)
+    if (size < 1)
     {
         psTraceCrypto("Malformed algorithmId 1\n");
         return rc;
     }
 
-    if (*(p++) != ASN_OID || (rc = getAsnLength32(&p, (uint32_t) (end - p), &arcLen, 0))
+    if (*(p++) != ASN_OID || (rc = getAsnLength32(&p, end - p, &arcLen, 0))
         < 0)
     {
         psTraceCrypto("Malformed algorithmId 2\n");
@@ -649,7 +652,7 @@ int32_t getAsnOID(const unsigned char **pp, uint32_t len, int32_t *oi,
     if (checkForParams)
     {
         plen -= (end - p);
-        *paramLen = len - plen;
+        *paramLen = size - plen;
 
         if (*paramLen < 1 || *p != ASN_NULL)
         {

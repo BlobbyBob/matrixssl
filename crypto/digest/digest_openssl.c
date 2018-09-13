@@ -56,7 +56,7 @@ int32_t psHmacMd5(const unsigned char *key, psSize_t keyLen,
         psMd5Update(&md, key, keyLen);
         psMd5Final(&md, hash);
         *hmacKeyLen = MD5_HASHLEN;
-        memcpy(hmacKey, hash, *hmacKeyLen);
+        Memcpy(hmacKey, hash, *hmacKeyLen);
     }
     else
     {
@@ -119,7 +119,7 @@ int32_t psHmacSha1(const unsigned char *key, psSize_t keyLen,
         psSha1Update(&sha, key, keyLen);
         psSha1Final(&sha, hash);
         *hmacKeyLen = SHA1_HASHLEN;
-        memcpy(hmacKey, hash, *hmacKeyLen);
+        Memcpy(hmacKey, hash, *hmacKeyLen);
     }
     else
     {
@@ -174,7 +174,7 @@ int32_t psHmacSha256(const unsigned char *key, psSize_t keyLen,
         psSha256Update(&sha, key, keyLen);
         psSha256Final(&sha, hash);
         *hmacKeyLen = SHA256_HASHLEN;
-        memcpy(hmacKey, hash, *hmacKeyLen);
+        Memcpy(hmacKey, hash, *hmacKeyLen);
     }
     else
     {
@@ -236,7 +236,7 @@ int32_t psHmacSha384(const unsigned char *key, psSize_t keyLen,
         psSha384Update(&sha, key, keyLen);
         psSha384Final(&sha, hash);
         *hmacKeyLen = SHA384_HASHLEN;
-        memcpy(hmacKey, hash, *hmacKeyLen);
+        Memcpy(hmacKey, hash, *hmacKeyLen);
     }
     else
     {
@@ -299,15 +299,15 @@ void psMd5Update(psMd5_t *md5, const unsigned char *buf, uint32_t len)
 {
     if (MD5_Update(md5, buf, len) != 1)
     {
-        memset(md5, 0x0, sizeof(psMd5_t));
+        Memset(md5, 0x0, sizeof(psMd5_t));
     }
 }
 void psMd5Final(psMd5_t *md5, unsigned char hash[MD5_HASHLEN])
 {
     if (MD5_Final(hash, md5) != 1)
     {
-        memset(hash, 0x0, MD5_HASHLEN);
-        memset(md5, 0x0, sizeof(psMd5_t));
+        Memset(hash, 0x0, MD5_HASHLEN);
+        Memset(md5, 0x0, sizeof(psMd5_t));
     }
 }
 #endif
@@ -317,7 +317,7 @@ int32_t psMd5Sha1Init(psMd5Sha1_t *md)
 {
     if (MD5_Init(&md->md5) != 1 || SHA1_Init(&md->sha1) != 1)
     {
-        memset(md, 0x0, sizeof(psMd5Sha1_t));
+        Memset(md, 0x0, sizeof(psMd5Sha1_t));
         return PS_FAIL;
     }
     return PS_SUCCESS;
@@ -328,7 +328,7 @@ void psMd5Sha1Update(psMd5Sha1_t *md,
 {
     if (MD5_Update(&md->md5, buf, len) != 1 || SHA1_Update(&md->sha1, buf, len) != 1 )
     {
-        memset(md, 0x0, sizeof(psMd5Sha1_t));
+        Memset(md, 0x0, sizeof(psMd5Sha1_t));
     }
 }
 
@@ -338,8 +338,8 @@ void psMd5Sha1Final(psMd5Sha1_t *md,
     if (MD5_Final(hash, &md->md5) != 1 ||
         SHA1_Final(hash + MD5_HASHLEN, &md->sha1) != 1 )
     {
-        memset(hash, 0x0, MD5SHA1_HASHLEN);
-        memset(md, 0x0, sizeof(psMd5Sha1_t));
+        Memset(hash, 0x0, MD5SHA1_HASHLEN);
+        Memset(md, 0x0, sizeof(psMd5Sha1_t));
     }
 }
 #endif
@@ -357,15 +357,15 @@ void psSha1Update(psSha1_t *sha1, const unsigned char *buf, uint32_t len)
 {
     if (SHA1_Update(sha1, buf, len) != 1)
     {
-        memset(sha1, 0x0, sizeof(psSha1_t));
+        Memset(sha1, 0x0, sizeof(psSha1_t));
     }
 }
 void psSha1Final(psSha1_t *sha1, unsigned char hash[SHA1_HASHLEN])
 {
     if (SHA1_Final(hash, sha1) != 1)
     {
-        memset(hash, 0x0, SHA1_HASHLEN);
-        memset(sha1, 0x0, sizeof(psSha1_t));
+        Memset(hash, 0x0, SHA1_HASHLEN);
+        Memset(sha1, 0x0, sizeof(psSha1_t));
     }
 }
 #endif
@@ -383,15 +383,15 @@ void psSha256Update(psSha256_t *sha256, const unsigned char *buf, uint32_t len)
 {
     if (SHA256_Update(sha256, buf, len) != 1)
     {
-        memset(sha256, 0x0, sizeof(psSha256_t));
+        Memset(sha256, 0x0, sizeof(psSha256_t));
     }
 }
 void psSha256Final(psSha256_t *sha256, unsigned char hash[SHA256_HASHLEN])
 {
     if (SHA256_Final(hash, sha256) != 1)
     {
-        memset(hash, 0x0, SHA256_HASHLEN);
-        memset(sha256, 0x0, sizeof(psSha256_t));
+        Memset(hash, 0x0, SHA256_HASHLEN);
+        Memset(sha256, 0x0, sizeof(psSha256_t));
     }
 }
 #endif
@@ -409,15 +409,15 @@ void psSha384Update(psSha384_t *sha384, const unsigned char *buf, uint32_t len)
 {
     if (SHA384_Update(sha384, buf, len) != 1)
     {
-        memset(sha384, 0x0, sizeof(psSha384_t));
+        Memset(sha384, 0x0, sizeof(psSha384_t));
     }
 }
 void psSha384Final(psSha384_t *sha384, unsigned char hash[SHA384_HASHLEN])
 {
     if (SHA384_Final(hash, sha384) != 1)
     {
-        memset(hash, 0x0, SHA384_HASHLEN);
-        memset(sha384, 0x0, sizeof(psSha384_t));
+        Memset(hash, 0x0, SHA384_HASHLEN);
+        Memset(sha384, 0x0, sizeof(psSha384_t));
     }
 }
 #endif
@@ -435,15 +435,15 @@ void psSha512Update(psSha512_t *sha512, const unsigned char *buf, uint32_t len)
 {
     if (SHA512_Update(sha512, buf, len) != 1)
     {
-        memset(sha512, 0x0, sizeof(psSha512_t));
+        Memset(sha512, 0x0, sizeof(psSha512_t));
     }
 }
 void psSha512Final(psSha512_t *sha512, unsigned char hash[SHA512_HASHLEN])
 {
     if (SHA512_Final(hash, sha512) != 1)
     {
-        memset(hash, 0x0, SHA512_HASHLEN);
-        memset(sha512, 0x0, sizeof(psSha512_t));
+        Memset(hash, 0x0, SHA512_HASHLEN);
+        Memset(sha512, 0x0, sizeof(psSha512_t));
     }
 }
 #endif

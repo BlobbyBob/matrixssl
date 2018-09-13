@@ -5,7 +5,7 @@
  *      Header file for definitions used with crypto lib.
  */
 /*
- *      Copyright (c) 2013-2017 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 INSIDE Secure Corporation
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -80,6 +80,10 @@
 # include "keyformat/asn1.h"
 # include "keyformat/x509.h"
 # include "prng/prng.h"
+
+# ifdef USE_ECC
+extern const psEccCurve_t eccCurves[];
+# endif
 
 /******************************************************************************/
 /*
@@ -170,6 +174,9 @@ extern int32_t psGetPrngLocked(unsigned char *bytes, psSize_t size,
 # define OID_MD2_ALG_STR                  "1.2.840.113549.2.2"
 # define OID_MD2_ALG                      646
 # define OID_MD2_ALG_HEX                  "\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x02"
+# define OID_MD4_ALG_STR                  "1.2.840.113549.2.4"
+# define OID_MD4_ALG                      (648 + OID_COLLISION)
+# define OID_MD4_ALG_HEX                  "\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x04"
 # define OID_MD5_ALG_STR                  "1.2.840.113549.2.5"
 # define OID_MD5_ALG                      649
 # define OID_MD5_ALG_HEX                  "\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x05"
@@ -178,6 +185,9 @@ extern int32_t psGetPrngLocked(unsigned char *bytes, psSize_t size,
 # define OID_MD2_RSA_SIG_STR              "1.2.840.113549.1.1.2"
 # define OID_MD2_RSA_SIG                  (646 + OID_COLLISION)
 # define OID_MD2_RSA_SIG_HEX              "\x06\x09\x2A\x86\x48\x86\xF7\x0D\x01\x01\x02"
+# define OID_MD4_RSA_SIG_STR              "1.2.840.113549.1.1.3"
+# define OID_MD4_RSA_SIG                  647
+# define OID_MD4_RSA_SIG_HEX              "\x06\x09\x2A\x86\x48\x86\xF7\x0D\x01\x01\x03"
 # define OID_MD5_RSA_SIG_STR              "1.2.840.113549.1.1.4"
 # define OID_MD5_RSA_SIG                  648
 # define OID_MD5_RSA_SIG_HEX              "\x06\x09\x2A\x86\x48\x86\xF7\x0D\x01\x01\x04"
@@ -234,6 +244,9 @@ extern int32_t psGetPrngLocked(unsigned char *bytes, psSize_t size,
 # define OID_ECDSA_KEY_ALG_STR            "1.2.840.10045.2.1"
 # define OID_ECDSA_KEY_ALG                518
 # define OID_ECDSA_KEY_ALG_HEX            "\x06\x07\x2A\x86\x48\xCE\x3D\x02\x01"
+# define OID_ED25519_KEY_STR              "1.3.101.112"
+# define OID_ED25519_KEY_ALG              256
+# define OID_ED25519_KEY_ALG_HEX          "\x06\x03\x2B\x65\x70"
 
 /* Encryption algorithms */
 # define OID_DES_EDE3_CBC_STR             "1.2.840.113549.3.7"
@@ -411,6 +424,36 @@ extern int32_t psGetPrngLocked(unsigned char *bytes, psSize_t size,
 #  define PKCS1_SHA224_ID 5
 # endif
 
+/* SignatureScheme values. */
+#  define sigalg_rsa_pkcs1_sha256       0x0401
+#  define sigalg_rsa_pkcs1_sha384       0x0501
+#  define sigalg_rsa_pkcs1_sha512       0x0601
+#  define sigalg_ecdsa_secp256r1_sha256 0x0403
+#  define sigalg_ecdsa_secp384r1_sha384 0x0503
+#  define sigalg_ecdsa_secp521r1_sha512 0x0603
+#  define sigalg_rsa_pss_rsae_sha256    0x0804
+#  define sigalg_rsa_pss_rsae_sha384    0x0805
+#  define sigalg_rsa_pss_rsae_sha512    0x0806
+#  define sigalg_ed25519                0x0807
+#  define sigalg_ed448                  0x0808
+#  define sigalg_rsa_pss_pss_sha256     0x0809
+#  define sigalg_rsa_pss_pss_sha384     0x080a
+#  define sigalg_rsa_pss_pss_sha512     0x080b
+#  define sigalg_rsa_pkcs1_sha1         0x0201
+#  define sigalg_ecdsa_sha1             0x0203
+
+/* TLS 1.3 NamedGroup values. */
+#  define namedgroup_secp256r1   0x0017
+#  define namedgroup_secp384r1   0x0018
+#  define namedgroup_secp521r1   0x0019
+#  define namedgroup_x25519      0x001d
+#  define namedgroup_x448        0x001e
+#  define namedgroup_ffdhe2048   0x0100
+#  define namedgroup_ffdhe3072   0x0101
+#  define namedgroup_ffdhe4096   0x0102
+#  define namedgroup_ffdhe6144   0x0103
+#  define namedgroup_ffdhe8192   0x0104
+
 /******************************************************************************/
 /* These values are all mutually exlusive bits to define Cipher flags */
 # define CRYPTO_FLAGS_AES    (1 << 0)
@@ -452,7 +495,7 @@ extern int32_t psGetPrngLocked(unsigned char *bytes, psSize_t size,
 /******************************************************************************/
 
 /* instrinsic rotate */
-#  include <stdlib.h>
+#  include "osdep_stdlib.h"
 #  pragma intrinsic(_lrotr,_lrotl)
 #  define ROR(x, n) _lrotr(x, n)
 #  define ROL(x, n) _lrotl(x, n)
@@ -461,17 +504,17 @@ extern int32_t psGetPrngLocked(unsigned char *bytes, psSize_t size,
 # elif defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__)) && \
     !defined(INTEL_CC) && !defined(PS_NO_ASM)
 
-static __inline unsigned ROL(unsigned word, int i)
+static inline unsigned ROL(unsigned word, int i)
 {
-    asm ("roll %%cl,%0"
+    __asm ("roll %%cl,%0"
          : "=r" (word)
          : "0" (word), "c" (i));
     return word;
 }
 
-static __inline unsigned ROR(unsigned word, int i)
+static inline unsigned ROR(unsigned word, int i)
 {
-    asm ("rorl %%cl,%0"
+    __asm ("rorl %%cl,%0"
          : "=r" (word)
          : "0" (word), "c" (i));
     return word;
@@ -605,10 +648,10 @@ static __inline unsigned ROR(unsigned word, int i)
 
 #  ifdef ENDIAN_32BITWORD
 #   define STORE32L(x, y) { \
-        unsigned long __t = (x); memcpy(y, &__t, 4); \
+        unsigned long __t = (x); Memcpy(y, &__t, 4); \
 }
 
-#   define LOAD32L(x, y)  memcpy(&(x), y, 4);
+#   define LOAD32L(x, y)  Memcpy(&(x), y, 4);
 
 #   define STORE64L(x, y) { \
         (y)[7] = (unsigned char) (((x) >> 56) & 255); \
@@ -630,16 +673,16 @@ static __inline unsigned ROR(unsigned word, int i)
 
 #  else /* 64-bit words then  */
 #   define STORE32L(x, y) \
-    { unsigned int __t = (x); memcpy(y, &__t, 4); }
+    { unsigned int __t = (x); Memcpy(y, &__t, 4); }
 
 #   define LOAD32L(x, y) \
-    { memcpy(&(x), y, 4); x &= 0xFFFFFFFF; }
+    { Memcpy(&(x), y, 4); x &= 0xFFFFFFFF; }
 
 #   define STORE64L(x, y) \
-    { uint64 __t = (x); memcpy(y, &__t, 8); }
+    { uint64 __t = (x); Memcpy(y, &__t, 8); }
 
 #   define LOAD64L(x, y) \
-    { memcpy(&(x), y, 8); }
+    { Memcpy(&(x), y, 8); }
 
 #  endif /* ENDIAN_64BITWORD */
 # endif  /* ENDIAN_LITTLE */
@@ -683,9 +726,9 @@ static __inline unsigned ROR(unsigned word, int i)
 
 #  ifdef ENDIAN_32BITWORD
 #   define STORE32H(x, y) \
-    { unsigned int __t = (x); memcpy(y, &__t, 4); }
+    { unsigned int __t = (x); Memcpy(y, &__t, 4); }
 
-#   define LOAD32H(x, y) memcpy(&(x), y, 4);
+#   define LOAD32H(x, y) Memcpy(&(x), y, 4);
 
 #   define STORE64H(x, y) { \
         (y)[0] = (unsigned char) (((x) >> 56) & 255); \
@@ -710,16 +753,16 @@ static __inline unsigned ROR(unsigned word, int i)
 #  else /* 64-bit words then  */
 
 #   define STORE32H(x, y) \
-    { unsigned int __t = (x); memcpy(y, &__t, 4); }
+    { unsigned int __t = (x); Memcpy(y, &__t, 4); }
 
 #   define LOAD32H(x, y) \
-    { memcpy(&(x), y, 4); x &= 0xFFFFFFFF; }
+    { Memcpy(&(x), y, 4); x &= 0xFFFFFFFF; }
 
 #   define STORE64H(x, y) \
-    { uint64 __t = (x); memcpy(y, &__t, 8); }
+    { uint64 __t = (x); Memcpy(y, &__t, 8); }
 
 #   define LOAD64H(x, y) \
-    { memcpy(&(x), y, 8); }
+    { Memcpy(&(x), y, 8); }
 
 #  endif /* ENDIAN_64BITWORD */
 # endif  /* ENDIAN_BIG */
@@ -748,9 +791,23 @@ static __inline unsigned ROR(unsigned word, int i)
     BLOCKSIZE <= 1 ? (unsigned char) 0 : \
     (unsigned char) (BLOCKSIZE - ((LEN) &(BLOCKSIZE - 1)))
 
+/*
+    Return nearest multiple of n greater than or equal to x.
+*/
+static inline
+psSizeL_t psRoundUpToBlockSize(psSizeL_t x, psSizeL_t n)
+{
+    psSizeL_t res;
+
+    res = (x + n - 1) / n;
+    res *= n;
+
+    return res;
+}
+
 # ifdef  USE_CRL
-extern int32_t psCrlOpen();
-extern void psCrlClose();
+extern int32_t psCrlOpen(void);
+extern void psCrlClose(void);
 # endif
 
 #endif /* _h_PS_CRYPTOLIB */

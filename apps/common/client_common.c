@@ -50,7 +50,7 @@ int appendCACert(unsigned char *buf, const size_t bufsize, size_t *bufused,
         return 0; /* Does not fit into the buffer */
     }
 
-    memcpy(buf + *bufused, data, datasize);
+    Memcpy(buf + *bufused, data, datasize);
     *bufused += datasize;
     return 1;
 }
@@ -61,10 +61,10 @@ int appendCACert(unsigned char *buf, const size_t bufsize, size_t *bufused,
 int appendCAFilename(char *strbuf, const size_t strbufsize, const char *str)
 {
     static const char *sep = ";";
-    const size_t strbuflen = strlen(strbuf);
-    const size_t strseplen = (strbuflen == 0 ? 0 : strlen(sep));
+    const size_t strbuflen = Strlen(strbuf);
+    const size_t strseplen = (strbuflen == 0 ? 0 : Strlen(sep));
     const size_t bufUnused = strbufsize - strbuflen - 1;
-    const size_t len = strlen(str);
+    const size_t len = Strlen(str);
 
     if (len == 0) {
         return 1;

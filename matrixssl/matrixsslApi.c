@@ -5,7 +5,7 @@
  *      MatrixSSL Public API Layer.
  */
 /*
- *      Copyright (c) 2013-2017 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 INSIDE Secure Corporation
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -84,6 +84,9 @@ int32_t matrixSslNewClientSession(ssl_t **ssl, const sslKeys_t *keys,
     psBuf_t tmp;
     uint32 len;
     int32 rc, i;
+# ifdef USE_TLS_1_3
+    tlsExtension_t *ext;
+# endif
 
     if (!ssl)
     {
@@ -113,7 +116,45 @@ int32_t matrixSslNewClientSession(ssl_t **ssl, const sslKeys_t *keys,
         }
     }
 # endif
-    /* Give priority to cipher suite if session id is provided and doesn't match */
+# ifdef USE_TLS_1_3
+    if (sid && sid->psk && sid->psk->params)
+    {
+        /*
+          TLS 1.3 draft #28, 4.6.1:
+          "Clients MUST only resume if the new SNI value is valid for the server
+          certificate presented in the original session, and SHOULD only resume
+          if the SNI value matches the one used in the original session."
+
+          We only check the second condition, because the first condition is
+          then implied: the original SNI was matched against the server's
+          certificate during the initial handshake.
+        */
+        ext = extensions;
+        while (ext)
+        {
+            if (ext->extType == EXT_SNI)
+            {
+                if (sid->psk->params->sniLen != 0)
+                {
+                    if ((ext->extLen != sid->psk->params->sniLen)
+                            || Memcmp(ext->extData,
+                                    sid->psk->params->sni,
+                                    sid->psk->params->sniLen))
+                    {
+                        psTraceErrr("Error: attempted to resume using an SNI\n" \
+                                "that does not match with the SNI used in the\n" \
+                                "original session\n");
+                        return PS_ARG_FAIL;
+                    }
+                }
+            }
+            ext = ext->next;
+        }
+    }
+# endif
+
+    /* Give priority to cipher suite if session id is provided
+       and doesn't match */
     if (cipherSpec != NULL && cipherSpec[0] != 0 && sid != NULL &&
         sid->cipherId != 0)
     {
@@ -128,23 +169,47 @@ int32_t matrixSslNewClientSession(ssl_t **ssl, const sslKeys_t *keys,
         if (rc)
         {
             psTraceInfo("Explicit cipher suite will override session cache\n");
-            memset(sid->id, 0, SSL_MAX_SESSION_ID_SIZE);
-            memset(sid->masterSecret, 0, SSL_HS_MASTER_SIZE);
+            Memset(sid->id, 0, SSL_MAX_SESSION_ID_SIZE);
+            Memset(sid->masterSecret, 0, SSL_HS_MASTER_SIZE);
             sid->cipherId = 0;
         }
     }
+
+# ifdef USE_TLS_1_3
+    /* The default cipher list will contain TLS 1.3 suites if USE_TLS_1_3
+       is enabled. But if the list is provided directly by the user,
+       it is possible that it will not contain TLS 1.3 suites. Mark this
+       so that we don't advertise TLS 1.3 in ClientHello. */
+    if (cipherSpecLen == 0)
+    {
+        options->tls13CiphersuitesEnabledClient = PS_TRUE;
+    }
+    for (i = 0; i < cipherSpecLen; i++)
+    {
+        if (isTls13Ciphersuite(cipherSpec[i]))
+        {
+            options->tls13CiphersuitesEnabledClient = PS_TRUE;
+            break;
+        }
+    }
+# endif
 
     if ((rc = matrixSslNewSession(&lssl, keys, sid, options)) < 0)
     {
         return rc;
     }
     lssl->userPtr = options->userPtr;
-
-    if (options->clientRejectVersionDowngrade)
+#ifdef USE_TLS_1_3
+    /* Check if the first PSK has maxEarlyData > 0
+       Note that the sid has higher priority */
+    if(lssl->sec.tls13SessionPskList != NULL &&
+       lssl->sec.tls13SessionPskList->params != NULL &&
+       lssl->sec.tls13SessionPskList->params->maxEarlyData > 0)
     {
-        lssl->clientRejectVersionDowngrade = 1;
+        lssl->tls13ClientEarlyDataEnabled = PS_TRUE;
     }
 
+#endif
 # ifndef USE_ONLY_PSK_CIPHER_SUITE
     if (expectedName)
     {
@@ -153,10 +218,10 @@ int32_t matrixSslNewClientSession(ssl_t **ssl, const sslKeys_t *keys,
             matrixSslDeleteSession(lssl);
             return rc;
         }
-        rc = strlen(expectedName);
+        rc = Strlen(expectedName);
         lssl->expectedName = psMalloc(lssl->sPool, rc + 1);
-        strcpy(lssl->expectedName, expectedName);
-        memcpy(&lssl->validateCertsOpts,
+        Strcpy(lssl->expectedName, expectedName);
+        Memcpy(&lssl->validateCertsOpts,
             &options->validateCertsOpts,
             sizeof(matrixValidateCertsOptions_t));
     }
@@ -182,8 +247,20 @@ int32_t matrixSslNewClientSession(ssl_t **ssl, const sslKeys_t *keys,
 RETRY_HELLO:
     tmp.size = lssl->outsize;
     tmp.buf = tmp.start = tmp.end = lssl->outbuf;
-    if ((rc = matrixSslEncodeClientHello(lssl, &tmp, cipherSpec, cipherSpecLen,
-             &len, extensions, options)) < 0)
+
+#ifdef USE_TLS_1_3
+    if (USING_TLS_1_3(lssl))
+    {
+        rc = tls13WriteClientHello(lssl, &tmp, cipherSpec, cipherSpecLen,
+                &len, extensions, options);
+    }
+    else
+#endif /* USE_TLS_1_3 */
+    {
+        rc = matrixSslEncodeClientHello(lssl, &tmp, cipherSpec, cipherSpecLen,
+                     &len, extensions, options);
+    }
+    if (rc < 0)
     {
         if (rc == SSL_FULL)
         {
@@ -216,10 +293,10 @@ RETRY_HELLO:
      */
     if (options->useExtCvSigOp)
     {
-        if (lssl->keys->cert)
-        {
-            lssl->keys->privKey.keysize = lssl->keys->cert->publicKey.keysize;
-        }
+        sslIdentity_t *id;
+
+        for (id = lssl->keys->identity; id; id = id->next)
+            id->privKey.keysize = id->cert->publicKey.keysize;
         /*
            Enable external Cv signature generation for this connection.
          */
@@ -229,6 +306,14 @@ RETRY_HELLO:
     *ssl = lssl;
     return MATRIXSSL_REQUEST_SEND;
 }
+
+# ifndef USE_ONLY_PSK_CIPHER_SUITE
+void matrixSslRegisterClientIdentityCallback(ssl_t *ssl,
+        sslIdentityCb_t identityCb)
+{
+    ssl->sec.identityCb = identityCb;
+}
+# endif /* USE_ONLY_PSK_CIPHER_SUITE */
 
 /* SessionID management functions for clients that wish to perform
     session resumption.  This structure handles both the traditional resumption
@@ -243,7 +328,7 @@ int32 matrixSslNewSessionId(sslSessionId_t **sess, void *poolUserPtr)
     {
         return PS_MEM_FAIL;
     }
-    memset(ses, 0x0, sizeof(sslSessionId_t));
+    Memset(ses, 0x0, sizeof(sslSessionId_t));
     ses->pool = pool;
     *sess = ses;
     return PS_SUCCESS;
@@ -253,8 +338,22 @@ void matrixSslClearSessionId(sslSessionId_t *sess)
 {
     psPool_t *pool;
 
+#  ifdef USE_STATELESS_SESSION_TICKETS
+    if (sess->sessionTicket)
+    {
+        psFree(sess->sessionTicket, sess->pool);
+    }
+#  endif
+
+#  ifdef USE_TLS_1_3
+    if (sess->psk)
+    {
+        tls13FreePsk(sess->psk, sess->pool);
+    }
+#  endif
+
     pool = sess->pool;
-    memset(sess, 0x0, sizeof(sslSessionId_t));
+    Memset(sess, 0x0, sizeof(sslSessionId_t));
     sess->pool = pool;
 }
 
@@ -272,7 +371,14 @@ void matrixSslDeleteSessionId(sslSessionId_t *sess)
     }
 #  endif
 
-    memset(sess, 0x0, sizeof(sslSessionId_t));
+#  ifdef USE_TLS_1_3
+    if (sess->psk)
+    {
+        tls13FreePsk(sess->psk, sess->pool);
+    }
+#  endif
+
+    Memset(sess, 0x0, sizeof(sslSessionId_t));
     psFree(sess, NULL);
 }
 
@@ -302,9 +408,9 @@ void matrixSslSetSessionIdEapFast(sslSessionId_t *sess,
 #    error EAP_TLS_PAC_KEY_LEN too large
 #   endif
     /** @note, sess->master_secret must go through tprf() before being used */
-    memcpy(sess->masterSecret, pac_key, EAP_FAST_PAC_KEY_LEN);
+    Memcpy(sess->masterSecret, pac_key, EAP_FAST_PAC_KEY_LEN);
     sess->sessionTicket = psMalloc(sess->pool, pac_opaque_len);
-    memcpy(sess->sessionTicket, pac_opaque, pac_opaque_len);
+    Memcpy(sess->sessionTicket, pac_opaque, pac_opaque_len);
     sess->sessionTicketLen = pac_opaque_len;
 }
 
@@ -321,14 +427,14 @@ int32_t matrixSslGetEapFastSKS(const ssl_t *ssl,
     {
         return PS_EAGAIN;
     }
-    memcpy(session_key_seed, ssl->sec.eap_fast_session_key_seed,
+    Memcpy(session_key_seed, ssl->sec.eap_fast_session_key_seed,
         EAP_FAST_SESSION_KEY_SEED_LEN);
     return PS_SUCCESS;
 }
 #  endif /* USE_EAP_FAST */
 
 # ifdef USE_EXT_CLIENT_CERT_KEY_LOADING
-int32_t matrixSslNeedClientCert(ssl_t *ssl)
+psBool_t matrixSslNeedClientCert(ssl_t *ssl)
 {
     if (ssl->extClientCertKeyStateFlags ==
             EXT_CLIENT_CERT_KEY_STATE_WAIT_FOR_CERT_KEY_UPDATE)
@@ -340,7 +446,7 @@ int32_t matrixSslNeedClientCert(ssl_t *ssl)
         return PS_FALSE;
     }
 }
-int32_t matrixSslNeedClientPrivKey(ssl_t *ssl)
+psBool_t matrixSslNeedClientPrivKey(ssl_t *ssl)
 {
     if (ssl->extClientCertKeyStateFlags ==
             EXT_CLIENT_CERT_KEY_STATE_WAIT_FOR_CERT_KEY_UPDATE)
@@ -363,7 +469,8 @@ int32_t matrixSslNeedClientPrivKey(ssl_t *ssl)
         return PS_FALSE;
     }
 }
-int32_t matrixSslClientCertUpdated(ssl_t *ssl)
+
+psBool_t matrixSslClientCertUpdated(ssl_t *ssl)
 {
     if (ssl->extClientCertKeyStateFlags !=
             EXT_CLIENT_CERT_KEY_STATE_WAIT_FOR_CERT_KEY_UPDATE)
@@ -381,7 +488,7 @@ int32_t matrixSslClientCertUpdated(ssl_t *ssl)
           By-pass MatrixSSL checks.
         */
         /**/
-        if (ssl->keys && ssl->keys->cert)
+        if (ssl->keys && ssl->keys->identity)
         {
             ssl->sec.certMatch = 1;
         }
@@ -390,7 +497,7 @@ int32_t matrixSslClientCertUpdated(ssl_t *ssl)
     }
 }
 
-int32_t matrixSslClientPrivKeyUpdated(ssl_t *ssl)
+psBool_t matrixSslClientPrivKeyUpdated(ssl_t *ssl)
 {
     if (ssl->extClientCertKeyStateFlags !=
             EXT_CLIENT_CERT_KEY_STATE_WAIT_FOR_CERT_KEY_UPDATE)
@@ -442,7 +549,7 @@ int32_t matrixSslGetHSMessagesHash(ssl_t *ssl, unsigned char *hash, size_t *hash
         return PS_OUTPUT_LENGTH;
     }
 
-    memcpy(hash, ssl->extCvHash, ssl->extCvHashLen);
+    Memcpy(hash, ssl->extCvHash, ssl->extCvHashLen);
     *hash_len = ssl->extCvHashLen;
 
     return PS_SUCCESS;
@@ -460,9 +567,11 @@ int32_t matrixSslGetCvSignatureAlg(ssl_t *ssl)
     return ssl->extCvSigAlg;
 }
 
-int32_t matrixSslGetPubKeySize(ssl_t *ssl)
+/* XXX: unused, undeclared */
+psRes_t matrixSslGetPubKeySize(ssl_t *ssl)
 {
     int32_t type;
+    sslIdentity_t *id;
 
     psAssert(ssl != NULL);
 
@@ -477,20 +586,26 @@ int32_t matrixSslGetPubKeySize(ssl_t *ssl)
         return type;
     }
 
-    switch (type)
+    for (id = ssl->keys->identity; id; id = id->next)
     {
+        if (type != id->cert->publicKey.type)
+            continue;
+
+        switch (type)
+        {
 #  ifdef USE_RSA
-    case PS_RSA:
-        return ssl->keys->cert->publicKey.keysize;
+        case PS_RSA:
+            return id->cert->publicKey.keysize;
 #  endif
 #  ifdef USE_ECC
-    case PS_ECC:
-        return ssl->keys->cert->publicKey.key.ecc.curve->size;
+        case PS_ECC:
+            return id->cert->publicKey.key.ecc.curve->size;
 #  endif
-    default:
-        psTraceIntInfo("matrixSslGetPubKeySize: unsupported alg type: %d\n", type);
-        return PS_UNSUPPORTED_FAIL;
+        default:
+            psTraceIntInfo("matrixSslGetPubKeySize: unsupported alg type: %d\n", type);
+        }
     }
+    return PS_UNSUPPORTED_FAIL;
 }
 
 int32_t matrixSslSetCvSignature(ssl_t *ssl, const unsigned char *sig, const size_t sig_len)
@@ -550,13 +665,13 @@ int32_t matrixSslSetCvSignature(ssl_t *ssl, const unsigned char *sig, const size
          */
         ssl->extCvSig[0] = (sig_len & 0xFF00) >> 8;
         ssl->extCvSig[1] = (sig_len & 0xFF);
-        memcpy(ssl->extCvSig + 2, sig, sig_len);
+        Memcpy(ssl->extCvSig + 2, sig, sig_len);
         ssl->extCvSigLen = sig_len + 2;
         break;
 #  endif
 #  ifdef USE_RSA
     case PS_RSA:
-        memcpy(ssl->extCvSig, sig, sig_len);
+        Memcpy(ssl->extCvSig, sig, sig_len);
         ssl->extCvSigLen = sig_len;
         break;
 #  endif
@@ -583,12 +698,16 @@ int32_t matrixSslSetCvSignature(ssl_t *ssl, const unsigned char *sig, const size
  */
 
 int32 matrixSslNewServer(ssl_t **ssl,
-    pubkeyCb_t pubkeyCb, pskCb_t pskCb, sslCertCb_t certCb,
+    pubkeyCb_t pubkeyCb,
+    pskCb_t pskCb,
+    sslCertCb_t certCb,
     sslSessOpts_t *options)
 {
     int32 rc;
 
-    if ((rc = matrixSslNewServerSession(ssl, NULL, certCb, options)) < 0)
+    if ((rc = matrixSslNewServerSession(ssl, NULL,
+                                        certCb,
+                                        options)) < 0)
     {
         return rc;
     }
@@ -605,7 +724,6 @@ int32 matrixSslNewServerSession(ssl_t **ssl, const sslKeys_t *keys,
     sslSessOpts_t *options)
 {
     ssl_t *lssl;
-    int32 providedVersionFlag;
 
     if (!ssl)
     {
@@ -615,8 +733,6 @@ int32 matrixSslNewServerSession(ssl_t **ssl, const sslKeys_t *keys,
     {
         return PS_ARG_FAIL;
     }
-
-    providedVersionFlag = options->versionFlag;
 
     /* Add SERVER_FLAGS to versionFlag member of options */
     options->versionFlag |= SSL_FLAGS_SERVER;
@@ -638,36 +754,12 @@ int32 matrixSslNewServerSession(ssl_t **ssl, const sslKeys_t *keys,
         goto NEW_SVR_ERROR;
     }
 # else
-    psAssert(certCb == NULL);
     if (matrixSslNewSession(&lssl, keys, NULL, options) < 0)
     {
         goto NEW_SVR_ERROR;
     }
 # endif /* USE_CLIENT_AUTH */
 
-    /*
-      Server-specific options that can be used to restrict the
-      supported protocol version range. These are only applicable
-      when the library user did not set any specific version to
-      versionFlag.
-    */
-# if defined(USE_TLS_1_2_TOGGLE) || defined(USE_TLS_1_0_TOGGLE)
-    if (providedVersionFlag == 0)
-    {
-#  ifdef USE_TLS_1_2_TOGGLE
-        if (options->serverDisableTls1_2)
-        {
-            lssl->disable_tls_1_2 = PS_TRUE;
-        }
-#  endif
-#  ifdef USE_TLS_1_0_TOGGLE
-        if (options->disableTls1_0)
-        {
-            lssl->disable_tls_1_0 = PS_TRUE;
-        }
-#  endif
-    }
-# endif /* USE_TLS_1_2_TOGGLE || USE_TLS_1_0_TOGGLE */
     /*
         For the server, ssl->expectedName can only be populated with
         the server name parsed from the Server Name Indication
@@ -695,7 +787,19 @@ int32 matrixSslNewServerSession(ssl_t **ssl, const sslKeys_t *keys,
     {
         lssl->extFlags.require_extended_master_secret = 1;
     }
-
+#ifdef USE_TLS_1_3
+    if (options->tls13SessionMaxEarlyData <= 16384)
+    {
+        lssl->tls13SessionMaxEarlyData = options->tls13SessionMaxEarlyData;
+    }
+    else
+    {
+        psTraceIntInfo("matrixSslNewServerSession: Too large " \
+                       "tls13SessionMaxEarlyData: %d\n",
+            options->tls13SessionMaxEarlyData);
+        goto NEW_SVR_ERROR;
+    }
+#endif
     *ssl = lssl;
     return MATRIXSSL_SUCCESS;
 
@@ -707,8 +811,7 @@ NEW_SVR_ERROR:
     return PS_FAILURE;
 }
 
-void matrixSslRegisterSNICallback(ssl_t *ssl, void (*sni_cb)(void *ssl,
-        char *hostname, int32 hostnameLen, sslKeys_t **newKeys))
+void matrixSslRegisterSNICallback(ssl_t *ssl, sniCb_t sni_cb)
 {
     ssl->sni_cb = sni_cb;
 }
@@ -757,6 +860,7 @@ int32 matrixSslGetReadbuf(ssl_t *ssl, unsigned char **buf)
 int32 matrixSslGetReadbufOfSize(ssl_t *ssl, int32 size, unsigned char **buf)
 {
     unsigned char *p;
+    int32 res_sz;
 
     if (!ssl || !buf)
     {
@@ -784,7 +888,7 @@ int32 matrixSslGetReadbufOfSize(ssl_t *ssl, int32 size, unsigned char **buf)
         }
         ssl->insize = size;
         *buf = ssl->inbuf;
-        return ssl->insize;
+        res_sz = ssl->insize;
     }
     else
     {
@@ -798,9 +902,10 @@ int32 matrixSslGetReadbufOfSize(ssl_t *ssl, int32 size, unsigned char **buf)
         ssl->inbuf = p;
         ssl->insize = ssl->inlen + size;
         *buf = ssl->inbuf + ssl->inlen;
-        return size;
+        res_sz = size;
     }
-    return PS_FAILURE; /* can't hit */
+
+    return res_sz;
 }
 
 /******************************************************************************/
@@ -977,8 +1082,11 @@ int32 matrixSslGetWritebuf(ssl_t *ssl, unsigned char **buf, uint32 requestedLen)
     /* GCM mode will need to save room for the nonce */
     if (ssl->flags & SSL_FLAGS_AEAD_W)
     {
-        *buf = ssl->outbuf + ssl->outlen + ssl->recordHeadLen +
-               AEAD_NONCE_LEN(ssl);
+        *buf = ssl->outbuf + ssl->outlen + ssl->recordHeadLen;
+        if (!(USING_TLS_1_3(ssl)))
+        {
+            *buf += AEAD_NONCE_LEN(ssl);
+        }
         return requestedLen; /* may not be what was passed in */
     }
 # endif /* USE_TLS_1_1 */
@@ -1081,7 +1189,7 @@ int32 matrixSslEncodeWritebuf(ssl_t *ssl, uint32 len)
     {
         reserved += ssl->enBlockSize;
     }
-    if (ssl->flags & SSL_FLAGS_AEAD_W)
+    if ((ssl->flags & SSL_FLAGS_AEAD_W) && !(USING_TLS_1_3(ssl)))
     {
         reserved += AEAD_NONCE_LEN(ssl);
     }
@@ -1299,7 +1407,6 @@ DECODE_MORE:
     {
         return decodeRet;
     }
-HW_ASYNC_RESUME:
 #endif
 /*
     Convenience for the cases that expect buf to have moved
@@ -1320,7 +1427,7 @@ HW_ASYNC_RESUME:
             Pack ssl->inbuf so there is immediate maximum room for potential
             outgoing data that needs to be written
  */
-            memmove(ssl->inbuf, buf, ssl->inlen);
+            Memmove(ssl->inbuf, buf, ssl->inlen);
             buf = ssl->inbuf;
             goto DECODE_MORE;   /* More data in buffer to process */
         }
@@ -1341,13 +1448,25 @@ HW_ASYNC_RESUME:
             }
             else
             {
-                rc = MATRIXSSL_REQUEST_RECV; /* Need to recv more handshake data */
+                 /* Need to recv more handshake data */
+                rc = MATRIXSSL_REQUEST_RECV;
             }
         }
         else
         {
-#ifdef USE_DTLS
-            rc = MATRIXSSL_REQUEST_RECV; /* Got FINISHED without CCS */
+#if defined(USE_DTLS) || defined(USE_TLS_1_3)
+            if (USING_TLS_1_3(ssl))
+            {
+                if (matrixSslHandshakeIsComplete(ssl))
+                {
+                    rc = MATRIXSSL_HANDSHAKE_COMPLETE;
+                }
+            }
+            else
+            {
+                /* DTLS: Got FINISHED without CCS */
+                rc = MATRIXSSL_REQUEST_RECV;
+            }
 #else
             /* This is an error - we shouldn't get here */
 #endif
@@ -1365,7 +1484,7 @@ HW_ASYNC_RESUME:
             Pack ssl->inbuf so there is immediate maximum room for potential
             outgoing data that needs to be written
  */
-            memmove(ssl->inbuf, buf, ssl->inlen);
+            Memmove(ssl->inbuf, buf, ssl->inlen);
             buf = ssl->inbuf;
             goto DECODE_MORE;   /* More data in buffer to process */
         }
@@ -1394,7 +1513,7 @@ HW_ASYNC_RESUME:
             psAssert(ssl->inlen > 0);
             psAssert((uint32) ssl->inlen == start);
             psAssert(buf > ssl->inbuf);
-            memmove(ssl->inbuf, buf, ssl->inlen);   /* Pack ssl->inbuf */
+            Memmove(ssl->inbuf, buf, ssl->inlen);   /* Pack ssl->inbuf */
             buf = ssl->inbuf;
             return MATRIXSSL_REQUEST_SEND;
         }
@@ -1412,10 +1531,13 @@ HW_ASYNC_RESUME:
         {
             ssl->bFlags |= BFLAG_CLOSE_AFTER_SENT;
         }
-        psAssert(prevBuf == buf);
         psAssert(ssl->insize >= (int32) len);
         psAssert(start == 0);
-        psAssert(buf == ssl->inbuf);
+        if (!USING_TLS_1_3(ssl))
+        {
+            psAssert(prevBuf == buf);
+            psAssert(buf == ssl->inbuf);
+        }
         if (ssl->outlen > 0)
         {
             /* If data's in outbuf, append inbuf.  This is a corner case that
@@ -1433,7 +1555,7 @@ HW_ASYNC_RESUME:
                 ssl->outbuf = p;
                 ssl->outsize = ssl->outlen + len;
             }
-            memcpy(ssl->outbuf + ssl->outlen, ssl->inbuf, len);
+            Memcpy(ssl->outbuf + ssl->outlen, ssl->inbuf, len);
             ssl->outlen += len;
         }
         else     /* otherwise, swap inbuf and outbuf */
@@ -1450,7 +1572,7 @@ HW_ASYNC_RESUME:
     case MATRIXSSL_ERROR:
         if (decodeErr >= 0)
         {
-            /* printf("THIS SHOULD BE A NEGATIVE VALUE?\n"); */
+            /* Printf("THIS SHOULD BE A NEGATIVE VALUE?\n"); */
         }
         return decodeErr; /* Will be a negative value */
 
@@ -1512,15 +1634,6 @@ HW_ASYNC_RESUME:
         {
             return PS_MEM_FAIL;
         }
-        /* We balk if we get a large handshake message */
-        if (reqLen > SSL_MAX_PLAINTEXT_LEN &&
-            !matrixSslHandshakeIsComplete(ssl))
-        {
-            if (reqLen > SSL_MAX_PLAINTEXT_LEN)
-            {
-                return PS_MEM_FAIL;
-            }
-        }
         /*
             Can't envision any possible case where there is remaining data
             in inbuf to process and are getting SSL_FULL.
@@ -1535,6 +1648,7 @@ HW_ASYNC_RESUME:
             {
                 return PS_MEM_FAIL;
             }
+            psTraceIntInfo("** New ssl->inbuf size : %d **\n", reqLen);
             ssl->inbuf = p;
             ssl->insize = reqLen;
             buf = ssl->inbuf + len;
@@ -1542,7 +1656,7 @@ HW_ASYNC_RESUME:
         }
         else
         {
-            psTraceInfo("Encoding error. Possible wrong flight messagSize\n");
+            psTraceErrr("Encoding error. Possible wrong flight messagSize\n");
             return PS_PROTOCOL_FAIL;    /* error in our encoding */
         }
         goto DECODE_MORE;
@@ -1654,16 +1768,20 @@ int32 matrixSslProcessedData(ssl_t *ssl, unsigned char **ptbuf, uint32 *ptlen)
 
     psAssert(ssl->insize > 0 && ssl->inbuf != NULL);
     /* Move any remaining data to the beginning of the buffer */
-    if (ssl->inlen > 0)
+    if (ssl->inbuf && ssl->inlen > 0)
     {
         ctlen = ssl->rec.len + ssl->recordHeadLen;
         if (ssl->flags & SSL_FLAGS_AEAD_R)
         {
             /* This overhead was removed from rec.len after the decryption
                 to keep buffer logic working. */
-            ctlen += AEAD_TAG_LEN(ssl) + AEAD_NONCE_LEN(ssl);
+            if (!(USING_TLS_1_3(ssl)))
+            {
+                ctlen += AEAD_TAG_LEN(ssl);
+                ctlen += AEAD_NONCE_LEN(ssl);
+            }
         }
-        memmove(ssl->inbuf, ssl->inbuf + ctlen, ssl->inlen);
+        Memmove(ssl->inbuf, ssl->inbuf + ctlen, ssl->inlen);
     }
     /* Shrink inbuf to default size once inlen < default size */
     revertToDefaultBufsize(ssl, SSL_INBUF);
@@ -1674,6 +1792,22 @@ int32 matrixSslProcessedData(ssl_t *ssl, unsigned char **ptbuf, uint32 *ptlen)
         /* NOTE: ReceivedData cannot return 0 */
         return matrixSslReceivedData(ssl, 0, ptbuf, ptlen);
     }
+#ifdef USE_TLS_1_3
+    /* There might be outgoing handshake data in outbuf in case of TLS1.3
+       early data */
+    if (ssl->outlen > 0)
+    {
+        return MATRIXSSL_REQUEST_SEND;
+    }
+    else if (!matrixSslHandshakeIsComplete(ssl))
+    {
+        /* We have supplied early_data to caller and there is nothing
+           in outbuf or inbuf (checked above) and handshake is not completed.
+           Need more data. */
+        return MATRIXSSL_REQUEST_RECV;
+    }
+
+#endif
     return MATRIXSSL_SUCCESS;
 }
 
@@ -1756,7 +1890,7 @@ int32_t matrixSslEncodeRehandshake(ssl_t *ssl, sslKeys_t *keys,
     ssl->extFlags.truncated_hmac = 0;
     ssl->extFlags.sni = 0;
 
-    if (!ssl)
+    if (ssl == NULL || ssl->cipher == NULL)
     {
         return PS_ARG_FAIL;
     }
@@ -1777,7 +1911,7 @@ int32_t matrixSslEncodeRehandshake(ssl_t *ssl, sslKeys_t *keys,
     /* Re-handshakes are not currently supported for compressed sessions. */
     if (ssl->compression > 0)
     {
-        psTraceInfo("Re-handshakes not supported for compressed sessions\n");
+        psTraceErrr("Re-handshakes not supported for compressed sessions\n");
         return PS_UNSUPPORTED_FAIL;
     }
 #  endif
@@ -1799,6 +1933,14 @@ int32_t matrixSslEncodeRehandshake(ssl_t *ssl, sslKeys_t *keys,
         ssl->keys = keys;
         matrixSslSetSessionOption(ssl, SSL_OPTION_FULL_HANDSHAKE, NULL);
     }
+
+#  ifdef USE_TLS_1_3
+    /*
+      Otherwise we'll keep adding more to the list on each rehandshake.
+      Note that elliptic_curves entries are added to the list even
+      when not using TLS 1.3 (rehandshakes are not allowed with TLS 1.3).*/
+    tls13ClearPeerSupportedGroupList(ssl);
+#  endif
 
 #  ifndef USE_ONLY_PSK_CIPHER_SUITE
     if (certCb != NULL)
@@ -1885,7 +2027,7 @@ L_REHANDSHAKE:
     {
         sbuf.buf = sbuf.start = sbuf.end = ssl->outbuf + ssl->outlen;
         sbuf.size = ssl->outsize - ssl->outlen;
-        memset(&options, 0x0, sizeof(sslSessOpts_t));
+        Memset(&options, 0x0, sizeof(sslSessOpts_t));
 #  ifdef USE_ECC_CIPHER_SUITE
         options.ecFlags = ssl->ecInfo.ecFlags;
 #  endif
@@ -1979,18 +2121,18 @@ int32_t matrixSslEncodeRehandshake(ssl_t *ssl, sslKeys_t *keys,
     uint32_t sessionOption,
     const psCipher16_t cipherSpec[], uint8_t cipherSpecLen)
 {
-    psTraceInfo("Rehandshaking is disabled.  matrixSslEncodeRehandshake off\n");
+    psTraceErrr("Rehandshaking is disabled.  matrixSslEncodeRehandshake off\n");
     return PS_FAILURE;
 }
 int32 matrixSslDisableRehandshakes(ssl_t *ssl)
 {
-    psTraceInfo("Rehandshaking is not compiled into library at all.\n");
+    psTraceErrr("Rehandshaking is not compiled into library at all.\n");
     return PS_FAILURE;
 }
 
 int32 matrixSslReEnableRehandshakes(ssl_t *ssl)
 {
-    psTraceInfo("Rehandshaking is not compiled into library at all.\n");
+    psTraceErrr("Rehandshaking is not compiled into library at all.\n");
     return PS_FAILURE;
 }
 # endif /* SSL_REHANDSHAKES_ENABLED */
@@ -2022,9 +2164,9 @@ int32 matrixSslSentData(ssl_t *ssl, uint32 bytes)
     ssl->outlen -= bytes;
 
     rc = MATRIXSSL_SUCCESS;
-    if (ssl->outlen > 0)
+    if (ssl->outbuf && ssl->outlen > 0)
     {
-        memmove(ssl->outbuf, ssl->outbuf + bytes, ssl->outlen);
+        Memmove(ssl->outbuf, ssl->outbuf + bytes, ssl->outlen);
         /* This was changed during 3.7.1 DTLS work.  The line below used to be:
             rc = MATRIXSSL_REQUEST_SEND; and it was possible for it to be
             overridden with HANDSHAKE_COMPLETE below.  This was a problem
@@ -2089,5 +2231,25 @@ int32 matrixSslIsSessionCompressionOn(ssl_t *ssl)
 }
 # endif
 
-/******************************************************************************/
+# ifdef USE_TLS_1_3
+int32_t matrixSslSetTls13BlockPadding(ssl_t *ssl, psSizeL_t blockSize)
+{
+    if (blockSize == 0)
+    {
+        return PS_ARG_FAIL;
+    }
+    if (blockSize > TLS_1_3_MAX_PLAINTEXT_FRAGMENT_LEN)
+    {
+        psTraceInfo("Error: cannot pad to larger than max plaintext size\n");
+        return PS_ARG_FAIL;
+    }
+    ssl->tls13BlockSize = blockSize;
 
+    /* tls13PadLen and tls13BlockSize are mutually exclusive. */
+    ssl->tls13PadLen = 0;
+
+    return PS_SUCCESS;
+}
+# endif /* USE_TLS_1_3 */
+
+/******************************************************************************/

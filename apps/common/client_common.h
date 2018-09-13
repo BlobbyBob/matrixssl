@@ -35,12 +35,16 @@
 #ifndef _h_CLIENT_COMMON
 #define _h_CLIENT_COMMON
 
-#include <string.h>
-#include <ctype.h>
+#include "osdep_string.h"
+#include "osdep_ctype.h"
 #include "matrixssl/matrixsslApi.h"
 
 #include "core/coreApi.h"
 #include "core/psUtil.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /*
     If supporting client authentication, pick ONE identity to auto select a
@@ -86,14 +90,17 @@ typedef struct {
 
     /* Function for loading the client certificate key material, must be != NULL */
     load_key_func load_key;
+
+    /* Defines whether pre-shared keys are automatically loaded */
+    int loadPreSharedKeys;
 } clientconfig_t;
 
 extern clientconfig_t g_clientconfig;
 
-void clientconfigInitialize();
-void clientconfigFree();
-void clientconfigUseFileKeys();
-const char *clientconfigGetTrustedCA();
+void clientconfigInitialize(void);
+void clientconfigFree(void);
+void clientconfigUseFileKeys(void);
+const char *clientconfigGetTrustedCA(void);
 int32 clientconfigLoadKeys(sslKeys_t *keys);
 
 /* load_keys.c
@@ -121,6 +128,10 @@ extern int g_key_len;
 int appendCACert(unsigned char *buf, const size_t bufsize, size_t *bufused,
                  const unsigned char *data, const size_t datasize);
 int appendCAFilename(char *strbuf, const size_t strbufsize, const char *str);
-void chdirToAppsSSL();
+void chdirToAppsSSL(void);
+
+#ifdef __cplusplus
+};
+#endif
 
 #endif /* _h_CLIENT_COMMON */

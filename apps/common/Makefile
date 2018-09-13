@@ -15,8 +15,10 @@ CLIENT_COMMON_STATIC:=client_common_s.a
 STATIC:=$(CLIENT_COMMON_STATIC)
 
 # Optional extensions to CFLAGS/LDFLAGS
-CFLAGS+=$(CFLAGS_INTERNAL) -Wextra -Wno-old-style-declaration
-LDFLAGS+=$(LDFLAGS_INTERNAL) -Wextra
+CFLAGS_WARNINGS_EXTRA=-Wextra
+CFLAGS_WARNINGS_NO_OLD_STYLE_DECLARATION=-Wno-old-style-declaration
+CFLAGS+=$(CFLAGS_INTERNAL) $(CFLAGS_WARNINGS_EXTRA) $(CFLAGS_WARNINGS_NO_OLD_STYLE_DECLARATION)
+LDFLAGS+=$(LDFLAGS_INTERNAL) $(CFLAGS_WARNINGS_EXTRA)
 
 # Allow selecting the client auth identity (ID_RSA, ID_ECDH_ECDSA,
 # etc.) via an environment variable.

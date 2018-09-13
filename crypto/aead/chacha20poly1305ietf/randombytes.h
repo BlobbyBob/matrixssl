@@ -1,16 +1,18 @@
 #ifdef USE_MATRIX_CHACHA20_POLY1305_IETF_KEYGEN
 
-#warning "MatrixSSL Chacha20poly1305 does not support key generation functions."
-#warning "Please, turn off USE_MATRIX_CHACHA20_POLY1305_IETF_KEYGEN or"
-#warning "use full libsodium via USE_LIBSODIUM_CRYPTO."
+#ifndef USE_LIBSODIUM_CRYPTO
+#error "MatrixSSL Chacha20poly1305 does not support key generation functions."
+#error "Please, turn off USE_MATRIX_CHACHA20_POLY1305_IETF_KEYGEN or"
+#error "use full libsodium via USE_LIBSODIUM_CRYPTO."
+#endif /* USE_LIBSODIUM_CRYPTO */
 
 #ifndef randombytes_H
 #define randombytes_H
 
-#include <stddef.h>
-#include <stdint.h>
+#include "osdep_stddef.h"
+#include "osdep_stdint.h"
 
-#include <sys/types.h>
+#include "osdep_sys_types.h"
 
 #include "export.h"
 

@@ -38,7 +38,7 @@
 
 /******************************************************************************/
 
-__inline static void invertKeySchedule(psAesKey_t *key);
+static inline void invertKeySchedule(psAesKey_t *key);
 static uint32 setup_mix(uint32 temp);
 
 static const uint32 rcon[] = {
@@ -1570,14 +1570,14 @@ static uint32 setup_mix2(uint32 temp)
     it can save some stack memory. Compiler optimization would probably
     inline this on its own anyway.
  */
-__inline static void invertKeySchedule(psAesKey_t *key)
+static inline void invertKeySchedule(psAesKey_t *key)
 {
     int i;
     uint32 temp, *rk, *rrk;
     uint32 ek[64];
 
     /* Copy the current (encrypt key) to a temp buffer */
-    memcpy(ek, key->skey, sizeof(ek));
+    Memcpy(ek, key->skey, sizeof(ek));
     rk = key->skey;
     switch (key->rounds)
     {

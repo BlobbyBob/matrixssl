@@ -64,6 +64,13 @@
 
 #   define MIN_RSA_BITS    1024
 
+/* The configuration can define set minimum for RSA public exponent.
+
+   For CL crypto, the default is 65537 (according to FIPS 186-4 standard).
+   It can be overridden on line below:
+   */
+/* #define MIN_RSA_PUBLIC_EXPONENT 65537  *//* Valid values 3, 5, 17, 65537. */
+
 #    define MIN_DH_BITS 1024
 
 /* #define USE_BURN_STACK  *//**< @security Zero sensitive data from the stack. */
@@ -78,6 +85,16 @@
 /**< @note Enable verification of DSA signatures in certificate validation.
    Works only when using the CL/SL library. @pre USE_CERT_PARSE. */
 /* #define USE_DSA_VERIFY */
+#  ifdef USE_DH
+/**< @note Enable this if you intent to support Diffie-Hellman groups larger
+   than 4096. Usually such large groups are not used. */
+/* #define USE_LARGE_DH_GROUPS */
+#  endif /* USE_DH */
+/**< @note Enable ECDHE with Curve25519. */
+/* #define USE_X25519 */
+/**< @note Enable Pure EdDSA Curve25519 (Ed25519) signatures.
+   @pre USE_ECC, USE_SHA512. */
+/* #define USE_ED25519 */
 
 /******************************************************************************/
 /**
@@ -132,6 +149,17 @@
 
 /******************************************************************************/
 /**
+     Legacy ciphers.
+     These ciphers have been deprecated, but may be occasionally required
+     for legacy compatibility. Usage of these cipher suites should be avoided
+     as these may represent small or moderate risk.
+
+     Note: The RC4 cipher below need to disabled according to RFC 7465.
+*/
+/* #define USE_ARC4 */
+
+/******************************************************************************/
+/**
     Digest algorithms.
 
     @note SHA256 and above are used with TLS 1.2, and also used for
@@ -183,6 +211,14 @@
 
 /* Please enable, unless using no HMAC algorithms. */
 #  define USE_HMAC
+
+/**
+    HMAC-based Extract-and-Expand Key Derivation Function (HKDF) (RFC 5869).
+    Needed in TLS 1.3 key derivation.
+*/
+#  if defined(USE_HMAC_SHA256) || defined(USE_HMAC_SHA384)
+/* #define USE_HKDF */
+#  endif
 
 /******************************************************************************/
 /**

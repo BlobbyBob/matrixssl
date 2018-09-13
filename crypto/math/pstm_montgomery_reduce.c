@@ -5,7 +5,7 @@
  *      Multiprecision Montgomery Reduction.
  */
 /*
- *      Copyright (c) 2013-2017 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 INSIDE Secure Corporation
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -203,7 +203,7 @@
         : "%rax", "cc")
 
 /******************************************************************************/
-# elif defined(PSTM_ARM)
+# elif defined(PSTM_ARM) && !defined __ARMCC5
 
 # if defined __arm__ && defined __thumb__ && !defined __thumb2__
 #  error "Platform not supported: Thumb1 mode on ARMv4-v6."
@@ -265,6 +265,48 @@
         : "0" (cy), "m" (_c[0]) \
         : "r0", "cc");
 #  endif /* __thumb2__ */
+
+/******************************************************************************/
+# elif defined(PSTM_ARM) && defined __ARMCC5
+
+/* ARM Compiler 5 support: */
+
+#pragma arm /* ARM code. Switch code generation to the ARM instruction set so
+               that the inline assembler is available. On platforms with
+               only Thumb code support, it is necessary to use NO_PSTM_ARM
+               as ARM Compiler 5 lacks thumb inline assembly support. */
+
+#  define MONT_START
+#  define MONT_FINI
+#  define LOOP_END
+#  define LOOP_START \
+    mu = c[x] * mp
+
+#   define INNERMUL                       \
+    do {                                  \
+        unsigned int input = (*tmpm++);   \
+        unsigned int reg;                 \
+        __asm {                           \
+            LDR    reg, [_c];             \
+            ADDS   reg, reg, cy;          \
+            MOVCS  cy, 1;                 \
+            MOVCC  cy, 0;                 \
+            UMLAL  reg, cy, mu, input;    \
+            STR    reg, [_c];             \
+        }                                 \
+    } while(0);
+
+#   define PROPCARRY                      \
+    do {                                  \
+        unsigned int reg;                 \
+        __asm {                           \
+            LDR    reg, [_c];             \
+            ADDS   reg, reg, cy;          \
+            STR    reg, [_c];             \
+            MOVCS  cy, 1;                 \
+            MOVCC  cy, 0;                 \
+        }                                 \
+    } while(0);
 
 /******************************************************************************/
 # elif defined(PSTM_MIPS)
@@ -353,7 +395,7 @@ int32_t pstm_montgomery_reduce(psPool_t *pool, pstm_int *a, const pstm_int *m,
     if (paD && paDlen >= cSize)
     {
         c = paD;
-        memset(c, 0x0, paDlen);
+        Memset(c, 0x0, paDlen);
     }
     else
     {
@@ -364,7 +406,7 @@ int32_t pstm_montgomery_reduce(psPool_t *pool, pstm_int *a, const pstm_int *m,
         }
         else
         {
-            memset(c, 0x0, cSize);
+            Memset(c, 0x0, cSize);
         }
     }
     /* copy the input */

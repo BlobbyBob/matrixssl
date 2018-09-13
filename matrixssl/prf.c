@@ -65,7 +65,7 @@ int32_t prf2(const unsigned char *sec, psSize_t secLen,
 /*
     MD5 portions of the prf
  */
-__inline static int32_t pMd5(const unsigned char *key, psSize_t keyLen,
+static inline int32_t pMd5(const unsigned char *key, psSize_t keyLen,
     const unsigned char *text, psSize_t textLen,
     unsigned char *out, psSize_t outLen)
 {
@@ -108,11 +108,11 @@ __inline static int32_t pMd5(const unsigned char *key, psSize_t keyLen,
         psHmacMd5Final(&ctx, mac);
         if (i == keyIter - 1)
         {
-            memcpy(out + (MD5_HASH_SIZE * i), mac, outLen - (MD5_HASH_SIZE * i));
+            Memcpy(out + (MD5_HASH_SIZE * i), mac, outLen - (MD5_HASH_SIZE * i));
         }
         else
         {
-            memcpy(out + (MD5_HASH_SIZE * i), mac, MD5_HASH_SIZE);
+            Memcpy(out + (MD5_HASH_SIZE * i), mac, MD5_HASH_SIZE);
             if ((rc = psHmacMd5(key, keyLen, a, MD5_HASH_SIZE, a,
                      hmacKey, &hmacKeyLen)) < 0)
             {
@@ -136,7 +136,7 @@ L_RETURN:
 /*
     SHA1 portion of the prf
  */
-__inline static int32_t pSha1(const unsigned char *key, psSize_t keyLen,
+static inline int32_t pSha1(const unsigned char *key, psSize_t keyLen,
     const unsigned char *text, psSize_t textLen,
     unsigned char *out, psSize_t outLen)
 {
@@ -179,12 +179,12 @@ __inline static int32_t pSha1(const unsigned char *key, psSize_t keyLen,
         psHmacSha1Final(&ctx, mac);
         if (i == keyIter - 1)
         {
-            memcpy(out + (SHA1_HASH_SIZE * i), mac,
+            Memcpy(out + (SHA1_HASH_SIZE * i), mac,
                 outLen - (SHA1_HASH_SIZE * i));
         }
         else
         {
-            memcpy(out + (SHA1_HASH_SIZE * i), mac, SHA1_HASH_SIZE);
+            Memcpy(out + (SHA1_HASH_SIZE * i), mac, SHA1_HASH_SIZE);
             if ((rc = psHmacSha1(key, keyLen, a, SHA1_HASH_SIZE, a,
                      hmacKey, &hmacKeyLen)) < 0)
             {
@@ -249,7 +249,7 @@ L_RETURN:
 /*
     SHA2 prf
  */
-__inline static int32_t pSha2(const unsigned char *key, psSize_t keyLen,
+static inline int32_t pSha2(const unsigned char *key, psSize_t keyLen,
     const unsigned char *text, psSize_t textLen,
     unsigned char *out, psSize_t outLen, uint32_t flags)
 {
@@ -330,12 +330,12 @@ __inline static int32_t pSha2(const unsigned char *key, psSize_t keyLen,
         }
         if (i == keyIter - 1)
         {
-            memcpy(out + (hashSize * i), mac,
+            Memcpy(out + (hashSize * i), mac,
                 outLen - ((uint32_t) hashSize * i));
         }
         else
         {
-            memcpy(out + ((uint32_t) hashSize * i), mac, hashSize);
+            Memcpy(out + ((uint32_t) hashSize * i), mac, hashSize);
 #    ifdef USE_SHA384
             if (flags & CRYPTO_FLAGS_SHA3)
             {
@@ -479,7 +479,7 @@ int32_t tprf(const unsigned char *key, psSize_t keyLen,
     psHmacSha1Final(&ctx, sha1out);
 
     /* Copy the first 8 bytes from T3 to out, making 48 bytes total */
-    memcpy(out + (2 * SHA1_HASH_SIZE), sha1out, 8);
+    Memcpy(out + (2 * SHA1_HASH_SIZE), sha1out, 8);
     rc = SSL_HS_MASTER_SIZE;
 L_RETURN:
     memzero_s(sha1out, sizeof(sha1out));

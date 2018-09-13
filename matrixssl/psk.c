@@ -72,7 +72,7 @@ int32_t matrixSslLoadPsk(sslKeys_t *keys,
     {
         return PS_MEM_FAIL;
     }
-    memset(psk, 0, sizeof(psPsk_t));
+    Memset(psk, 0, sizeof(psPsk_t));
 
     if ((psk->pskKey = psMalloc(keys->pool, keyLen)) == NULL)
     {
@@ -85,10 +85,10 @@ int32_t matrixSslLoadPsk(sslKeys_t *keys,
         psFree(psk, keys->pool);
         return PS_MEM_FAIL;
     }
-    memcpy(psk->pskKey, key, keyLen);
+    Memcpy(psk->pskKey, key, keyLen);
     psk->pskLen = keyLen;
 
-    memcpy(psk->pskId, id, idLen);
+    Memcpy(psk->pskId, id, idLen);
     psk->pskIdLen = idLen;
 
     if (keys->pskKeys == NULL)
@@ -159,7 +159,8 @@ int32_t matrixSslPskGetKeyId(ssl_t *ssl,
 
 /******************************************************************************/
 /*
-    Get the key from the pre-shared list based on id
+    Get the key from the pre-shared list or using the application
+    pskCb, based on id,
  */
 int32_t matrixSslPskGetKey(ssl_t *ssl,
     const unsigned char id[SSL_PSK_MAX_ID_SIZE], uint8_t idLen,
@@ -168,38 +169,36 @@ int32_t matrixSslPskGetKey(ssl_t *ssl,
     psPsk_t *psk;
 
     *key = NULL;
+    *keyLen = 0;
 
-    psk = ssl->keys->pskKeys;
-
-    if (psk == NULL)
-    {
-        psTraceInfo("No pre-shared keys loaded\n");
-        return PS_FAILURE;
-    }
-
-    if (idLen <= 0)
+    if (idLen == 0)
     {
         psTraceIntInfo("Bad PSK identity length: %d\n", idLen);
         return PS_ARG_FAIL;
     }
 
-/*
-    Make sure the length matches as well
- */
-    while (psk)
+    if (ssl->keys && ssl->keys->pskKeys)
     {
-        if (psk->pskIdLen == idLen)
+        /*
+          Make sure the length matches as well
+        */
+        for (psk = ssl->keys->pskKeys; psk; psk = psk->next)
         {
-            if (memcmp(psk->pskId, id, idLen) == 0)
+            if (psk->pskIdLen == idLen &&
+                Memcmp(psk->pskId, id, idLen) == 0)
             {
                 *key = psk->pskKey;
                 *keyLen = psk->pskLen;
                 return PS_SUCCESS;
             }
         }
-        psk = psk->next;
     }
-
+# ifdef USE_SERVER_SIDE_SSL
+    else if (ssl->sec.pskCb)
+    {
+        return (ssl->sec.pskCb)(ssl, id, idLen, key, keyLen);
+    }
+# endif
     psTraceInfo("Can't find PSK key from id\n");
     return PS_SUCCESS;
 }

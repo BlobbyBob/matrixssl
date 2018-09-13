@@ -116,6 +116,12 @@ int32 csDes3Encrypt(void *ssl, unsigned char *pt,
     ssl_t *lssl = ssl;
     psDes3_t *ctx = &lssl->sec.encryptCtx.des3;
 
+    if ((len & 0x7) != 0)
+    {
+        psTraceErrr("Invalid plaintext length in csDes3Encrypt\n");
+        return PS_FAILURE;
+    }
+
     psDes3Encrypt(ctx, pt, ct, len);
     return len;
 }
@@ -126,6 +132,12 @@ int32 csDes3Decrypt(void *ssl, unsigned char *ct,
     ssl_t *lssl = ssl;
     psDes3_t *ctx = &lssl->sec.decryptCtx.des3;
 
+    if ((len & 0x7) != 0)
+    {
+        psTraceErrr("Invalid ciphertext length in csDes3Decrypt\n");
+        return PS_FAILURE;
+    }
+
     psDes3Decrypt(ctx, ct, pt, len);
     return len;
 }
@@ -134,8 +146,9 @@ int32 csDes3Decrypt(void *ssl, unsigned char *ct,
 /******************************************************************************/
 
 #ifdef USE_AES_CIPHER_SUITE
+
 # ifdef USE_NATIVE_AES
-#  ifdef USE_TLS_1_2
+#  if defined(USE_TLS_1_2)
 #   ifdef USE_AES_GCM
 int32 csAesGcmInit(sslSec_t *sec, int32 type, uint32 keysize)
 {
@@ -143,7 +156,7 @@ int32 csAesGcmInit(sslSec_t *sec, int32 type, uint32 keysize)
 
     if (type == INIT_ENCRYPT_CIPHER)
     {
-        memset(&sec->encryptCtx.aesgcm, 0, sizeof(psAesGcm_t));
+        Memset(&sec->encryptCtx.aesgcm, 0, sizeof(psAesGcm_t));
         if ((err = psAesInitGCM(&sec->encryptCtx.aesgcm, sec->writeKey,
                  keysize)) < 0)
         {
@@ -152,7 +165,7 @@ int32 csAesGcmInit(sslSec_t *sec, int32 type, uint32 keysize)
     }
     else
     {
-        memset(&sec->decryptCtx.aesgcm, 0, sizeof(psAesGcm_t));
+        Memset(&sec->decryptCtx.aesgcm, 0, sizeof(psAesGcm_t));
         if ((err = psAesInitGCM(&sec->decryptCtx.aesgcm, sec->readKey,
                  keysize)) < 0)
         {
@@ -184,7 +197,7 @@ int32 csAesGcmEncrypt(void *ssl, unsigned char *pt,
 
     ctx = &lssl->sec.encryptCtx.aesgcm;
 
-    memcpy(nonce, lssl->sec.writeIV, 4);
+    Memcpy(nonce, lssl->sec.writeIV, 4);
 
     seqNotDone = 1;
     /* Each value of the nonce_explicit MUST be distinct for each distinct
@@ -194,20 +207,20 @@ int32 csAesGcmEncrypt(void *ssl, unsigned char *pt,
 #     ifdef USE_DTLS
     if (lssl->flags & SSL_FLAGS_DTLS)
     {
-        memcpy(nonce + 4, lssl->epoch, 2);
-        memcpy(nonce + 4 + 2, lssl->rsn, 6);
+        Memcpy(nonce + 4, lssl->epoch, 2);
+        Memcpy(nonce + 4 + 2, lssl->rsn, 6);
         /* In the case of DTLS the counter is formed from the concatenation of
             the 16-bit epoch with the 48-bit sequence number.*/
-        memcpy(aad, lssl->epoch, 2);
-        memcpy(aad + 2, lssl->rsn, 6);
+        Memcpy(aad, lssl->epoch, 2);
+        Memcpy(aad + 2, lssl->rsn, 6);
         seqNotDone = 0;
     }
 #     endif
 
     if (seqNotDone)
     {
-        memcpy(nonce + 4, lssl->sec.seq, TLS_EXPLICIT_NONCE_LEN);
-        memcpy(aad, lssl->sec.seq, 8);
+        Memcpy(nonce + 4, lssl->sec.seq, TLS_EXPLICIT_NONCE_LEN);
+        Memcpy(aad, lssl->sec.seq, 8);
     }
     aad[8] = lssl->outRecType;
     aad[9] = lssl->majVer;
@@ -250,8 +263,8 @@ int32 csAesGcmDecrypt(void *ssl, unsigned char *ct,
     ctx = &lssl->sec.decryptCtx.aesgcm;
 
     seqNotDone = 1;
-    memcpy(nonce, lssl->sec.readIV, 4);
-    memcpy(nonce + 4, ct, TLS_EXPLICIT_NONCE_LEN);
+    Memcpy(nonce, lssl->sec.readIV, 4);
+    Memcpy(nonce + 4, ct, TLS_EXPLICIT_NONCE_LEN);
     ct += TLS_EXPLICIT_NONCE_LEN;
     len -= TLS_EXPLICIT_NONCE_LEN;
 
@@ -260,15 +273,15 @@ int32 csAesGcmDecrypt(void *ssl, unsigned char *ct,
     {
         /* In the case of DTLS the counter is formed from the concatenation of
             the 16-bit epoch with the 48-bit sequence number.  */
-        memcpy(aad, lssl->rec.epoch, 2);
-        memcpy(aad + 2, lssl->rec.rsn, 6);
+        Memcpy(aad, lssl->rec.epoch, 2);
+        Memcpy(aad + 2, lssl->rec.rsn, 6);
         seqNotDone = 0;
     }
 #    endif
 
     if (seqNotDone)
     {
-        memcpy(aad, lssl->sec.remSeq, 8);
+        Memcpy(aad, lssl->sec.remSeq, 8);
     }
     ctLen = len - TLS_GCM_TAG_LEN;
     aad[8] = lssl->rec.type;
@@ -294,7 +307,7 @@ int32 csAesGcmDecrypt(void *ssl, unsigned char *ct,
     return bytes;
 }
 #   endif /* USE_AES_GCM */
-#  endif  /* USE_TLS_1_2 */
+#  endif  /* USE_TLS_1_2 || USE_TLS_1_3 */
 
 #  ifdef USE_AES_CBC
 /******************************************************************************/
@@ -304,7 +317,7 @@ int32 csAesInit(sslSec_t *sec, int32 type, uint32 keysize)
 
     if (type == INIT_ENCRYPT_CIPHER)
     {
-        memset(&(sec->encryptCtx), 0, sizeof(psAesCbc_t));
+        Memset(&(sec->encryptCtx), 0, sizeof(psAesCbc_t));
         if ((err = psAesInitCBC(&sec->encryptCtx.aes, sec->writeIV, sec->writeKey,
                  keysize, PS_AES_ENCRYPT)) < 0)
         {
@@ -313,7 +326,7 @@ int32 csAesInit(sslSec_t *sec, int32 type, uint32 keysize)
     }
     else     /* Init for decrypt */
     {
-        memset(&(sec->decryptCtx), 0, sizeof(psAesCbc_t));
+        Memset(&(sec->decryptCtx), 0, sizeof(psAesCbc_t));
         if ((err = psAesInitCBC(&sec->decryptCtx.aes, sec->readIV, sec->readKey,
                  keysize, PS_AES_DECRYPT)) < 0)
         {
@@ -329,6 +342,12 @@ int32 csAesEncrypt(void *ssl, unsigned char *pt,
     ssl_t *lssl = ssl;
     psAesCbc_t *ctx = &lssl->sec.encryptCtx.aes;
 
+    if ((len & 0xf) != 0)
+    {
+        psTraceErrr("Invalid plaintext size in csAesEncrypt.\n");
+        return PS_FAILURE;
+    }
+
     psAesEncryptCBC(ctx, pt, ct, len);
     return len;
 }
@@ -338,6 +357,12 @@ int32 csAesDecrypt(void *ssl, unsigned char *ct,
 {
     ssl_t *lssl = ssl;
     psAesCbc_t *ctx = &lssl->sec.decryptCtx.aes;
+
+    if ((len & 0xf) != 0)
+    {
+        psTraceErrr("Invalid ciphertext size in csAesDecrypt.\n");
+        return PS_FAILURE;
+    }
 
     psAesDecryptCBC(ctx, ct, pt, len);
     return len;
@@ -395,8 +420,8 @@ int32 csChacha20Poly1305IetfEncrypt(void *ssl, unsigned char *pt,
     ptLen = len - TLS_CHACHA20_POLY1305_IETF_TAG_LEN;
     ctx = &lssl->sec.encryptCtx.chacha20poly1305ietf;
 
-    memset(nonce, 0, TLS_AEAD_NONCE_MAXLEN);
-    memset(aad, 0, TLS_CHACHA20_POLY1305_IETF_AAD_LEN);
+    Memset(nonce, 0, TLS_AEAD_NONCE_MAXLEN);
+    Memset(aad, 0, TLS_CHACHA20_POLY1305_IETF_AAD_LEN);
 
 #  ifdef DEBUG_CHACHA20_POLY1305_IETF_CIPHER_SUITE
     psTraceInfo("Entering csChacha20Poly1305IetfEncrypt IETF\n");
@@ -410,16 +435,18 @@ int32 csChacha20Poly1305IetfEncrypt(void *ssl, unsigned char *pt,
         return PS_LIMIT_FAIL;
     }
 
-    /* The nonce is built according to: https://tools.ietf.org/html/draft-ietf-tls-chacha20-poly1305 */
+    /* The nonce is built according to:
+       https://tools.ietf.org/html/draft-ietf-tls-chacha20-poly1305 */
 
-    memcpy(nonce + (CHACHA20POLY1305_IETF_IV_FIXED_LENGTH - TLS_AEAD_SEQNB_LEN), lssl->sec.seq, TLS_AEAD_SEQNB_LEN);
+    Memcpy(nonce + (CHACHA20POLY1305_IETF_IV_FIXED_LENGTH - TLS_AEAD_SEQNB_LEN),
+            lssl->sec.seq, TLS_AEAD_SEQNB_LEN);
 
     for (i = 0; i < CHACHA20POLY1305_IETF_IV_FIXED_LENGTH; i++)
     {
         nonce[i] ^= lssl->sec.writeIV[i];
     }
     /* --- Fill Additional data ---// */
-    memcpy(aad, lssl->sec.seq, TLS_AEAD_SEQNB_LEN);
+    Memcpy(aad, lssl->sec.seq, TLS_AEAD_SEQNB_LEN);
     i = TLS_AEAD_SEQNB_LEN;
 
     aad[i++] = lssl->outRecType;
@@ -473,8 +500,8 @@ int32 csChacha20Poly1305IetfDecrypt(void *ssl, unsigned char *ct,
 
     ctx = &lssl->sec.decryptCtx.chacha20poly1305ietf;
 
-    memset(nonce, 0, TLS_AEAD_NONCE_MAXLEN);
-    memset(aad, 0, TLS_CHACHA20_POLY1305_IETF_AAD_LEN);
+    Memset(nonce, 0, TLS_AEAD_NONCE_MAXLEN);
+    Memset(aad, 0, TLS_CHACHA20_POLY1305_IETF_AAD_LEN);
 
     /* Check https://tools.ietf.org/html/draft-nir-cfrg-chacha20-poly1305-06 */
 
@@ -493,7 +520,7 @@ int32 csChacha20Poly1305IetfDecrypt(void *ssl, unsigned char *ct,
 
     /* The nonce is built according to: https://tools.ietf.org/html/draft-ietf-tls-chacha20-poly1305 */
 
-    memcpy(nonce + (CHACHA20POLY1305_IETF_IV_FIXED_LENGTH - TLS_AEAD_SEQNB_LEN), lssl->sec.remSeq, TLS_AEAD_SEQNB_LEN);
+    Memcpy(nonce + (CHACHA20POLY1305_IETF_IV_FIXED_LENGTH - TLS_AEAD_SEQNB_LEN), lssl->sec.remSeq, TLS_AEAD_SEQNB_LEN);
 
     for (i = 0; i < CHACHA20POLY1305_IETF_IV_FIXED_LENGTH; i++)
     {
@@ -502,7 +529,7 @@ int32 csChacha20Poly1305IetfDecrypt(void *ssl, unsigned char *ct,
 
 
     /* --- Fill Additional data ---// */
-    memcpy(aad, lssl->sec.remSeq, TLS_AEAD_SEQNB_LEN);
+    Memcpy(aad, lssl->sec.remSeq, TLS_AEAD_SEQNB_LEN);
     i = TLS_AEAD_SEQNB_LEN;
 
     /* Update length of encrypted data: we have to remove tag's length */
@@ -523,6 +550,11 @@ int32 csChacha20Poly1305IetfDecrypt(void *ssl, unsigned char *ct,
     psTraceBytes("aad", aad, TLS_CHACHA20_POLY1305_IETF_AAD_LEN);
     psTraceBytes("ct", ct, ctLen);
     psTraceBytes("tag", ct + ctLen, TLS_CHACHA20_POLY1305_IETF_TAG_LEN);
+    if (pt != ct)
+    {
+        psTraceInfo("Warning: ChaCha20 decrypt requires in-situ" \
+                " for overlapping plaintext and ciphertext bufs\n");
+    }
 # endif
 
     /* --- Check authentication tag and decrypt data ---// */
@@ -556,7 +588,7 @@ int32 csIdeaInit(sslSec_t *sec, int32 type, uint32 keysize)
 
     if (type == INIT_ENCRYPT_CIPHER)
     {
-        memset(&(sec->encryptCtx), 0, sizeof(psCipherContext_t));
+        Memset(&(sec->encryptCtx), 0, sizeof(psCipherContext_t));
         if ((err = psIdeaInit(&(sec->encryptCtx.idea), sec->writeIV, sec->writeKey)) < 0)
         {
             return err;
@@ -564,7 +596,7 @@ int32 csIdeaInit(sslSec_t *sec, int32 type, uint32 keysize)
     }
     else     /* Init for decrypt */
     {
-        memset(&(sec->decryptCtx), 0, sizeof(psCipherContext_t));
+        Memset(&(sec->decryptCtx), 0, sizeof(psCipherContext_t));
         if ((err = psIdeaInit(&(sec->decryptCtx.idea), sec->readIV, sec->readKey)) < 0)
         {
             return err;
@@ -605,7 +637,7 @@ static int32 csSeedInit(sslSec_t *sec, int32 type, uint32 keysize)
 
     if (type == INIT_ENCRYPT_CIPHER)
     {
-        memset(&(sec->encryptCtx), 0, sizeof(psSeed_t));
+        Memset(&(sec->encryptCtx), 0, sizeof(psSeed_t));
         if ((err = psSeedInit(&(sec->encryptCtx.seed), sec->writeIV, sec->writeKey)) < 0)
         {
             return err;
@@ -613,7 +645,7 @@ static int32 csSeedInit(sslSec_t *sec, int32 type, uint32 keysize)
     }
     else
     {
-        memset(&(sec->decryptCtx), 0, sizeof(psSeed_t));
+        Memset(&(sec->decryptCtx), 0, sizeof(psSeed_t));
         if ((err = psSeedInit(&(sec->decryptCtx.seed), sec->readIV, sec->readKey)) < 0)
         {
             return err;
@@ -653,7 +685,7 @@ static int32 csNullEncrypt(void *ctx, unsigned char *in,
 {
     if (out != in)
     {
-        memcpy(out, in, len);
+        Memcpy(out, in, len);
     }
     return len;
 }
@@ -663,7 +695,7 @@ static int32 csNullDecrypt(void *ctx, unsigned char *in,
 {
     if (out != in)
     {
-        memmove(out, in, len);
+        Memmove(out, in, len);
     }
     return len;
 }
@@ -724,7 +756,7 @@ static int32 csShaGenerateMac(void *sslv, unsigned char type,
 }
 # endif /* USE_TLS */
 
-    memcpy(macOut, mac, ssl->enMacSize);
+    Memcpy(macOut, mac, ssl->enMacSize);
     return ssl->enMacSize;
 }
 
@@ -798,7 +830,7 @@ static int32 csMd5GenerateMac(void *sslv, unsigned char type,
 # ifdef USE_TLS
 }
 # endif /* USE_TLS */
-    memcpy(macOut, mac, ssl->enMacSize);
+    Memcpy(macOut, mac, ssl->enMacSize);
     return ssl->enMacSize;
 }
 
@@ -832,9 +864,11 @@ static int32 csMd5VerifyMac(void *sslv, unsigned char type, unsigned char *data,
 
 /******************************************************************************/
 
+#ifdef USE_SERVER_SIDE_SSL
 /* Set of bits corresponding to supported cipher ordinal. If set, it is
     globally disabled */
 static uint32_t disabledCipherFlags[8] = { 0 }; /* Supports up to 256 ciphers */
+#endif
 
 const static sslCipherSpec_t supportedCiphers[] = {
 /*
@@ -855,6 +889,52 @@ const static sslCipherSpec_t supportedCiphers[] = {
           7. Cipher Mode (GCM > CBC)
            8. PKI Authentication Method (ECDSA > RSA > PSK)
  */
+
+/* TLS 1.3 ciphersuites. */
+#ifdef USE_TLS_AES_128_GCM_SHA256
+    { TLS_AES_128_GCM_SHA256,                                     /* ident */
+      CS_TLS13,                                                   /* type */
+      CRYPTO_FLAGS_AES | CRYPTO_FLAGS_GCM | CRYPTO_FLAGS_SHA2,    /* flags */
+      0,                                                          /* macSize */
+      16,                                                         /* keySize */
+      12,                                                         /* ivSize */
+      0,                                                          /* blocksize */
+      csAesGcmInitTls13,                                          /* init */
+      csAesGcmEncryptTls13,                                       /* encrypt */
+      csAesGcmDecryptTls13,                                       /* decrypt */
+      NULL,                                                       /* generateMac */
+      NULL },                                                     /* verifyMac */
+#endif /* TLS_AES_128_GCM_SHA256 */
+
+#ifdef USE_TLS_AES_256_GCM_SHA384
+    { TLS_AES_256_GCM_SHA384,                                     /* ident */
+      CS_TLS13,                                                   /* type */
+      CRYPTO_FLAGS_AES256 | CRYPTO_FLAGS_GCM | CRYPTO_FLAGS_SHA3, /* flags */
+      0,                                                          /* macSize */
+      32,                                                         /* keySize */
+      12,                                                         /* ivSize */
+      0,                                                          /* blocksize */
+      csAesGcmInitTls13,                                          /* init */
+      csAesGcmEncryptTls13,                                       /* encrypt */
+      csAesGcmDecryptTls13,                                       /* decrypt */
+      NULL,                                                       /* generateMac */
+      NULL },                                                     /* verifyMac */
+#endif /* TLS_AES_128_GCM_SHA256 */
+
+#ifdef USE_TLS_CHACHA20_POLY1305_SHA256
+    { TLS_CHACHA20_POLY1305_SHA256,                               /* ident */
+      CS_TLS13,                                                   /* type */
+      CRYPTO_FLAGS_CHACHA | CRYPTO_FLAGS_SHA2,                    /* flags */
+      0,                                                          /* macSize */
+      32,                                                         /* keySize */
+      CHACHA20POLY1305_IETF_IV_FIXED_LENGTH,                      /* ivSize */
+      0,                                                          /* blocksize */
+      csChacha20Poly1305IetfInit,                                 /* init */
+      csChacha20Poly1305IetfEncryptTls13,                         /* encrypt */
+      csChacha20Poly1305IetfDecryptTls13,                         /* decrypt */
+      NULL,                                                       /* generateMac */
+      NULL },                                                     /* verifyMac */
+#endif /* USE_TLS_CHACHA20_POLY1305_SHA256 */
 
 /* Ephemeral ciphersuites */
 #ifdef USE_TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
@@ -1751,12 +1831,12 @@ int32_t matrixSslSetCipherSuiteEnabledStatus(ssl_t *ssl, psCipher16_t cipherId,
                 if (flags == PS_TRUE)
                 {
                     /* Unset the disabled bit */
-                    disabledCipherFlags[i >> 5] &= ~(1 << (i & 31));
+                    disabledCipherFlags[i >> 5] &= ~(1UL << (i & 31));
                 }
                 else
                 {
                     /* Set the disabled bit */
-                    disabledCipherFlags[i >> 5] |= 1 << (i & 31);
+                    disabledCipherFlags[i >> 5] |= 1UL << (i & 31);
                 }
                 return PS_SUCCESS;
             }
@@ -1847,147 +1927,10 @@ static uint16 getKeyTypeFromCipherType(uint16 type, uint16 *dhParamsRequired,
 }
 #endif  /* USE_SERVER_SIDE_SSL */
 
-#ifdef VALIDATE_KEY_MATERIAL
 # define KEY_ALG_ANY     1
 # define KEY_ALG_FIRST   2
-/*
-    anyOrFirst is basically a determination of whether we are looking through
-    a collection of CA files for an algorithm (ANY) or a cert chain where
-    we really only care about the child most cert because that is the one
-    that ultimately determines the authentication algorithm (FIRST)
- */
-static int32 haveCorrectKeyAlg(psX509Cert_t *cert, int32 keyAlg, int anyOrFirst)
-{
-    while (cert)
-    {
-        if (cert->pubKeyAlgorithm == keyAlg)
-        {
-            return PS_SUCCESS;
-        }
-        if (anyOrFirst == KEY_ALG_FIRST)
-        {
-            return PS_FAILURE;
-        }
-        cert = cert->next;
-    }
-    return PS_FAILURE;
-}
 
-# ifdef USE_SERVER_SIDE_SSL
-/* If using TLS 1.2 we need to test agains the sigHashAlg and eccParams */
-static int32_t validateKeyForExtensions(ssl_t *ssl, const sslCipherSpec_t *spec,
-    sslKeys_t *givenKey)
-{
-#  ifdef USE_TLS_1_2
-    psX509Cert_t *crt;
-#  endif
-
-    /* Can immediately weed out PSK suites and anon suites that don't use
-        sigHashAlg or EC curves */
-    if (spec->type == CS_PSK || spec->type == CS_DHE_PSK ||
-        spec->type == CS_DH_ANON)
-    {
-        return PS_SUCCESS;
-    }
-
-#  ifdef USE_TLS_1_2
-    /* hash and sig alg is a TLS 1.2 only extension */
-    if (ssl->flags & SSL_FLAGS_TLS_1_2)
-    {
-
-        /* Walk through each cert and confirm the client will be able to
-            deal with them based on the algorithms provided in the extension */
-        crt = givenKey->cert;
-        while (crt)
-        {
-
-#   ifdef USE_DHE_CIPHER_SUITE
-            /* Have to look out for the case where the public key alg doesn't
-                match the sig algorithm.  This is only a concern for DHE based
-                suites where we'll be sending a signature in the
-                SeverKeyExchange message */
-            if (spec->type == CS_DHE_RSA || spec->type == CS_ECDHE_RSA ||
-                spec->type == CS_ECDHE_ECDSA)
-            {
-                if (crt->pubKeyAlgorithm == OID_RSA_KEY_ALG)
-                {
-                    if (
-#    ifdef USE_SHA1
-                        !(ssl->hashSigAlg & HASH_SIG_SHA1_RSA_MASK) &&
-#    endif
-#    ifdef USE_SHA384
-                        !(ssl->hashSigAlg & HASH_SIG_SHA384_RSA_MASK) &&
-#    endif
-#    ifdef USE_SHA512
-                        !(ssl->hashSigAlg & HASH_SIG_SHA512_RSA_MASK) &&
-#    endif
-                        !(ssl->hashSigAlg & HASH_SIG_SHA256_RSA_MASK))
-                    {
-                        return PS_UNSUPPORTED_FAIL;
-                    }
-                }
-#    ifdef USE_ECC
-                if (crt->pubKeyAlgorithm == OID_ECDSA_KEY_ALG)
-                {
-                    if (
-#     ifdef USE_SHA1
-                        !(ssl->hashSigAlg & HASH_SIG_SHA1_ECDSA_MASK) &&
-#     endif
-#     ifdef USE_SHA384
-                        !(ssl->hashSigAlg & HASH_SIG_SHA384_ECDSA_MASK) &&
-#     endif
-#     ifdef USE_SHA512
-                        !(ssl->hashSigAlg & HASH_SIG_SHA512_ECDSA_MASK) &&
-#     endif
-                        !(ssl->hashSigAlg & HASH_SIG_SHA256_ECDSA_MASK))
-                    {
-                        return PS_UNSUPPORTED_FAIL;
-                    }
-                }
-#    endif /* USE_ECC */
-            }
-#   endif  /* USE_DHE_CIPHER_SUITE */
-
-            if (!peerSupportsSigAlg(crt->sigAlgorithm,
-                            ssl->hashSigAlg))
-            {
-                psTraceInfo("Peer doesn't support all sig/hash algorithm " \
-                        "pairs in our certificate chain.\n");
-                return PS_UNSUPPORTED_FAIL;
-            }
-
-#   ifdef USE_ECC
-            /* EC suites have the added check of specific curves.  Just
-                checking DH suites because the curve comes from the cert.
-                ECDHE suites negotiate key exchange curve elsewhere */
-            if (spec->type == CS_ECDH_ECDSA || spec->type == CS_ECDH_RSA)
-            {
-                if (ssl->ecInfo.ecFlags)
-                {
-                    /* Do negotiated curves work with our signatures */
-                    if (psTestUserEcID(crt->publicKey.key.ecc.curve->curveId,
-                            ssl->ecInfo.ecFlags) < 0)
-                    {
-                        return PS_UNSUPPORTED_FAIL;
-                    }
-                }
-                else
-                {
-                    psTraceInfo("Don't share ANY EC curves with peer\n");
-                    return PS_UNSUPPORTED_FAIL;
-                }
-            }
-#   endif
-            crt = crt->next;
-        }
-    }
-
-
-#  endif /* USE_TLS_1_2 */
-
-    /* Must be good */
-    return PS_SUCCESS;
-}
+#if defined(USE_SERVER_SIDE_SSL) && !defined(USE_ONLY_PSK_CIPHER_SUITE)
 
 /*
     This is the signature algorithm that the client will be using to encrypt
@@ -1996,34 +1939,231 @@ static int32_t validateKeyForExtensions(ssl_t *ssl, const sslCipherSpec_t *spec,
  */
 static int32 haveCorrectSigAlg(psX509Cert_t *cert, int32 sigType)
 {
-    if (sigType == RSA_TYPE_SIG)
-    {
-        if (cert->sigAlgorithm == OID_SHA1_RSA_SIG ||
-            cert->sigAlgorithm == OID_SHA256_RSA_SIG ||
-            cert->sigAlgorithm == OID_SHA384_RSA_SIG ||
-            cert->sigAlgorithm == OID_SHA512_RSA_SIG ||
-            cert->sigAlgorithm == OID_MD5_RSA_SIG ||
-            cert->sigAlgorithm == OID_MD2_RSA_SIG ||
-            cert->sigAlgorithm == OID_RSASSA_PSS)
-        {
-            return PS_SUCCESS;
-        }
-    }
-    else if (sigType == ECDSA_TYPE_SIG)
-    {
-        if (cert->sigAlgorithm == OID_SHA1_ECDSA_SIG ||
-            cert->sigAlgorithm == OID_SHA224_ECDSA_SIG ||
-            cert->sigAlgorithm == OID_SHA256_ECDSA_SIG ||
-            cert->sigAlgorithm == OID_SHA384_ECDSA_SIG ||
-            cert->sigAlgorithm == OID_SHA512_ECDSA_SIG)
-        {
-            return PS_SUCCESS;
-        }
-    }
+    if (sigType < 0)
+        return PS_SUCCESS;
 
+#ifdef USE_CERT_PARSE
+    if (sigType == RSA_TYPE_SIG && cert->pubKeyAlgorithm == OID_RSA_KEY_ALG)
+    {
+        return PS_SUCCESS;
+    }
+    else if (sigType == ECDSA_TYPE_SIG && cert->pubKeyAlgorithm == OID_ECDSA_KEY_ALG)
+    {
+        return PS_SUCCESS;
+    }
+# else
+    /* Without certificate parsing assume success by proper configuration */
+    return PS_SUCCESS;
+# endif
     return PS_FAILURE;
 }
+
+/* If using TLS 1.2 we need to test agains the sigHashAlg and eccParams */
+static psRes_t validateKeyForExtensions(ssl_t *ssl, const sslCipherSpec_t *spec,
+    sslIdentity_t *givenKey)
+{
+#  if defined(USE_TLS_1_2)
+    psX509Cert_t *crt;
+#  endif
+
+    /* Can immediately weed out PSK suites and anon suites that don't use
+       sigHashAlg or EC curves */
+    if (spec->type == CS_PSK
+            || spec->type == CS_DHE_PSK
+            || spec->type == CS_DH_ANON)
+    {
+        return PS_SUCCESS;
+    }
+
+#  ifdef USE_TLS_1_3
+    if (NEGOTIATED_TLS_1_3(ssl))
+    {
+        int32_t rc;
+
+        rc = tls13TryNegotiateParams(ssl, spec, givenKey);
+        if (rc != PS_SUCCESS)
+        {
+            return PS_UNSUPPORTED_FAIL;
+        }
+        return PS_SUCCESS;
+    }
+#  endif
+
+#  ifdef USE_TLS_1_2
+    /* hash and sig alg is a TLS 1.2 only extension */
+    if (ssl->flags & SSL_FLAGS_TLS_1_2)
+    {
+        /* Walk through each cert and confirm the client will be able to
+            deal with them based on the algorithms provided in the extension */
+
+        for (crt = givenKey->cert; crt; crt = crt->next)
+        {
+#   ifdef USE_DHE_CIPHER_SUITE
+            /* Have to look out for the case where the public key alg doesn't
+                match the sig algorithm.  This is only a concern for DHE based
+                suites where we'll be sending a signature in the
+                ServerKeyExchange message */
+            if (spec->type == CS_DHE_RSA || spec->type == CS_ECDHE_RSA ||
+                spec->type == CS_ECDHE_ECDSA)
+            {
+#    ifdef USE_CERT_PARSE
+#     ifdef USE_RSA
+                if (crt->pubKeyAlgorithm == OID_RSA_KEY_ALG)
+                {
+                    if (
+#      ifdef USE_SHA1
+                        !(ssl->hashSigAlg & HASH_SIG_SHA1_RSA_MASK) &&
+#      endif
+#      ifdef USE_SHA384
+                        !(ssl->hashSigAlg & HASH_SIG_SHA384_RSA_MASK) &&
+#      endif
+#      ifdef USE_SHA512
+                        !(ssl->hashSigAlg & HASH_SIG_SHA512_RSA_MASK) &&
+#      endif
+                        !(ssl->hashSigAlg & HASH_SIG_SHA256_RSA_MASK))
+                    {
+                        return PS_UNSUPPORTED_FAIL;
+                    }
+                }
+#     endif /* RSA */
+#     ifdef USE_ECC
+                if (crt->pubKeyAlgorithm == OID_ECDSA_KEY_ALG)
+                {
+                    if (
+#      ifdef USE_SHA1
+                        !(ssl->hashSigAlg & HASH_SIG_SHA1_ECDSA_MASK) &&
+#      endif
+#      ifdef USE_SHA384
+                        !(ssl->hashSigAlg & HASH_SIG_SHA384_ECDSA_MASK) &&
+#      endif
+#      ifdef USE_SHA512
+                        !(ssl->hashSigAlg & HASH_SIG_SHA512_ECDSA_MASK) &&
+#      endif
+                        !(ssl->hashSigAlg & HASH_SIG_SHA256_ECDSA_MASK))
+                    {
+                        return PS_UNSUPPORTED_FAIL;
+                    }
+                }
+#     endif /* USE_ECC */
+#    endif /* USE_CERT_PARSE */
+            }
+#   endif  /* USE_DHE_CIPHER_SUITE */
+
+            if (!peerSupportsSigAlg(crt->sigAlgorithm, ssl->hashSigAlg))
+            {
+                psTraceErrr("Peer doesn't support all sig/hash algorithm " \
+                            "pairs in our certificate chain.\n");
+                return PS_UNSUPPORTED_FAIL;
+            }
+#   ifdef USE_ECC
+            /* EC suites have the added check of specific curves.  Just
+                checking DH suites because the curve comes from the cert.
+                ECDHE suites negotiate key exchange curve elsewhere */
+            if (spec->type == CS_ECDH_ECDSA || spec->type == CS_ECDH_RSA)
+            {
+                if (ssl->ecInfo.ecFlags)
+                {
+#    ifdef USE_CERT_PARSE
+                    /* Do negotiated curves work with our signatures. If not
+                       parsing cert, opportunistically accept, and fail later. */
+                    if (psTestUserEcID(crt->publicKey.key.ecc.curve->curveId,
+                            ssl->ecInfo.ecFlags) < 0)
+                    {
+                        return PS_UNSUPPORTED_FAIL;
+                    }
+#    endif /* USE_CERT_PARSE */
+                }
+                else
+                {
+                    psTraceErrr("Don't share ANY EC curves with peer\n");
+                    return PS_UNSUPPORTED_FAIL;
+                }
+            }
+#   endif
+        } /* for (crt = ...) */
+    }
+#  endif /* USE_TLS_1_2 */
+
+    /* Must be good */
+    return PS_SUCCESS;
+}
 # endif /* USE_SERVER_SIDE_SSL */
+
+#if defined(USE_X509) && !defined(USE_ONLY_PSK_CIPHER_SUITE)
+/* if firstMatch == true, then the subject cert keyAlg on the chain needs to
+   match, else any cert keyAlg matching is sufficient (e.g. chain identifies
+   trust anchors). Zero value for keyAlg matches any certificate. */
+static psBool_t certValidForUse(psX509Cert_t *certs,
+        int32 keyAlg,
+        psBool_t firstMatch)
+{
+# if !defined(USE_ONLY_PSK_CIPHER_SUITE) && defined(USE_CERT_PARSE)
+    psX509Cert_t *cert;
+
+    for (cert = certs; cert; cert = cert->next)
+    {
+        if (keyAlg == 0 || cert->pubKeyAlgorithm == keyAlg)
+        {
+            return PS_TRUE;
+        }
+        if (firstMatch)
+        {
+            return PS_FALSE;
+        }
+    }
+    return PS_FALSE;
+#else
+    /* PSK only or no certificate parsing - assume OK. */
+    return PS_TRUE;
+#endif
+}
+#endif
+
+#if defined(USE_SERVER_SIDE_SSL) && !defined(USE_ONLY_PSK_CIPHER_SUITE)
+
+/* anyOrFirst is basically a determination of whether we are looking through
+   a collection of CA files for an algorithm (ANY) or a cert chain where
+   we really only care about the child most cert because that is the one
+   that ultimately determines the authentication algorithm (FIRST) */
+static psRes_t haveCorrectKeyAlg(sslIdentity_t *idKey,
+        int32 keyAlg,
+        int32 sigType,
+        int anyOrFirst)
+{
+    if (sigType == CS_NULL)
+    {
+        return PS_SUCCESS;
+    }
+#ifdef USE_X509
+    if (certValidForUse(idKey->cert, keyAlg, (anyOrFirst == KEY_ALG_FIRST))
+        && haveCorrectSigAlg(idKey->cert, sigType) == PS_SUCCESS)
+    {
+        return PS_SUCCESS;
+    }
+#endif
+    return PS_FAILURE;
+}
+
+# ifdef VALIDATE_KEY_MATERIAL
+static psRes_t haveKeyForAlg(sslKeys_t *keys,
+                               int32 keyAlg, int32 sigType,
+                               int anyOrFirst)
+{
+    sslIdentity_t *idKey;
+
+    for (idKey = keys->identity; idKey; idKey = idKey->next)
+    {
+        if (haveCorrectKeyAlg(idKey, keyAlg, sigType, anyOrFirst) == PS_SUCCESS)
+        {
+            return PS_SUCCESS;
+        }
+    }
+    return PS_FAILURE;
+}
+# endif
+#endif
+
+#ifdef VALIDATE_KEY_MATERIAL
 
 /******************************************************************************/
 /*
@@ -2037,8 +2177,44 @@ static int32 haveCorrectSigAlg(psX509Cert_t *cert, int32 sigType)
     for compiling.  You can't actually get into the wrong area of the
     SSL_FLAGS_SERVER test so no #else cases should be needed
  */
-int32_t haveKeyMaterial(const ssl_t *ssl, int32 cipherType, short reallyTest)
+int32_t haveKeyMaterial(const ssl_t *ssl,
+                        const sslCipherSpec_t *cipher,
+                        short reallyTest)
 {
+    int32 cipherType = cipher->type;
+
+# ifdef USE_TLS_1_3
+    psResSize_t len;
+    if (cipherType == CS_TLS13)
+    {
+        psSize_t hashLen;
+        /* The only meaningful check we can make here for TLS1.3 is that
+           when using PSK we choose such cipher suite that matches the
+           chosen PSK length */
+        if (ssl->sec.tls13ChosenPsk != NULL)
+        {
+            if (cipher->flags & CRYPTO_FLAGS_SHA3)
+            {
+                len = psGetOutputBlockLength(HASH_SHA384);
+            }
+            else
+            {
+                len = psGetOutputBlockLength(HMAC_SHA256);
+            }
+            if (len < 0)
+            {
+                return PS_FAILURE;
+            }
+            hashLen = len;
+            if (hashLen != ssl->sec.tls13ChosenPsk->pskLen)
+            {
+                psTraceErrr("Ciphersuite doesn't match with PSK hash length\n");
+                return PS_FAILURE;
+            }
+        }
+        return PS_SUCCESS;
+    }
+# endif /* USE_TLS_1_3 */
 
 # ifdef USE_SERVER_SIDE_SSL
     /* If the user has a ServerNameIndication callback registered we're
@@ -2068,8 +2244,9 @@ int32_t haveKeyMaterial(const ssl_t *ssl, int32 cipherType, short reallyTest)
         if (ssl->flags & SSL_FLAGS_SERVER)
         {
 #  ifdef USE_SERVER_SIDE_SSL
-            if (ssl->keys == NULL || ssl->keys->cert == NULL)
+            if (ssl->keys == NULL || ssl->keys->identity == NULL)
             {
+                /* no server certificates, no play */
                 return PS_FAILURE;
             }
 #  endif
@@ -2091,12 +2268,9 @@ int32_t haveKeyMaterial(const ssl_t *ssl, int32 cipherType, short reallyTest)
         if (ssl->flags & SSL_FLAGS_SERVER)
         {
 #  ifdef USE_SERVER_SIDE_SSL
-            if (haveCorrectKeyAlg(ssl->keys->cert, OID_RSA_KEY_ALG,
+            if (haveKeyForAlg(ssl->keys,
+                    OID_RSA_KEY_ALG, RSA_TYPE_SIG,
                     KEY_ALG_FIRST) < 0)
-            {
-                return PS_FAILURE;
-            }
-            if (haveCorrectSigAlg(ssl->keys->cert, RSA_TYPE_SIG) < 0)
             {
                 return PS_FAILURE;
             }
@@ -2104,10 +2278,8 @@ int32_t haveKeyMaterial(const ssl_t *ssl, int32 cipherType, short reallyTest)
 #  ifdef USE_CLIENT_SIDE_SSL
         }
         else     /* Client */
-
         {
-            if (haveCorrectKeyAlg(ssl->keys->CAcerts, OID_RSA_KEY_ALG,
-                    KEY_ALG_ANY) < 0)
+            if (!certValidForUse(ssl->keys->CAcerts, OID_RSA_KEY_ALG, PS_FALSE))
             {
                 return PS_FAILURE;
             }
@@ -2130,7 +2302,8 @@ int32_t haveKeyMaterial(const ssl_t *ssl, int32 cipherType, short reallyTest)
             }
 #   endif
 #   ifdef USE_SERVER_SIDE_SSL
-            if (haveCorrectKeyAlg(ssl->keys->cert, OID_RSA_KEY_ALG,
+            if (haveKeyForAlg(ssl->keys,
+                    OID_RSA_KEY_ALG, -1,
                     KEY_ALG_FIRST) < 0)
             {
                 return PS_FAILURE;
@@ -2140,8 +2313,7 @@ int32_t haveKeyMaterial(const ssl_t *ssl, int32 cipherType, short reallyTest)
         }
         else
         {
-            if (haveCorrectKeyAlg(ssl->keys->CAcerts, OID_RSA_KEY_ALG,
-                    KEY_ALG_ANY) < 0)
+            if (!certValidForUse(ssl->keys->CAcerts, OID_RSA_KEY_ALG, PS_FALSE))
             {
                 return PS_FAILURE;
             }
@@ -2198,12 +2370,9 @@ int32_t haveKeyMaterial(const ssl_t *ssl, int32 cipherType, short reallyTest)
         if (ssl->flags & SSL_FLAGS_SERVER)
         {
 #   ifdef USE_SERVER_SIDE_SSL
-            if (haveCorrectKeyAlg(ssl->keys->cert, OID_RSA_KEY_ALG,
+            if (haveKeyForAlg(ssl->keys,
+                    OID_RSA_KEY_ALG, RSA_TYPE_SIG,
                     KEY_ALG_FIRST) < 0)
-            {
-                return PS_FAILURE;
-            }
-            if (haveCorrectSigAlg(ssl->keys->cert, RSA_TYPE_SIG) < 0)
             {
                 return PS_FAILURE;
             }
@@ -2212,8 +2381,7 @@ int32_t haveKeyMaterial(const ssl_t *ssl, int32 cipherType, short reallyTest)
         }
         else
         {
-            if (haveCorrectKeyAlg(ssl->keys->CAcerts, OID_RSA_KEY_ALG,
-                    KEY_ALG_ANY) < 0)
+            if (!certValidForUse(ssl->keys->CAcerts, OID_RSA_KEY_ALG, PS_FALSE))
             {
                 return PS_FAILURE;
             }
@@ -2226,15 +2394,29 @@ int32_t haveKeyMaterial(const ssl_t *ssl, int32 cipherType, short reallyTest)
  */
     if (cipherType == CS_ECDH_RSA)
     {
+        /* ECDH is a different beast - the actual authentication is done using
+           static DH key (signed with RSA) as opposed to the ECDHE/RSA/DSA
+           where the authentication is done using signature constructed with
+           the key. */
         if (ssl->flags & SSL_FLAGS_SERVER)
         {
 #   ifdef USE_SERVER_SIDE_SSL
-            if (haveCorrectKeyAlg(ssl->keys->cert, OID_ECDSA_KEY_ALG,
-                    KEY_ALG_FIRST) < 0)
+            sslIdentity_t *idKey;
+            for (idKey = ssl->keys->identity; idKey; idKey = idKey->next)
             {
-                return PS_FAILURE;
+                if (idKey->cert->pubKeyAlgorithm == OID_ECDSA_KEY_ALG
+                    && (idKey->cert->sigAlgorithm == OID_SHA1_RSA_SIG
+                        || idKey->cert->sigAlgorithm == OID_SHA256_RSA_SIG
+                        || idKey->cert->sigAlgorithm == OID_SHA384_RSA_SIG
+                        || idKey->cert->sigAlgorithm == OID_SHA512_RSA_SIG
+                        || idKey->cert->sigAlgorithm == OID_MD5_RSA_SIG
+                        || idKey->cert->sigAlgorithm == OID_MD2_RSA_SIG
+                        || idKey->cert->sigAlgorithm == OID_RSASSA_PSS))
+                {
+                    break;
+                }
             }
-            if (haveCorrectSigAlg(ssl->keys->cert, RSA_TYPE_SIG) < 0)
+            if (idKey == NULL)
             {
                 return PS_FAILURE;
             }
@@ -2243,8 +2425,7 @@ int32_t haveKeyMaterial(const ssl_t *ssl, int32 cipherType, short reallyTest)
         }
         else
         {
-            if (haveCorrectKeyAlg(ssl->keys->CAcerts, OID_RSA_KEY_ALG,
-                    KEY_ALG_ANY) < 0)
+            if (!certValidForUse(ssl->keys->CAcerts, OID_RSA_KEY_ALG, PS_FALSE))
             {
                 return PS_FAILURE;
             }
@@ -2261,12 +2442,9 @@ int32_t haveKeyMaterial(const ssl_t *ssl, int32 cipherType, short reallyTest)
         if (ssl->flags & SSL_FLAGS_SERVER)
         {
 #   ifdef USE_SERVER_SIDE_SSL
-            if (haveCorrectKeyAlg(ssl->keys->cert, OID_ECDSA_KEY_ALG,
+            if (haveKeyForAlg(ssl->keys,
+                    OID_ECDSA_KEY_ALG, ECDSA_TYPE_SIG,
                     KEY_ALG_FIRST) < 0)
-            {
-                return PS_FAILURE;
-            }
-            if (haveCorrectSigAlg(ssl->keys->cert, ECDSA_TYPE_SIG) < 0)
             {
                 return PS_FAILURE;
             }
@@ -2275,8 +2453,7 @@ int32_t haveKeyMaterial(const ssl_t *ssl, int32 cipherType, short reallyTest)
         }
         else
         {
-            if (haveCorrectKeyAlg(ssl->keys->CAcerts, OID_ECDSA_KEY_ALG,
-                    KEY_ALG_ANY) < 0)
+            if (!certValidForUse(ssl->keys->CAcerts, OID_ECDSA_KEY_ALG, PS_FALSE))
             {
                 return PS_FAILURE;
             }
@@ -2304,21 +2481,247 @@ int32_t haveKeyMaterial(const ssl_t *ssl, int32 cipherType, short reallyTest)
 /*      0 return is a key was found
     <0 is no luck
  */
+
 # ifdef USE_SERVER_SIDE_SSL
+/*
+   The contributing factors here are:
+   - peer (client) proposal
+   - configured supported algorithms (built-time, global (FIPS or not), and session)
+   - configured identification keys in order
+     - server SniCb
+     - server pubKeyCb
+     - list of server pre-Configured Identities
+
+   Key selection assumes, that TLS protocol versions have been set, and
+   MatrixSsl uses built-time precedence order for server side,
+   therefore server-configuration precedence order is not part of the
+   selection algorithm.
+*/
+static psRes_t
+chooseCS(ssl_t *ssl, uint32_t *suites, psSize_t nsuites)
+{
+    sslKeys_t *givenKey = NULL, *keys;
+#ifdef USE_IDENTITY_CERTIFICATES
+    sslIdentity_t *idKey, *fallbackId = NULL;
+#endif
+    psBool_t sniUsed = PS_FALSE;
+    const sslCipherSpec_t *fallbackSuite = NULL;
+    int i;
+
+    /* prefer keys loaded using SNI */
+    if (ssl->expectedName)
+    {
+        givenKey = matrixServerGetKeysSNI(ssl,
+                                          ssl->expectedName,
+                                          Strlen(ssl->expectedName));
+        if (ssl->extFlags.sni && givenKey == NULL)
+        {
+            psTraceErrr("Server didn't load SNI keys using SNI callback\n");
+            ssl->err = SSL_ALERT_UNRECOGNIZED_NAME;
+            return PS_UNSUPPORTED_FAIL;
+        }
+        sniUsed = PS_TRUE;
+    }
+
+    for (i = 0; i < nsuites; i++)
+    {
+        uint32 cipher = suites[i];
+        const sslCipherSpec_t *spec;
+        uint16 needDh, isEc, reqSigType;
+
+        if ((spec = sslGetCipherSpec(ssl, cipher)) == NULL)
+        {
+            /* Not supported by build, configuration, or protocol version */
+            continue;
+        }
+
+        if ((ssl->flags & SSL_FLAGS_HTTP2) && !isAlpnSuite(spec))
+        {
+            /* Not allowed with HTTP2 */
+            continue;
+        }
+
+        /*
+          When using TLS 1.3, just pick the first supported TLS 1.3 suite from
+          the client's list. No need to check against key material.*/
+# ifdef USE_TLS_1_3
+        if (NEGOTIATED_TLS_1_3(ssl) && spec->type == CS_TLS13)
+        {
+            ssl->cipher = spec;
+#  ifdef USE_IDENTITY_CERTIFICATES
+            ssl->chosenIdentity = ssl->keys->identity;
+#  endif
+            goto out_ok;
+        }
+# endif /* USE_TLS_1_3 */
+
+        reqSigType = getKeyTypeFromCipherType(spec->type, &needDh, &isEc);
+        if (!sniUsed)
+        {
+# ifndef USE_ONLY_PSK_CIPHER_SUITE
+            if (ssl->sec.pubkeyCb != NULL)
+            {
+                /* Check if the pubKeyCb has keys for this suite/server */
+                sslPubkeyId_t wantKey;
+
+                wantKey.serverName = ssl->expectedName;
+                wantKey.hashAlg = ssl->hashSigAlg;
+                wantKey.keyType = reqSigType;
+                wantKey.dhParamsRequired = needDh;
+                wantKey.curveFlags = 0;
+#  ifdef USE_ECC_CIPHER_SUITE
+                /* At this point ssl->ecInfo.ecFlags carries the shared curves */
+                wantKey.curveFlags = ssl->ecInfo.ecFlags;
+#  endif
+                givenKey = (*ssl->sec.pubkeyCb)(ssl, &wantKey);
+                if (givenKey == NULL)
+                { /* pubKeyCb did not select key for this particular suite.  Try
+                     next suite. */
+                    continue;
+                }
+            }
+# endif /* USE_ONLY_PSK_CIPHER_SUITE */
+        }
+        if (spec->type == CS_DH_ANON)
+        {
+            /* Anonymous does not require key material. */
+            ssl->cipher = spec;
+            ssl->keys = NULL;
+#ifdef USE_IDENTITY_CERTIFICATES
+            ssl->chosenIdentity = NULL;
+#endif
+            goto out_ok;
+        }
+
+        keys = (givenKey == NULL) ? ssl->keys : givenKey;
+        if (keys == NULL)
+        {
+            /* No keys found for the suite, try the next one. */
+            continue;
+        }
+
+#ifdef USE_PSK_CIPHER_SUITE
+        if (spec->type == CS_PSK || spec->type == CS_DHE_PSK)
+        {
+            if (keys->pskKeys != NULL)
+            {
+                if (reqSigType == CS_NULL &&
+                    (needDh == 0
+# ifdef REQUIRE_DH_PARAMS
+                     || (needDh == 1 && keys->dhParams.size > 0)
+# endif /* REQUIRE_DH_PARAMS */
+                     ))
+                {
+                    /* either doesn't do DH, or we have params preloaded */
+                    ssl->cipher = spec;
+                    ssl->keys = keys;
+#ifdef USE_IDENTITY_CERTIFICATES
+                    ssl->chosenIdentity = NULL;
+#endif
+                    goto out_ok;
+                }
+            }
+            continue;
+        }
+
+# ifdef REQUIRE_DH_PARAMS
+        if (needDh && keys->dhParams.size == 0)
+        {
+            /* need dhparams, but none provided */
+            continue;
+        }
+# endif /* REQUIRE_DH_PARAMS */
+#endif /* USE_PSK_CIPHER_SUITE */
+
+#ifdef USE_IDENTITY_CERTIFICATES
+        /* Now we have key-chain, either from SNI, pubKeyCb, or from server
+           startup configuration. Check if it usable with the current
+           suite. */
+        for (idKey = keys->identity; idKey; idKey = idKey->next)
+        {
+            uint16 reqKeyAlg;
+            if (spec->type == CS_ECDH_RSA || spec->type == CS_ECDH_ECDSA)
+            {
+                reqKeyAlg = OID_ECDSA_KEY_ALG;
+                reqSigType = (spec->type == CS_ECDH_RSA) ? RSA_TYPE_SIG : ECDSA_TYPE_SIG;
+            }
+            else
+            {
+                if (reqSigType == RSA_TYPE_SIG)
+                {
+                    reqKeyAlg = OID_RSA_KEY_ALG;
+                }
+                else if (reqSigType == ECDSA_TYPE_SIG)
+                {
+                    reqKeyAlg = OID_ECDSA_KEY_ALG;
+                }
+                else
+                {
+                    /* no requirements for key material */
+                    reqKeyAlg = 0;
+                }
+            }
+
+            if (haveCorrectKeyAlg(idKey,
+                                  reqKeyAlg, reqSigType,
+                                  KEY_ALG_FIRST) < 0 ||
+                validateKeyForExtensions(ssl, spec, idKey) < 0)
+            {
+                /* This key is not suitable, but might be a good
+                   fallback, if nothing else is found. */
+                if (fallbackSuite == NULL)
+                {
+                    fallbackSuite = spec;
+                    fallbackId = idKey;
+                }
+                continue;
+            }
+            /* this suite and key suits the requirements. */
+            ssl->cipher = spec;
+            ssl->keys = keys;
+            /* Authenticate with the given key */
+            ssl->chosenIdentity = idKey;
+            goto out_ok;
+        }
+#endif /* USE_IDENTITY_CERTIFICATES */
+    }
+    if (fallbackSuite != NULL)
+    {
+        /* maybe productive to try the fallback. */
+        ssl->cipher = fallbackSuite;
+#ifdef USE_IDENTITY_CERTIFICATES
+        ssl->chosenIdentity = fallbackId;
+#endif
+        goto out_ok;
+    }
+
+    psTraceErrr("No matching keys for any requested cipher suite.\n");
+    return PS_UNSUPPORTED_FAIL; /* Server can't match anything */
+
+out_ok:
+    psTracePrintCiphersuiteName(INDENT_HS_MSG,
+            "Chosen ciphersuite",
+            ssl->cipher->ident, PS_TRUE);
+    return PS_SUCCESS;
+}
+
 int32 chooseCipherSuite(ssl_t *ssl, unsigned char *listStart, int32 listLen)
 {
-    const sslCipherSpec_t *spec;
     unsigned char *c = listStart;
     unsigned char *end;
-    uint16 ecKeyExchange;
-    uint32 cipher;
-    sslPubkeyId_t wantKey;
-    sslKeys_t *givenKey = NULL;
+    psSize_t nsuites = 0;
+    uint32_t *suites, cipher;
+    psRes_t rc;
+
+    suites = psMalloc(ssl->hsPool, (listLen / 2) * sizeof(suites[0]));
+    if (suites == NULL)
+    {
+        return PS_MEM_FAIL;
+    }
 
     end = c + listLen;
     while (c < end)
     {
-
         if (ssl->rec.majVer > SSL2_MAJ_VER)
         {
             cipher = *c << 8; c++;
@@ -2331,130 +2734,12 @@ int32 chooseCipherSuite(ssl_t *ssl, unsigned char *listStart, int32 listLen)
             cipher += *c << 8; c++;
             cipher += *c; c++;
         }
-
-        /* Checks if this cipher suite compiled into the library.
-            ALSO, in the cases of static server keys (ssl->keys not NULL)
-            the haveKeyMaterial function will be run */
-        if ((spec = sslGetCipherSpec(ssl, cipher)) == NULL)
-        {
-            continue;
-        }
-
-        if (ssl->keys == NULL)
-        {
-            /* Populate the sslPubkeyId_t struct to pass to user callback */
-            wantKey.keyType = getKeyTypeFromCipherType(spec->type,
-                &wantKey.dhParamsRequired, &ecKeyExchange);
-            /* If this is a ECDHE_RSA or ECDH_RSA suite, there are going to
-                need to be some indications for that */
-            psTraceInfo("ecKeyExchange must be incorporated into the user callback.\n");
-
-            /* If this a pure PSK cipher with no DH then we assign that suite
-                immediately and never invoke the user callback.  This server has
-                already indicated its willingness to use PSK if compiled in and
-                the client has sent the suites in priority order so we use it */
-            if (wantKey.keyType == CS_NULL && wantKey.dhParamsRequired == 0)
-            {
-                ssl->cipher = spec;
-                return PS_SUCCESS;
-            }
-
-            /* ssl->expectedName is populated with the optional
-                SNI extension value.
-
-                In this flexible server case, the SNI callback function is
-                NOT USED.
-*/
-            wantKey.serverName = ssl->expectedName;
-#  ifdef USE_TLS_1_2
-            wantKey.hashAlg = ssl->hashSigAlg;
-#  else
-            wantKey.hashAlg = 0;
-#  endif
-#  ifdef USE_ECC_CIPHER_SUITE
-            /* At this point ssl->ecInfo.ecFlags carries the shared curves */
-            wantKey.curveFlags = ssl->ecInfo.ecFlags;
-#  else
-            wantKey.curveFlags = 0;
-#  endif
-
-#  ifndef USE_ONLY_PSK_CIPHER_SUITE
-            /* Invoke the user's callback */
-            givenKey = (ssl->sec.pubkeyCb)(ssl, &wantKey);
-#  endif
-
-            if (givenKey == NULL)
-            {
-                /* User didn't have a match.  Keep looking through suites */
-                continue;
-            }
-
-#  ifdef VALIDATE_KEY_MATERIAL
-            /* We want to double check this.  Temporarily assign their keys as
-                ssl->keys for haveKeyMaterial to find */
-            ssl->keys = givenKey;
-            if (haveKeyMaterial(ssl, spec->type, 1) < 0)
-            {
-                ssl->keys = NULL;
-                /* We're still looping through cipher suites above so this
-                    isn't really fatal.  It just means the user gave us keys
-                    that don't match the suite we wanted */
-                psTraceInfo("WARNING: server didn't load proper keys for ");
-                psTraceIntInfo("cipher suite %d during pubkey callback\n",
-                    spec->ident);
-                continue;
-            }
-            /* Reset.  One final test below before we can set ssl->keys */
-            ssl->keys = NULL;
-#  endif
-        }
-        else
-        {
-            if (ssl->expectedName)
-            {
-                /* The SNI callback is no longer invoked in the middle of the
-                    parse.  Now is the time to call it for pre-loaded keys */
-                if (matrixServerSetKeysSNI(ssl, ssl->expectedName,
-                        strlen(ssl->expectedName)) < 0)
-                {
-                    psTraceInfo("Server didn't load SNI keys\n");
-                    ssl->err = SSL_ALERT_UNRECOGNIZED_NAME;
-                    return MATRIXSSL_ERROR;
-                }
-#  ifdef VALIDATE_KEY_MATERIAL
-                /* New ssl->keys may have been loaded by the callback,
-                    see if they match the potential cipher suite */
-                if (haveKeyMaterial(ssl, spec->type, 1) < 0)
-                {
-                    continue;
-                }
-#  endif
-            }
-            /* This is here because it still could be useful to support the
-                old mechanism where the server just loads the single known
-                ID key at new session and never looks back */
-            givenKey = ssl->keys;
-        }
-
-#  ifdef VALIDATE_KEY_MATERIAL
-        /* Validate key for any sigHashAlg and eccParam hello extensions */
-        if (validateKeyForExtensions(ssl, spec, givenKey) < 0)
-        {
-            givenKey = NULL;
-        }
-        else
-        {
-#  endif
-        ssl->cipher = spec;
-        ssl->keys = givenKey;
-        return PS_SUCCESS;
-#  ifdef VALIDATE_KEY_MATERIAL
+        suites[nsuites++] = cipher;
     }
-#  endif
-    }
-    psTraceInfo("No matching keys for any requested cipher suite.\n");
-    psAssert(givenKey == NULL);
-    return PS_UNSUPPORTED_FAIL; /* Server can't match anything */
+
+    rc = chooseCS(ssl, suites, nsuites);
+    psFree(suites, ssl->hsPool);
+    return rc;
 }
 # endif /* USE_SERVER_SIDE */
 
@@ -2552,6 +2837,12 @@ int32_t eccSuitesSupported(const ssl_t *ssl,
 /* Test if agreed upon cipher suite authentication is being adhered to */
 int32 csCheckCertAgainstCipherSuite(int32 pubKey, int32 cipherType)
 {
+    if (cipherType == CS_TLS13)
+    {
+        /* In TLS 1.3, authentication algorithm is entirely separate from the
+           cipher, so there is nothing we can check here. */
+        return 1;
+    }
     if (pubKey == PS_RSA)
     {
         if (cipherType == CS_DHE_RSA || cipherType == CS_RSA ||
@@ -2593,6 +2884,36 @@ const sslCipherSpec_t *sslGetDefinedCipherSpec(uint16_t id)
         }
     }
     return NULL;
+}
+
+/** Check restrictions by HTTP2 (set by ALPN extension).  This should filter
+    out all ciphersuites specified in:
+    https://tools.ietf.org/html/rfc7540#appendix-A "Note: This list was
+    assembled from the set of registered TLS cipher suites at the time of
+    writing.  This list includes those cipher suites that do not offer an
+    ephemeral key exchange and those that are based on the TLS null, stream,
+    or block cipher type (as defined in Section 6.2.3 of [TLS12]).  Additional
+    cipher suites with these properties could be defined; these would not be
+    explicitly prohibited." */
+psBool_t isAlpnSuite(const sslCipherSpec_t *spec)
+{
+    /** Only allow AEAD ciphers. */
+    if (!(spec->flags & CRYPTO_FLAGS_GCM) &&
+        !(spec->flags & CRYPTO_FLAGS_CHACHA))
+    {
+        return PS_FALSE;
+    }
+    /** Only allow ephemeral key exchange. */
+    switch (spec->type)
+    {
+    case CS_DHE_RSA:
+    case CS_ECDHE_ECDSA:
+    case CS_ECDHE_RSA:
+        return PS_TRUE;
+    default:
+        break;
+    }
+    return PS_FALSE;
 }
 
 /******************************************************************************/
@@ -2655,7 +2976,7 @@ const sslCipherSpec_t *sslGetCipherSpec(const ssl_t *ssl, uint16_t id)
 #endif
 #ifdef USE_SERVER_SIDE_SSL
         /* Globally disabled? */
-        if (disabledCipherFlags[i >> 5] & (1 << (i & 31)))
+        if (disabledCipherFlags[i >> 5] & (1UL << (i & 31)))
         {
             psTraceIntInfo("Matched cipher suite %d but disabled by user\n",
                 id);
@@ -2692,21 +3013,41 @@ const sslCipherSpec_t *sslGetCipherSpec(const ssl_t *ssl, uint16_t id)
         if (!(ssl->flags & SSL_FLAGS_DTLS))
         {
 # endif
+# ifdef USE_TLS_1_3
+        /* Reject non-TLS1.3 cipher suites if TLS1.3 has been negotiated */
+        if (ssl->flags & SSL_FLAGS_TLS_1_3_NEGOTIATED)
+        {
+            if (supportedCiphers[i].type != CS_TLS13 &&
+                supportedCiphers[i].type != CS_NULL)
+            {
+                return NULL;
+            }
+        }
+        /* The server should reject TLS 1.3 cipher suites if TLS 1.3
+           is not enabled. */
+        if (IS_SERVER(ssl) && !USING_TLS_1_3(ssl))
+        {
+            if (supportedCiphers[i].type == CS_TLS13)
+            {
+                return NULL;
+            }
+        }
+# endif
         if (ssl->minVer < TLS_1_2_MIN_VER)
         {
             if (supportedCiphers[i].flags & CRYPTO_FLAGS_SHA3 ||
                 supportedCiphers[i].flags & CRYPTO_FLAGS_SHA2)
             {
                 psTraceIntInfo(
-                    "Matched cipher suite %d but only allowed in TLS 1.2\n", id);
+                    "Matched cipher suite %d but not allowed in TLS <1.2\n", id);
                 return NULL;
             }
         }
-        if (ssl->minVer == TLS_1_2_MIN_VER)
+        if (ssl->minVer == TLS_1_2_MIN_VER || USING_TLS_1_3(ssl))
         {
             if (supportedCiphers[i].flags & CRYPTO_FLAGS_MD5)
             {
-                psTraceIntInfo("Not allowing MD5 suite %d in TLS 1.2\n",
+                psTraceIntInfo("Not allowing MD5 suite %d in TLS 1.2/1.3\n",
                     id);
                 return NULL;
             }
@@ -2759,7 +3100,7 @@ const sslCipherSpec_t *sslGetCipherSpec(const ssl_t *ssl, uint16_t id)
                    know of server public key yet. */
                 return &supportedCiphers[i];
             }
-            if (haveKeyMaterial(ssl, supportedCiphers[i].type, 0)
+            if (haveKeyMaterial(ssl, &supportedCiphers[i], 0)
                 == PS_SUCCESS)
             {
                 return &supportedCiphers[i];
@@ -2804,10 +3145,6 @@ int32_t sslGetCipherSpecList(ssl_t *ssl, unsigned char *c, int32 len,
     ignored = 0;
     for (i = 0; supportedCiphers[i].ident != SSL_NULL_WITH_NULL_NULL; i++)
     {
-        if (end - c < 2)
-        {
-            return PS_MEM_FAIL;
-        }
 #ifdef USE_TLS_1_2
         /* The SHA-2 based cipher suites are TLS 1.2 only so don't send
             those if the user has requested a lower protocol in
@@ -2834,17 +3171,38 @@ int32_t sslGetCipherSpecList(ssl_t *ssl, unsigned char *c, int32 len,
                 continue;
             }
         }
+
 # ifdef USE_DTLS
     }
 # endif
 #endif  /* TLS_1_2 */
+# ifdef USE_TLS_1_3
+        /* At this point remove the cipher if TLS1.3 is
+           the only enabled version */
+        if (USING_ONLY_TLS_1_3(ssl) && supportedCiphers[i].type != CS_TLS13)
+        {
+            ignored += 2;
+            continue;
+        }
+        /* Remove TLS1.3 ciphers in case TLS1.3 is not enabled */
+        if (!(USING_TLS_1_3(ssl)) &&
+            (supportedCiphers[i].type == CS_TLS13))
+        {
+            ignored += 2;
+            continue;
+        }
+# endif /* USE_TLS_1_3 */
 #ifdef VALIDATE_KEY_MATERIAL
-        if (haveKeyMaterial(ssl, supportedCiphers[i].type, 0) != PS_SUCCESS)
+        if (haveKeyMaterial(ssl, &supportedCiphers[i], 0) != PS_SUCCESS)
         {
             ignored += 2;
             continue;
         }
 #endif
+        if (end - c < 2)
+        {
+            return PS_MEM_FAIL;
+        }
         *c = (unsigned char) ((supportedCiphers[i].ident & 0xFF00) >> 8); c++;
         *c = (unsigned char) (supportedCiphers[i].ident & 0xFF); c++;
     }
@@ -2929,8 +3287,24 @@ int32_t sslGetCipherSpecListLen(const ssl_t *ssl)
     }
 # endif
 #endif  /* USE_TLS_1_2 */
+# ifdef USE_TLS_1_3
+        /* At this point remove the cipher if TLS1.3 is
+           the only enabled version */
+        if (USING_ONLY_TLS_1_3(ssl) && supportedCiphers[i].type != CS_TLS13)
+        {
+            ignored += 2;
+            continue;
+        }
+        /* Remove TLS1.3 ciphers in case TLS1.3 is not enabled */
+        if (!(USING_TLS_1_3(ssl)) &&
+            (supportedCiphers[i].type == CS_TLS13))
+        {
+            ignored += 2;
+            continue;
+        }
+# endif /* USE_TLS_1_3 */
 #ifdef VALIDATE_KEY_MATERIAL
-        if (haveKeyMaterial(ssl, supportedCiphers[i].type, 0) != PS_SUCCESS)
+        if (haveKeyMaterial(ssl, &supportedCiphers[i], 0) != PS_SUCCESS)
         {
             ignored += 2;
         }
@@ -3042,4 +3416,3 @@ void matrixSslSetKexFlags(ssl_t *ssl)
     return;
 }
 /******************************************************************************/
-

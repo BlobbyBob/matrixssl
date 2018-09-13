@@ -31,11 +31,14 @@
  *      http://www.gnu.org/copyleft/gpl.html
  */
 /******************************************************************************/
+#ifndef _POSIX_C_SOURCE
+# define _POSIX_C_SOURCE 200112L
+#endif
 
-#include <unistd.h>
-#include <stdio.h>
+#include "osdep_unistd.h"
+#include "osdep_stdio.h"
 #include "matrixssl/matrixsslApi.h"
-#include "core/psUtil.h"
+#include "psUtil.h"
 
 /****************************** Local Functions *******************************/
 
@@ -48,7 +51,7 @@
  */
 static void usage(void)
 {
-    printf(
+    Printf(
         "\nusage: certValidate { options } <file>\n"
         "  options can be one or more of the following:\n"
         "    -c <file>           - Root CA certificate file\n"
@@ -91,7 +94,7 @@ static int32_t process_cmd_options(int argc, char **argv)
         case 'c':
             if (g_cafile)
             {
-                printf("Multiple options '-%c'\n", optionChar);
+                Printf("Multiple options '-%c'\n", optionChar);
                 return -1;
             }
             g_cafile = optarg;
@@ -101,7 +104,7 @@ static int32_t process_cmd_options(int argc, char **argv)
         case 's':
             if (g_subject)
             {
-                printf("Multiple options '-%c'\n", optionChar);
+                Printf("Multiple options '-%c'\n", optionChar);
                 return -1;
             }
             g_subject = optarg;
@@ -111,37 +114,37 @@ static int32_t process_cmd_options(int argc, char **argv)
         case 'f':
             if (g_pem + g_eff + g_sonar != 0)
             {
-                printf("Multiple options '-%c'\n", optionChar);
+                Printf("Multiple options '-%c'\n", optionChar);
                 return -1;
             }
-            if (strcmp(optarg, "pem") == 0)
+            if (Strcmp(optarg, "pem") == 0)
             {
                 g_pem = 1;
             }
-            else if (strcmp(optarg, "eff") == 0)
+            else if (Strcmp(optarg, "eff") == 0)
             {
                 g_eff = 1;
-                printf("NOT CURRENTLY SUPPORTED '-%c %s'\n", optionChar, optarg);
+                Printf("NOT CURRENTLY SUPPORTED '-%c %s'\n", optionChar, optarg);
                 return -1;
             }
-            else if (strcmp(optarg, "sonar") == 0)
+            else if (Strcmp(optarg, "sonar") == 0)
             {
                 g_sonar = 1;
             }
             else
             {
-                printf("Unknown argument '-%c %s'\n", optionChar, optarg);
+                Printf("Unknown argument '-%c %s'\n", optionChar, optarg);
                 return -1;
             }
             break;
 
         /* Select single line (when rprocessing scan files) */
         case 'l':
-            g_line = strtol(optarg, &e, 10);
-            if (e != (optarg + strlen(optarg))
+            g_line = Strtol(optarg, &e, 10);
+            if (e != (optarg + Strlen(optarg))
                 || g_line <= 0)
             {
-                printf("Invalid argument '-%c %s'\n", optionChar, optarg);
+                Printf("Invalid argument '-%c %s'\n", optionChar, optarg);
                 return -1;
             }
             break;
@@ -156,13 +159,13 @@ static int32_t process_cmd_options(int argc, char **argv)
             break;
 
         default:
-            printf("Unknown option '-%c'\n", optionChar);
+            Printf("Unknown option '-%c'\n", optionChar);
             return -1;
         }
     }
     if (optind != argc - 1)
     {
-        printf("Exactly one cert chain file must be provided.\n");
+        Printf("Exactly one cert chain file must be provided.\n");
         return -1;
     }
     g_certfile = argv[optind];
@@ -174,15 +177,15 @@ static int32_t process_cmd_options(int argc, char **argv)
     {
         if (g_line > 0)
         {
-            printf("Ignoring -l argument in PEM mode.\n");
+            Printf("Ignoring -l argument in PEM mode.\n");
         }
         if (g_der > 0)
         {
-            printf("Ignoring -d argument in PEM mode.\n");
+            Printf("Ignoring -d argument in PEM mode.\n");
         }
         if (g_summary > 0)
         {
-            printf("Ignoring -S argument in PEM mode.\n");
+            Printf("Ignoring -S argument in PEM mode.\n");
         }
     }
     return PS_SUCCESS;
@@ -195,24 +198,24 @@ static char *flagstostr(int flags)
 
     if (flags)
     {
-        s += sprintf(s, " (");
+        s += Sprintf(s, " (");
         if (flags & PS_CERT_AUTH_FAIL_KEY_USAGE_FLAG)
         {
-            s += sprintf(s, "KEY_USAGE ");
+            s += Sprintf(s, "KEY_USAGE ");
         }
         if (flags & PS_CERT_AUTH_FAIL_EKU_FLAG)
         {
-            s += sprintf(s, "EXTENDED_KEY_USAGE ");
+            s += Sprintf(s, "EXTENDED_KEY_USAGE ");
         }
         if (flags & PS_CERT_AUTH_FAIL_SUBJECT_FLAG)
         {
-            s += sprintf(s, "SUBJECT ");
+            s += Sprintf(s, "SUBJECT ");
         }
         if (flags & PS_CERT_AUTH_FAIL_DATE_FLAG)
         {
-            s += sprintf(s, "DATE ");
+            s += Sprintf(s, "DATE ");
         }
-        sprintf(s, ")");
+        Sprintf(s, ")");
         return f;
     }
     return "";
@@ -246,7 +249,7 @@ static char *errtostr(int rc)
     case PS_CERT_AUTH_FAIL_AUTHKEY:
         return "FAIL Auth Key / Subject Key Match";
     default:
-        sprintf(e, "FAIL %d", rc);
+        Sprintf(e, "FAIL %d", rc);
         return e;
     }
 }
@@ -276,7 +279,7 @@ static struct
     PARSE_STATUS(PS_X509_SUBJECT_DN),
     PARSE_STATUS(PS_X509_EOF),
     PARSE_STATUS(PS_X509_SIG_MISMATCH),
-    { 0 } /* List terminator */
+    { (parse_status_e) 0 } /* List terminator */
 };
 
 /******************************************************************************/
@@ -295,7 +298,7 @@ static void write_summary(FILE *fp)
     }
     for (i = 0; *parse_status[i].name; i++)
     {
-        fprintf(fp, "%12d %3d %s\n",
+        Fprintf(fp, "%12d %3d %s\n",
             parse_status[i].count,
             (parse_status[i].count * 100) / total,
             parse_status[i].name);
@@ -316,7 +319,7 @@ static int32_t process_sonar(void)
     int32_t rc = 0, line = 0;
     psX509Cert_t *cert;
 
-    if ((fp = fopen(g_certfile, "r")) == NULL)
+    if ((fp = Fopen(g_certfile, "r")) == NULL)
     {
         perror("Error opening file");
         return -1;
@@ -336,42 +339,48 @@ static int32_t process_sonar(void)
             }
         }
         certhash = buf;
-        cert64 = strchr(buf, ',');
+        cert64 = Strchr(buf, ',');
         if (*cert64 == '\0')
         {
-            printf("CSV parse failed on line %d\n", line);
-            fclose(fp);
+            Printf("CSV parse failed on line %d\n", line);
+            Fclose(fp);
             return -1;
         }
         *cert64 = '\0';
         cert64++;
-        certhashlen = strlen(certhash);
-        cert64len = strlen(cert64);
+        certhashlen = Strlen(certhash);
+        cert64len = Strlen(cert64);
         if (certhashlen + cert64len + 2 >= CERT_MAX_BYTES)
         {
-            printf("CERT_MAX_BYTES exceeded on line %d\n", line);
-            fclose(fp);
+            Printf("CERT_MAX_BYTES exceeded on line %d\n", line);
+            Fclose(fp);
             return -1;
         }
+
         certbuflen = CERT_MAX_BYTES;
+#ifdef USE_BASE64_DECODE
         if (psBase64decode((unsigned char *) cert64, cert64len, (unsigned char *) certbuf, &certbuflen) != 0)
         {
-            printf("Base64 parse failed on line %d\n", line);
-            fclose(fp);
+            Printf("Base64 parse failed on line %d\n", line);
+            Fclose(fp);
             return -1;
         }
         if (certbuflen > SSL_MAX_PLAINTEXT_LEN)
         {
-            printf("WARNING, %d byte cert\n", certbuflen);
+            Printf("WARNING, %d byte cert\n", certbuflen);
         }
+#else
+        memcpy(certbuf, cert64, cert64len);
+        certbuflen = cert64len;
+#endif
         if ((rc = psX509ParseCert(NULL, (unsigned char *) certbuf, certbuflen, &cert, 0)) < 0)
         {
             /* Output the cert we couldn't process. It can be viewd by openssl using:
                 openssl x509 -inform der -text -in SONAR_<num>.der */
             if (!cert)
             {
-                printf("X509 Memory allocation failed for line %d\n", line);
-                fclose(fp);
+                Printf("X509 Memory allocation failed for line %d\n", line);
+                Fclose(fp);
                 return -1;
             }
             switch (cert->parseStatus)
@@ -383,7 +392,7 @@ static int32_t process_sonar(void)
             case PS_X509_DATE:
                 if (!g_summary)
                 {
-                    printf("%s-%s\n", cert->notBefore, cert->notAfter);
+                    Printf("%s-%s\n", cert->notBefore, cert->notAfter);
                 }
                 break;
             default:
@@ -391,19 +400,19 @@ static int32_t process_sonar(void)
             }
             if (!g_summary)
             {
-                printf("%12d:X509 %s (%s)\n", line, errtostr(rc),
+                Printf("%12d:X509 %s (%s)\n", line, errtostr(rc),
                     parse_status[cert->parseStatus].name);
             }
             if (g_der)
             {
-                snprintf(outfile, 31, "SONAR_%012d.der", line);
-                if ((wfp = fopen(outfile, "w")) != NULL)
+                Snprintf(outfile, 31, "SONAR_%012d.der", line);
+                if ((wfp = Fopen(outfile, "w")) != NULL)
                 {
-                    if (fwrite(certbuf, certbuflen, 1, wfp) != 1)
+                    if (Fwrite(certbuf, certbuflen, 1, wfp) != 1)
                     {
                         perror("Error writing file");
                     }
-                    fclose(wfp);
+                    Fclose(wfp);
                 }
                 else
                 {
@@ -417,64 +426,64 @@ static int32_t process_sonar(void)
         psAssert(cert->authStatus == 0);
         if (!g_summary)
         {
-            printf("%12d:%s\n", line, cert->subject.commonName);
+            Printf("%12d:%s\n", line, cert->subject.commonName);
         }
         parse_status[cert->parseStatus].count++;
         psX509FreeCert(cert);
     }
-    fclose(fp);
+    Fclose(fp);
     if (g_line > 0)
     {
         if (line == (g_line + 1))
         {
-            printf("Processed line %d of %s\n", g_line, g_certfile);
+            Printf("Processed line %d of %s\n", g_line, g_certfile);
         }
         else
         {
-            printf("Error, line %d not found in %s\n", g_line, g_certfile);
+            Printf("Error, line %d not found in %s\n", g_line, g_certfile);
         }
     }
     else
     {
-        printf("%d certificates processed\n", line);
+        Printf("%d certificates processed\n", line);
     }
     if (!line)
     {
         return 0;
     }
-    printf("Cert Count    %%  Parse Status\n");
+    Printf("Cert Count    %%  Parse Status\n");
     if (g_summary)
     {
         FILE *lfp = NULL, *tfp = NULL;
         char *lfname = NULL;
         char *tfname = NULL;
-        lfname = malloc(strlen(g_certfile) + 5); /* 5 is .log\0 */
-        sprintf(lfname, "%s.log", g_certfile);
-        if ((lfp = fopen(lfname, "r")) == NULL)
+        lfname = Malloc(Strlen(g_certfile) + 5); /* 5 is .log\0 */
+        Sprintf(lfname, "%s.log", g_certfile);
+        if ((lfp = Fopen(lfname, "r")) == NULL)
         {
             /* No existing log file, create it */
-            if ((lfp = fopen(lfname, "w")) == NULL)
+            if ((lfp = Fopen(lfname, "w")) == NULL)
             {
                 perror("Error opening file");
-                free(lfname);
+                Free(lfname);
                 return -1;
             }
             write_summary(lfp);
-            fclose(lfp);
-            printf("Wrote log file %s\n", lfname);
+            Fclose(lfp);
+            Printf("Wrote log file %s\n", lfname);
         }
         else
         {
             int match = 1;
             /* Found log file, create a tmp comparison file */
-            tfname = malloc(strlen(lfname) + 5); /* 5 is .tmp\0 */
-            sprintf(tfname, "%s.tmp", lfname);
-            if ((tfp = fopen(tfname, "w+")) == NULL)
+            tfname = Malloc(Strlen(lfname) + 5); /* 5 is .tmp\0 */
+            Sprintf(tfname, "%s.tmp", lfname);
+            if ((tfp = Fopen(tfname, "w+")) == NULL)
             {
                 perror("Error opening file");
-                fclose(lfp);
-                free(lfname);
-                free(tfname);
+                Fclose(lfp);
+                Free(lfname);
+                Free(tfname);
                 return -1;
             }
             write_summary(tfp);
@@ -486,7 +495,7 @@ static int32_t process_sonar(void)
                     match = 0;
                     break;
                 }
-                if (strncmp(buf, certbuf, CERT_MAX_BYTES) != 0)
+                if (Strncmp(buf, certbuf, CERT_MAX_BYTES) != 0)
                 {
                     match = 0;
                     break;
@@ -496,29 +505,29 @@ static int32_t process_sonar(void)
             {
                 match = 0;
             }
-            fclose(lfp);
-            fclose(tfp);
+            Fclose(lfp);
+            Fclose(tfp);
             if (unlink(tfname) < 0)
             {
                 perror("Error unlink file");
-                free(lfname);
-                free(tfname);
+                Free(lfname);
+                Free(tfname);
                 return -1;
             }
             if (match)
             {
-                printf("MATCH Success for %s\n", lfname);
+                Printf("MATCH Success for %s\n", lfname);
             }
             else
             {
-                printf("MATCH FAIL for %s\n", lfname);
-                free(lfname);
-                free(tfname);
+                Printf("MATCH FAIL for %s\n", lfname);
+                Free(lfname);
+                Free(tfname);
                 return -1;
             }
         }
-        free(lfname);
-        free(tfname);
+        Free(lfname);
+        Free(tfname);
     }
     else
     {
@@ -552,7 +561,7 @@ int main(int argc, char **argv)
 
     if ((rc = matrixSslOpen()) < 0)
     {
-        fprintf(stderr, "MatrixSSL library init failure.  Exiting\n");
+        Fprintf(stderr, "MatrixSSL library init failure.  Exiting\n");
         return EXIT_FAILURE;
     }
 
@@ -562,18 +571,18 @@ int main(int argc, char **argv)
         {
             if (rc == PS_PLATFORM_FAIL)
             {
-                printf("FAIL open file %s %d\n", g_cafile, rc);
+                Printf("FAIL open file %s %d\n", g_cafile, rc);
             }
             else
             {
-                printf("FAIL parse %s %d\n", g_cafile, rc);
+                Printf("FAIL parse %s %d\n", g_cafile, rc);
             }
             goto L_EXIT;
         }
-        printf("  Loaded root file %s\n", g_cafile);
+        Printf("  Loaded root file %s\n", g_cafile);
         for (cert = trusted, i = 0; cert != NULL; cert = cert->next, i++)
         {
-            printf("	[%d]:%s\n", i, cert->subject.commonName);
+            Printf("    [%d]:%s\n", i, cert->subject.commonName);
             psAssert(cert->authStatus == 0);
             faildate |= cert->authFailFlags & PS_CERT_AUTH_FAIL_DATE_FLAG;
             psAssert((cert->authFailFlags & ~faildate) == 0);
@@ -590,18 +599,18 @@ int main(int argc, char **argv)
     {
         if (rc == PS_PLATFORM_FAIL)
         {
-            printf("FAIL open file %s %d\n", g_certfile, rc);
+            Printf("FAIL open file %s %d\n", g_certfile, rc);
         }
         else
         {
-            printf("FAIL parse %s %d\n", g_certfile, rc);
+            Printf("FAIL parse %s %d\n", g_certfile, rc);
         }
         goto L_EXIT;
     }
-    printf("  Loaded chain file %s\n", g_certfile);
+    Printf("  Loaded chain file %s\n", g_certfile);
     for (cert = chain, i = 0; cert != NULL; cert = cert->next, i++)
     {
-        printf("	[%d]:%s\n", i, cert->subject.commonName);
+        Printf("        [%d]:%s\n", i, cert->subject.commonName);
         psAssert(cert->authStatus == 0);
         faildate |= cert->authFailFlags & PS_CERT_AUTH_FAIL_DATE_FLAG;
         psAssert((cert->authFailFlags & ~faildate) == 0);
@@ -611,13 +620,13 @@ int main(int argc, char **argv)
     {
         if (psX509ValidateGeneralName(g_subject) < 0)
         {
-            printf("FAIL validate general name %s\n", g_subject);
+            Printf("FAIL validate general name %s\n", g_subject);
             goto L_EXIT;
         }
     }
     else
     {
-        printf("WARN subject not provided, SUBJ validation will be skipped\n");
+        Printf("WARN subject not provided, SUBJ validation will be skipped\n");
     }
     rc = matrixValidateCerts(pool, chain, trusted, g_subject, &cert, NULL, NULL);
     if (rc < 0)
@@ -626,23 +635,23 @@ int main(int argc, char **argv)
             specifiying a CA */
         if (!trusted && rc == PS_CERT_AUTH_FAIL_DN)
         {
-            printf("WARN Certificates parsed, but cannot be validated against any root cert\n");
+            Printf("WARN Certificates parsed, but cannot be validated against any root cert\n");
             rc = PS_SUCCESS;
             goto L_EXIT;
         }
-        printf("%s\n", errtostr(rc));
+        Printf("%s\n", errtostr(rc));
         for (cert = chain, i = 0; cert != NULL; cert = cert->next, i++)
         {
-            printf("  Validate:%s[%d]:%s FAIL %d, status=%d, flags=%u\n",
+            Printf("  Validate:%s[%d]:%s FAIL %d, status=%d, flags=%u\n",
                 g_certfile, i, cert->subject.commonName, rc,
                 cert->authStatus, cert->authFailFlags);
             if (cert->authStatus != PS_CERT_AUTH_PASS)
             {
-                printf("	authStatus %s\n", errtostr(cert->authStatus));
+                Printf("        authStatus %s\n", errtostr(cert->authStatus));
             }
             if (cert->authFailFlags)
             {
-                printf("	authFailFlags %s\n", flagstostr(cert->authFailFlags));
+                Printf("        authFailFlags %s\n", flagstostr(cert->authFailFlags));
             }
         }
         goto L_EXIT;
@@ -653,11 +662,11 @@ int main(int argc, char **argv)
     flags = depth = 0;
     if (cert)
     {
-        printf("  Validate %s:%s rc %d\n", g_certfile, cert->subject.commonName, rc);
+        Printf("  Validate %s:%s rc %d\n", g_certfile, cert->subject.commonName, rc);
     }
     for (cert = chain, i = 0; cert != NULL; cert = cert->next, i++)
     {
-        printf("	[%d] authStatus=%d, authFailFlags=%u\n",
+        Printf("        [%d] authStatus=%d, authFailFlags=%u\n",
             i, cert->authStatus, cert->authFailFlags);
         if (cert->authStatus != PS_CERT_AUTH_PASS)
         {
@@ -672,11 +681,11 @@ int main(int argc, char **argv)
     }
     if (rc < 0)
     {
-        printf("%s%s in %s[%d]\n", errtostr(rc), flagstostr(flags),
+        Printf("%s%s in %s[%d]\n", errtostr(rc), flagstostr(flags),
             g_certfile, depth);
         goto L_EXIT;
     }
-    printf("PASS\n");
+    Printf("PASS\n");
 
 L_EXIT:
     if (trusted)
@@ -701,16 +710,16 @@ L_EXIT:
 int main(int argc, char **argv)
 {
 # ifndef USE_CERT_PARSE
-    printf("Please enable USE_CERT_PARSE for this test\n");
+    Printf("Please enable USE_CERT_PARSE for this test\n");
 # endif
 # ifndef USE_MATRIX_FILE_SYSTEM
-    printf("Please enable USE_MATRIX_FILE_SYSTEM for this test\n");
+    Printf("Please enable USE_MATRIX_FILE_SYSTEM for this test\n");
 # endif
 # ifdef USE_ONLY_PSK_CIPHER_SUITE
-    printf("Not applicable when USE_ONLY_PSK_CIPHER_SUITE defined\n");
+    Printf("Not applicable when USE_ONLY_PSK_CIPHER_SUITE defined\n");
 # endif
 # if !defined(USE_CLIENT_SIDE_SSL) && !defined(USE_CLIENT_AUTH)
-    printf("Certificate validation requires either USE_CLIENT_SIDE_SSL " \
+    Printf("Certificate validation requires either USE_CLIENT_SIDE_SSL " \
         "or USE_CLIENT_AUTH. Please enable one of those\n");
 # endif
     return EXIT_FAILURE;
@@ -719,4 +728,3 @@ int main(int argc, char **argv)
 #endif /* USE_CERT_VALIDATE && MATRIX_USE_FILE_SYSTEM */
 
 /******************************************************************************/
-

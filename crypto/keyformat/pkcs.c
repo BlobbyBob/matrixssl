@@ -4,6 +4,7 @@
  *
  *      Collection of RSA PKCS standards .
  */
+
 /*
  *      Copyright (c) 2013-2017 INSIDE Secure Corporation
  *      Copyright (c) PeerSec Networks, 2002-2011
@@ -95,7 +96,7 @@ int32_t pkcs1Pad(const unsigned char *in, psSize_t inlen,
     }
     *c = 0x00;
     c++;
-    memcpy(c, in, inlen);
+    Memcpy(c, in, inlen);
 
     return PS_SUCCESS;
 }
@@ -168,371 +169,9 @@ int32_t pkcs1Unpad(const unsigned char *in, psSize_t inlen,
 }
 
 #ifdef USE_PRIVATE_KEY_PARSING
-
-# ifdef USE_PKCS8
-
-static int32 pkcs8parse_unknown(
-        psPool_t *pool,
-        unsigned char *buf,
-        int32 size,
-        psPubKey_t *key)
-{
-    /* When PKCS #8 header appears correct, but format is not
-       RSA or ECDSA this function is called.
-       The function may be extended to parse public key formats usually
-       not processed by MatrixSSL. */
-
-    psTraceCrypto("Unsupported public key type in PKCS#8 parse\n");
-    return PS_UNSUPPORTED_FAIL;
-}
-
-/******************************************************************************/
-/**
-    Parse PKCS#8 format keys (from DER formatted binary)
-
-    'key' is dynamically allocated and must be freed with psFreePubKey() if
-        no error is returned from this API
-
-    Unencrypted private keys are supported if 'pass' is NULL
-    Encrypted private keys are supported if 'pass' is non-null for the
-        des-EDE3-CBC algorithm only (3DES). Other PKCS#5 symmetric algorithms
-        are not supported.
-
-    @return < 0 on error, private keysize in bytes on success.
- */
-int32 psPkcs8ParsePrivBin(psPool_t *pool, unsigned char *buf, int32 size,
-    char *pass, psPubKey_t *key)
-{
-    const unsigned char *end, *p;
-    int32 version, oi;
-    psSize_t seqlen, len, plen;
-#  ifdef USE_ECC
-    int32 coi;
-    const psEccCurve_t *eccSet;
-#  endif
-#  ifdef USE_PKCS5
-    unsigned char desKeyBin[24];
-    psCipherContext_t ctx;
-    char iv[8], salt[8];
-    int32 icount;
-#  endif /* USE_PKCS5 */
-
-    /* Check for too large (invalid) inputs, unparseable with uint16_t */
-    if (size > 65535)
-    {
-        return PS_FAILURE;
-    }
-
-    p = buf;
-    end = p + size;
-
-    if (pass)
-    {
-        psSize_t i;
-
-#  ifdef USE_PKCS5
-/*              An encrypted PKCS#8 key has quite a bit more information we must parse
-        We actually parse a good bit of PKCS#5 structures here
- */
-        if (getAsnSequence(&p, (int32) (end - p), &seqlen) < 0)
-        {
-            return PS_FAILURE;
-        }
-        if (getAsnAlgorithmIdentifier(&p, (int32) (end - p), &oi, &plen) < 0)
-        {
-            psTraceCrypto("Couldn't parse PKCS#8 algorithm identifier\n");
-            return PS_FAILURE;
-        }
-        if (oi != OID_PKCS_PBES2 || plen != 53)
-        {
-            psTraceCrypto("Only supporting PKCS#8 id-PBES2 OID\n");
-            return PS_FAILURE;
-        }
-        if (getAsnSequence(&p, (int32) (end - p), &seqlen) < 0)
-        {
-            return PS_FAILURE;
-        }
-        if (getAsnAlgorithmIdentifier(&p, (int32) (end - p), &oi, &plen) < 0)
-        {
-            psTraceCrypto("Couldn't parse PKCS#8 keyDerivationFunc\n");
-            return PS_FAILURE;
-        }
-        if (oi != OID_PKCS_PBKDF2 || plen != 16)
-        {
-            psTraceCrypto("Only support PKCS#8 id-PBKDF2 OID\n");
-            return PS_FAILURE;
-        }
-        if (getAsnSequence(&p, (int32) (end - p), &seqlen) < 0)
-        {
-            return PS_FAILURE;
-        }
-        if ((*p++ != ASN_OCTET_STRING) ||
-            getAsnLength(&p, (int32) (end - p), &len) < 0 ||
-            (uint32) (end - p) < len ||
-            len != 8)
-        {
-
-            psTraceCrypto("Couldn't parse PKCS#8 param salt\n");
-            return PS_FAILURE;
-        }
-        /* Get the PBKDF2 Salt */
-        memcpy(salt, p, 8); p += 8;
-        /* Get the PBKDF2 Iteration count (rounds) */
-        if (getAsnInteger(&p, (int32) (end - p), &icount) < 0)
-        {
-            psTraceCrypto("Couldn't parse PKCS#8 param iterationCount\n");
-            return PS_FAILURE;
-        }
-        /* Get encryptionScheme */
-        if (getAsnAlgorithmIdentifier(&p, (int32) (end - p), &oi, &plen)
-            < 0)
-        {
-            psTraceCrypto("Couldn't parse PKCS#8 encryptionScheme\n");
-            return PS_FAILURE;
-        }
-        if (oi != OID_DES_EDE3_CBC || plen != 10)
-        {
-            psTraceCrypto("Only support des-EDE3-CBC OID\n");
-            return PS_FAILURE;
-        }
-        if ((uint32) (end - p) < 1)
-        {
-            psTraceCrypto("Couldn't parse PKCS#8 param CBC IV\n");
-            return PS_FAILURE;
-        }
-        if ((*p++ != ASN_OCTET_STRING) ||
-            getAsnLength(&p, (int32) (end - p), &len) < 0 ||
-            (uint32) (end - p) < len ||
-            len != DES3_IVLEN)
-        {
-
-            psTraceCrypto("Couldn't parse PKCS#8 param CBC IV\n");
-            return PS_FAILURE;
-        }
-        /* Get the 3DES IV */
-        memcpy(iv, p, DES3_IVLEN); p += DES3_IVLEN;
-
-        /* Now p points to the 3DES encrypted RSA key */
-        if ((uint32) (end - p) < 1)
-        {
-            psTraceCrypto("Couldn't parse PKCS#8 param CBC IV\n");
-            return PS_FAILURE;
-        }
-        if ((*p++ != ASN_OCTET_STRING) ||
-            getAsnLength(&p, (int32) (end - p), &len) < 0 ||
-            (uint32) (end - p) < len ||
-#   ifdef USE_ECC
-            /* May actually be an RSA key, but this check will be OK for now */
-            len < MIN_ECC_BITS / 8)
-        {
-#   else
-            len < MIN_RSA_BITS / 8) {
-#   endif
-
-            psTraceCrypto("PKCS#8 decryption error\n");
-            return PS_FAILURE;
-        }
-        /* Derive the 3DES key and decrypt the RSA key*/
-        psPkcs5Pbkdf2((unsigned char *) pass, (int32) strlen(pass),
-            (unsigned char *) salt, 8, icount, (unsigned char *) desKeyBin,
-            DES3_KEYLEN);
-        psDes3Init(&ctx.des3, (unsigned char *) iv, desKeyBin);
-        psDes3Decrypt(&ctx.des3, p, (unsigned char *) p, len);
-        /* @security SECURITY - we zero out des3 key when done with it */
-        memset_s(&ctx, sizeof(psCipherContext_t), 0x0, sizeof(psCipherContext_t));
-        memset_s(desKeyBin, DES3_KEYLEN, 0x0, DES3_KEYLEN);
-
-        /* Remove padding.
-           This implementation allows up-to 16 bytes padding, for
-           compatibility with 3DES and AES algorithms. */
-        /* Start by checking length. */
-        /* coverity[dead_error_condition] */
-        /* With the current value for MIN_ECC_BITS and MIN_RSA_BITS
-           this path can never be taken. This code path is ready in
-           case the values change in the future. */
-        if (len < 1)
-        {
-            /* coverity[dead_error_begin] */
-            psTraceCrypto("PKCS#8 padding error\n");
-            return PS_FAILURE;
-        }
-        plen = (unsigned char) p[len - 1];
-        if (plen < 1 || plen > 16)
-        {
-            psTraceCrypto("PKCS#8 padding error\n");
-            return PS_FAILURE;
-        }
-        /* coverity[dead_error_condition] */
-        /* With the current value for MIN_ECC_BITS and MIN_RSA_BITS
-           this path can never be taken. This code path is ready in
-           case the values change in the future. */
-        if (len < plen)
-        {
-            /* coverity[dead_error_begin] */
-            psTraceCrypto("PKCS#8 padding error\n");
-            return PS_FAILURE;
-        }
-        for(i = 0; i < plen; i++)
-        {
-            if (p[len - i - 1] != (unsigned char) plen)
-            {
-                psTraceCrypto("PKCS#8 padding error\n");
-                return PS_FAILURE;
-            }
-        }
-
-        /* The padding has been processed. */
-        size = len - plen;
-        end = p + size;
-        buf = (unsigned char *)p;
-#  else /* !USE_PKCS5 */
-/*
-        The private key is encrypted, but PKCS5 support has been turned off
- */
-        psTraceCrypto("USE_PKCS5 must be enabled for key file password\n");
-        return PS_UNSUPPORTED_FAIL;
-#  endif /* USE_PKCS5 */
-    }
-
-    /* PrivateKeyInfo per PKCS#8 Section 6. */
-    if (getAsnSequence(&p, (int32) (end - p), &seqlen) < 0)
-    {
-        psTraceCrypto("Initial PrivateKeyInfo parse failure\n");
-#  ifdef USE_PKCS5
-        if (pass)
-        {
-            psTraceCrypto("Is it possible the password is incorrect?\n");
-        }
-#  endif /* USE_PKCS5 */
-        return PS_FAILURE;
-    }
-    /* Version */
-    if (getAsnInteger(&p, (int32) (end - p), &version) < 0 || version != 0)
-    {
-        psTraceCrypto("Couldn't parse PKCS#8 algorithm identifier\n");
-        return PS_FAILURE;
-    }
-    /* privateKeyAlgorithmIdentifier */
-    if (getAsnAlgorithmIdentifier(&p, (int32) (end - p), &oi, &plen) < 0)
-    {
-        psTraceCrypto("Couldn't parse PKCS#8 algorithm identifier\n");
-        return PS_FAILURE;
-    }
-#  ifdef USE_ECC
-    if (oi != OID_ECDSA_KEY_ALG && oi != OID_RSA_KEY_ALG)
-    {
-        return pkcs8parse_unknown(pool, buf, size, key);
-    }
-    if (oi == OID_ECDSA_KEY_ALG)
-    {
-        /* Still a curve identifier sitting as param in the SEQUENCE */
-        if ((uint32) (end - p) < 1 || *p++ != ASN_OID)
-        {
-            psTraceCrypto("Expecting EC curve OID next\n");
-            return PS_PARSE_FAIL;
-        }
-        if (getAsnLength(&p, (uint32) (end - p), &len) < 0 ||
-            (uint32) (end - p) < len)
-        {
-            psTraceCrypto("Malformed extension length\n");
-            return PS_PARSE_FAIL;
-        }
-        coi = 0;
-        while (len > 0)
-        {
-            coi += *p; p++;
-            len--;
-        }
-        if (getEccParamByOid(coi, &eccSet) < 0)
-        {
-            psTraceCrypto("Unsupported EC curve OID\n");
-            return PS_UNSUPPORTED_FAIL;
-        }
-    }
-#  else
-    if (oi != OID_RSA_KEY_ALG || plen != 0)
-    {
-        return pkcs8parse_unknown(pool, buf, size, key);
-    }
-#  endif
-    /* PrivateKey Octet Stream */
-    if ((uint32) (end - p) < 1)
-    {
-        psTraceCrypto("Private Key len failure\n");
-        return PS_PARSE_FAIL;
-    }
-    if ((*p++ != ASN_OCTET_STRING) ||
-        getAsnLength(&p, (int32) (end - p), &len) < 0 ||
-        (uint32) (end - p) < len)
-    {
-        psTraceCrypto("getAsnLength parse error in psPkcs8ParsePrivBin\n");
-        return PS_FAILURE;
-    }
-    /* Note len can be zero here */
-#  ifdef USE_RSA
-    if (oi == OID_RSA_KEY_ALG)
-    {
-        /* Create the actual key here from the octet string */
-        psRsaInitKey(pool, &key->key.rsa);
-        if (psRsaParsePkcs1PrivKey(pool, p, len, &key->key.rsa) < 0)
-        {
-            psRsaClearKey(&key->key.rsa);
-            return PS_FAILURE;
-        }
-        key->type = PS_RSA;
-        key->keysize = psRsaSize(&key->key.rsa);
-    }
-#  endif
-#  ifdef USE_ECC
-    if (oi == OID_ECDSA_KEY_ALG)
-    {
-        psEccInitKey(pool, &key->key.ecc, eccSet);
-        if (psEccParsePrivKey(pool, p, len, &key->key.ecc, eccSet) < 0)
-        {
-            return PS_FAILURE;
-        }
-        key->type = PS_ECC;
-        key->keysize = psEccSize(&key->key.ecc);
-    }
-#  endif
-    p += len;
-
-    plen = (int32) (end - p);
-    if (plen > 0)
-    {
-        /* attributes [0] Attributes OPTIONAL */
-        if (*p == (ASN_CONTEXT_SPECIFIC | ASN_CONSTRUCTED))
-        {
-            p++;
-            if (getAsnLength(&p, (int32) (end - p), &len) < 0 ||
-                (uint32) (end - p) < len)
-            {
-
-                psTraceCrypto("Error parsing pkcs#8 PrivateKey attributes\n");
-                return PS_FAILURE;
-            }
-            /* Ignore any attributes */
-            p += len;
-            plen = (int32) (end - p);
-        }
-
-        if (plen > 0)
-        {
-            /* Unexpected extra data remains. Treat it as an error. */
-            goto PKCS8_FAIL;
-        }
-    }
-
-    return PS_SUCCESS;
-
-PKCS8_FAIL:
-    psClearPubKey(key);
-    psTraceCrypto("Did not parse key in PKCS#8 parse\n");
-    return PS_FAILURE;
-}
-
 #  ifdef MATRIX_USE_FILE_SYSTEM
-#   ifdef USE_PKCS12
+#   ifdef USE_PKCS8
+#    ifdef USE_PKCS12
 /******************************************************************************/
 /*
     A PKCS #7 ContentInfo, whose contentType is signedData in public-key
@@ -612,18 +251,18 @@ static int32 pkcs12pbe(psPool_t *pool, unsigned char *password, uint32 passLen,
     int32 i, j, copy, count, cpyLen, binsize, plen;
 
     *out = NULL;
-    memset(diversifier, id, 64);
+    Memset(diversifier, id, 64);
 
     for (i = 0; i < 64; )
     {
         if ((64 - i) < saltLen)
         {
-            memcpy(&saltpass[i], salt, 64 - i);
+            Memcpy(&saltpass[i], salt, 64 - i);
             i = 64;
         }
         else
         {
-            memcpy(&saltpass[i], salt, saltLen);
+            Memcpy(&saltpass[i], salt, saltLen);
             i += saltLen;
         }
     }
@@ -668,7 +307,7 @@ static int32 pkcs12pbe(psPool_t *pool, unsigned char *password, uint32 passLen,
         }
         /* Copy into outgoing key now */
         copy = min(cpyLen, SHA1_HASH_SIZE);
-        memcpy(p, hash, copy);
+        Memcpy(p, hash, copy);
         p += copy;
         count--;
         cpyLen -= copy;
@@ -743,12 +382,12 @@ static int32 pkcs12pbe(psPool_t *pool, unsigned char *password, uint32 passLen,
                         psFree(front, pool);
                         return PS_MEM_FAIL;
                     }
-                    memcpy(saltpass + j, B + 1, 64); /* truncate */
+                    Memcpy(saltpass + j, B + 1, 64); /* truncate */
                 }
                 else if (binsize < 64)
                 {
                     psAssert(binsize == 63);
-                    memset(saltpass + j, 0x0, 1); /* pad with a zero */
+                    Memset(saltpass + j, 0x0, 1); /* pad with a zero */
                     if (pstm_to_unsigned_bin(pool, &bigtmp, saltpass + j + 1) < 0)
                     {
                         pstm_clear(&bigone);
@@ -857,7 +496,7 @@ static int32 pkcs12import(psPool_t *pool, const unsigned char **buf,
             psTraceCrypto("Bad salt length parsing import\n");
             return PS_PARSE_FAIL;
         }
-        memcpy(salt, p, tmplen);
+        Memcpy(salt, p, tmplen);
         p += tmplen;
         /* iteration count */
         if (getAsnInteger(&p, (int32) (end - p), &asnint) < 0)
@@ -1408,9 +1047,38 @@ int32 psPkcs12Parse(psPool_t *pool, psX509Cert_t **cert, psPubKey_t *privKey,
     const unsigned char *file, int32 flags, unsigned char *password,
     int32 pLen, unsigned char *macPass, int32 macPassLen)
 {
+    unsigned char *fileBuf = NULL;
+    psSizeL_t fsize;
+    psRes_t rc;
+
+    if ((rc = psGetFileBuf(pool, (const char *)file, &fileBuf, &fsize)) < PS_SUCCESS)
+    {
+        psTraceStrCrypto("Couldn't open PKCS#12 file %s\n", (char *) file);
+        return rc;
+    }
+
+    rc = psPkcs12ParseMem(pool,
+        cert,
+        privKey,
+        fileBuf,
+        fsize,
+        flags,
+        password,
+        pLen,
+        macPass,
+        macPassLen);
+
+    psFree(fileBuf, pool);
+    return rc;
+}
+
+int32 psPkcs12ParseMem(psPool_t *pool, psX509Cert_t **cert, psPubKey_t *privKey,
+    const unsigned char *buf, int32 bufsize, int32 flags, unsigned char *password,
+    int32 pLen, unsigned char *macPass, int32 macPassLen)
+{
     psHmacSha1_t hmac;
     const unsigned char *p, *end, *macStart, *macEnd;
-    unsigned char *fileBuf, *macKey;
+    unsigned char *macKey;
     unsigned char iwidePass[128];   /* 63 char password max */
     unsigned char mwidePass[128];
     unsigned char mac[SHA1_HASH_SIZE];
@@ -1418,16 +1086,12 @@ int32 psPkcs12Parse(psPool_t *pool, psX509Cert_t **cert, psPubKey_t *privKey,
     unsigned char digest[SHA1_HASH_SIZE];
     psSize_t tmplen, tmpint;
     uint32 digestLen, macKeyLen;
-    int32 fsize, i, j, rc, mpassLen, ipassLen, integrity, oi, asnint;
+    int32 i, j, rc, mpassLen, ipassLen, integrity, oi, asnint;
 
     *cert = NULL;
-    if ((rc = psGetFileBuf(pool, (char *) file, &fileBuf, &fsize)) < PS_SUCCESS)
-    {
-        psTraceStrCrypto("Couldn't open PKCS#12 file %s\n", (char *) file);
-        return rc;
-    }
-    p = fileBuf;
-    end = p + fsize;
+
+    p = buf;
+    end = p + bufsize;
 
     /* Begin with a PFX
         PFX ::= SEQUENCE {
@@ -1437,14 +1101,14 @@ int32 psPkcs12Parse(psPool_t *pool, psX509Cert_t **cert, psPubKey_t *privKey,
     if ((rc = getAsnSequence(&p, (int32) (end - p), &tmplen)) < 0)
     {
         psTraceCrypto("Initial PKCS#12 parse fail\n");
-        goto ERR_FBUF;
+        goto ERR_PARSE;
     }
     /* Version */
     if (getAsnInteger(&p, (int32) (end - p), &asnint) < 0 || asnint != 3)
     {
         psTraceIntCrypto("Unsupported PKCS#12 version %d\n", asnint);
         rc = PS_UNSUPPORTED_FAIL;
-        goto ERR_FBUF;
+        goto ERR_PARSE;
     }
 
     /* Content type is the integrity mode (4 of the spec).
@@ -1454,14 +1118,14 @@ int32 psPkcs12Parse(psPool_t *pool, psX509Cert_t **cert, psPubKey_t *privKey,
     {
         psTraceCrypto("Couldn't determine PKCS#12 integrity\n");
         rc = integrity;
-        goto ERR_FBUF;
+        goto ERR_PARSE;
     }
 
     /* Passwords are wide BMPString types
         ipass is import password
         mpass is MAC password */
     ipassLen = (pLen * 2) + 2; /* 2 for each char put double 0x0 to terminate */
-    memset(iwidePass, 0x0, ipassLen);
+    Memset(iwidePass, 0x0, ipassLen);
     for (i = 1, j = 0; i < ipassLen - 1; i += 2, j++)
     {
         iwidePass[i] = password[j];
@@ -1473,7 +1137,7 @@ int32 psPkcs12Parse(psPool_t *pool, psX509Cert_t **cert, psPubKey_t *privKey,
              (unsigned char **) &p, (int32) (end - p))) < PS_SUCCESS)
     {
         psTraceIntCrypto("PKCS#12 AuthenticatedSafe parse failure %d\n", rc);
-        goto ERR_FBUF;
+        goto ERR_PARSE;
     }
     macEnd = p;
 
@@ -1481,7 +1145,7 @@ int32 psPkcs12Parse(psPool_t *pool, psX509Cert_t **cert, psPubKey_t *privKey,
     if (integrity == PASSWORD_INTEGRITY)
     {
         mpassLen = (macPassLen * 2) + 2;
-        memset(mwidePass, 0x0, mpassLen);
+        Memset(mwidePass, 0x0, mpassLen);
         for (i = 1, j = 0; i < mpassLen - 1; i += 2, j++)
         {
             mwidePass[i] = macPass[j];
@@ -1495,7 +1159,7 @@ int32 psPkcs12Parse(psPool_t *pool, psX509Cert_t **cert, psPubKey_t *privKey,
         if ((rc = getAsnSequence(&p, (int32) (end - p), &tmplen)) < 0)
         {
             psTraceCrypto("Initial password integrity parse failure\n");
-            goto ERR_FBUF;
+            goto ERR_PARSE;
         }
         /* DigestInfo ::= SEQUENCE {
             digestAlgorithm DigestAlgorithmIdentifier,
@@ -1503,37 +1167,37 @@ int32 psPkcs12Parse(psPool_t *pool, psX509Cert_t **cert, psPubKey_t *privKey,
         if ((rc = getAsnSequence(&p, (int32) (end - p), &tmplen)) < 0)
         {
             psTraceCrypto("Sequence password integrity parse failure\n");
-            goto ERR_FBUF;
+            goto ERR_PARSE;
         }
         if ((rc = getAsnAlgorithmIdentifier(&p, (uint32) (end - p),
                  &oi, &tmpint)) < 0)
         {
             psTraceCrypto("Algorithm password integrity parse failure\n");
-            goto ERR_FBUF;
+            goto ERR_PARSE;
         }
         if ((*p++ != ASN_OCTET_STRING) ||
             getAsnLength(&p, (int32) (end - p), &tmplen) < 0)
         {
             psTraceCrypto("Octet digest password integrity parse failure\n");
             rc = PS_PARSE_FAIL;
-            goto ERR_FBUF;
+            goto ERR_PARSE;
         }
-        memcpy(digest, p, tmplen);
+        Memcpy(digest, p, tmplen);
         p += tmplen;
         if ((*p++ != ASN_OCTET_STRING) ||
             getAsnLength(&p, (int32) (end - p), &tmplen) < 0)
         {
             psTraceCrypto("Octet macSalt password integrity parse failure\n");
             rc = PS_PARSE_FAIL;
-            goto ERR_FBUF;
+            goto ERR_PARSE;
         }
         if (tmplen > 20)
         {
             psTraceCrypto("macSalt length too long\n");
             rc = PS_PARSE_FAIL;
-            goto ERR_FBUF;
+            goto ERR_PARSE;
         }
-        memcpy(macSalt, p, tmplen);
+        Memcpy(macSalt, p, tmplen);
         p += tmplen;
         /* Iteration count */
         if (p != end)
@@ -1542,7 +1206,7 @@ int32 psPkcs12Parse(psPool_t *pool, psX509Cert_t **cert, psPubKey_t *privKey,
             {
                 psTraceCrypto("Iteration password integrity parse failure\n");
                 rc = PS_PARSE_FAIL;
-                goto ERR_FBUF;
+                goto ERR_PARSE;
             }
         }
         else
@@ -1562,14 +1226,14 @@ int32 psPkcs12Parse(psPool_t *pool, psX509Cert_t **cert, psPubKey_t *privKey,
             {
                 psTraceCrypto("Error generating pkcs12 hmac key\n");
                 rc = PS_UNSUPPORTED_FAIL;
-                goto ERR_FBUF;
+                goto ERR_PARSE;
             }
             digestLen = (uint32) (macEnd - macStart);
             psHmacSha1Init(&hmac, macKey, macKeyLen);
             psHmacSha1Update(&hmac, macStart, digestLen);
             psHmacSha1Final(&hmac, mac);
             psFree(macKey, pool);
-            if (memcmp(digest, mac, SHA1_HASH_SIZE) != 0)
+            if (Memcmp(digest, mac, SHA1_HASH_SIZE) != 0)
             {
                 psTraceCrypto("CAUTION: PKCS#12 MAC did not validate\n");
             }
@@ -1578,15 +1242,14 @@ int32 psPkcs12Parse(psPool_t *pool, psX509Cert_t **cert, psPubKey_t *privKey,
         {
             psTraceCrypto("PKCS#12 must use SHA1 HMAC validation\n");
             rc = PS_UNSUPPORTED_FAIL;
-            goto ERR_FBUF;
+            goto ERR_PARSE;
         }
 
     }
     rc = PS_SUCCESS;
-ERR_FBUF:
+ERR_PARSE:
     memset_s(iwidePass, sizeof(iwidePass), 0x0, sizeof(iwidePass));
     memset_s(mwidePass, sizeof(mwidePass), 0x0, sizeof(mwidePass));
-    psFree(fileBuf, pool);
     return rc;
 }
 
@@ -1595,327 +1258,6 @@ ERR_FBUF:
 
 # endif   /* USE_PKCS8 */
 
-# ifdef MATRIX_USE_FILE_SYSTEM
-
-#  if defined(USE_PKCS5) && defined(USE_PBKDF1)
-/******************************************************************************/
-/*
-    Convert an ASCII hex representation to a binary buffer.
-    Decode enough data out of 'hex' buffer to produce 'binlen' bytes in 'bin'
-    Two digits of ASCII hex map to the high and low nybbles (in that order),
-    so this function assumes that 'hex' points to 2x 'binlen' bytes of data.
-    Return the number of bytes processed from hex (2x binlen) or < 0 on error.
- */
-static int32 hexToBinary(unsigned char *hex, unsigned char *bin, int32 binlen)
-{
-    unsigned char *end, c, highOrder;
-
-    highOrder = 1;
-    for (end = hex + binlen * 2; hex < end; hex++)
-    {
-        c = *hex;
-        if ('0' <= c && c <= '9')
-        {
-            c -= '0';
-        }
-        else if ('a' <= c && c <= 'f')
-        {
-            c -= ('a' - 10);
-        }
-        else if ('A' <= c && c <= 'F')
-        {
-            c -= ('A' - 10);
-        }
-        else
-        {
-            psTraceCrypto("hexToBinary failure\n");
-            return PS_FAILURE;
-        }
-        if (highOrder++ & 0x1)
-        {
-            *bin = c << 4;
-        }
-        else
-        {
-            *bin |= c;
-            bin++;
-        }
-    }
-    return binlen * 2;
-}
-#  endif /* USE_PKCS5 && USE_PBKDF1 */
-
-#  ifdef USE_RSA
-int32_t psPkcs1ParsePubFile(psPool_t *pool, const char *fileName, psRsaKey_t *key)
-{
-    unsigned char *DERout;
-    unsigned char sha1KeyHash[SHA1_HASH_SIZE];
-    const unsigned char *p, *end;
-    int32_t rc, oi;
-    psSize_t DERlen, seqlen, plen;
-
-    /* Had to tweak psPkcs1DecodePrivFile to accept PUBLIC KEY headers */
-    if ((rc = psPkcs1DecodePrivFile(pool, fileName, NULL, &DERout, &DERlen))
-        < PS_SUCCESS)
-    {
-        return rc;
-    }
-
-    p = DERout;
-    end = p + DERlen;
-
-    if (getAsnSequence(&p, (int32) (end - p), &seqlen) < 0)
-    {
-        psTraceCrypto("Couldn't parse PKCS#1 RSA public key file\n");
-        goto pubKeyFail;
-    }
-    if (getAsnAlgorithmIdentifier(&p, (int32) (end - p), &oi, &plen) < 0)
-    {
-        psTraceCrypto("Couldn't parse PKCS#1 RSA public key file\n");
-        goto pubKeyFail;
-    }
-    if (oi != OID_RSA_KEY_ALG)
-    {
-        psTraceCrypto("Couldn't parse PKCS#1 RSA public key file\n");
-        goto pubKeyFail;
-    }
-    if (psRsaParseAsnPubKey(pool, &p, (int32) (end - p), key, sha1KeyHash) < 0)
-    {
-        psTraceCrypto("Couldn't parse PKCS#1 RSA public key file\n");
-        goto pubKeyFail;
-    }
-
-    psFree(DERout, pool);
-    return PS_SUCCESS;
-
-pubKeyFail:
-    psFree(DERout, pool);
-    return PS_PARSE_FAIL;
-}
-/******************************************************************************/
-/**
-    Parse a PEM format private key file.
-
-    @pre File must be a PEM format RSA keys.
-    @return < 0 on error
- */
-int32_t psPkcs1ParsePrivFile(psPool_t *pool, const char *fileName,
-    const char *password, psRsaKey_t *key)
-{
-    unsigned char *DERout;
-    int32_t rc;
-    psSize_t DERlen;
-
-#   ifdef USE_PKCS8
-    psPubKey_t pubkey;
-#   endif
-
-    if ((rc = psPkcs1DecodePrivFile(pool, fileName, password, &DERout, &DERlen))
-        < PS_SUCCESS)
-    {
-        return rc;
-    }
-
-    if ((rc = psRsaParsePkcs1PrivKey(pool, DERout, DERlen, key)) < 0)
-    {
-#   ifdef USE_PKCS8
-        /* This logic works for processing PKCS#8 files because the above file
-            and bin decodes will always leave the unprocessed buffer intact and
-            the password protection is done in the internal ASN.1 encoding */
-        if ((rc = psPkcs8ParsePrivBin(pool, DERout, DERlen, (char *) password,
-                 &pubkey)) < 0)
-        {
-            psFree(DERout, pool);
-            return rc;
-        }
-        rc = psRsaCopyKey(key, &pubkey.key.rsa);
-        psClearPubKey(&pubkey);
-#   else
-        psFree(DERout, pool);
-        return rc;
-#   endif
-    }
-
-    psFree(DERout, pool);
-    return rc;
-}
-#  endif /* USE_RSA */
-
-/******************************************************************************/
-/**
-    Return the DER stream from a private key PEM file.
-
-    Memory info:
-        Caller must call psFree on DERout on function success
- */
-int32_t psPkcs1DecodePrivFile(psPool_t *pool, const char *fileName,
-    const char *password, unsigned char **DERout, psSize_t *DERlen)
-{
-    unsigned char *keyBuf, *dout;
-    char *start, *end, *endTmp;
-    int32 keyBufLen, rc;
-    uint32 PEMlen = 0;
-
-#  if defined(USE_PKCS5) && defined(USE_PBKDF1)
-    psDes3_t dctx;
-    psAesCbc_t actx;
-    unsigned char passKey[32];   /* AES-256 max */
-    unsigned char cipherIV[16];  /* AES-256 max */
-    int32 tmp, encrypted = 0;
-
-    static const char des3encryptHeader[]   = "DEK-Info: DES-EDE3-CBC,";
-    static const char aes128encryptHeader[] = "DEK-Info: AES-128-CBC,";
-#  endif /* USE_PKCS5 && USE_PBKDF1 */
-
-    if (fileName == NULL)
-    {
-        psTraceCrypto("No fileName passed to psPkcs1DecodePrivFile\n");
-        return PS_ARG_FAIL;
-    }
-    if ((rc = psGetFileBuf(pool, fileName, &keyBuf, &keyBufLen)) < PS_SUCCESS)
-    {
-        return rc;
-    }
-    start = end = NULL;
-
-    /* Check header and encryption parameters. */
-    if (((start = strstr((char *) keyBuf, "-----BEGIN")) != NULL) &&
-        ((start = strstr((char *) keyBuf, "PRIVATE KEY-----")) != NULL) &&
-        ((end = strstr(start, "-----END")) != NULL) &&
-        ((endTmp = strstr(end, "PRIVATE KEY-----")) != NULL))
-    {
-        start += strlen("PRIVATE KEY-----");
-        while (*start == '\x0d' || *start == '\x0a')
-        {
-            start++;
-        }
-        PEMlen = (uint32) (end - start);
-    }
-    else if (((start = strstr((char *) keyBuf, "-----BEGIN")) != NULL) &&
-             ((start = strstr((char *) keyBuf, "PUBLIC KEY-----")) != NULL) &&
-             ((end = strstr(start, "-----END")) != NULL) &&
-             ((endTmp = strstr(end, "PUBLIC KEY-----")) != NULL))
-    {
-        start += strlen("PUBLIC KEY-----");
-        while (*start == '\x0d' || *start == '\x0a')
-        {
-            start++;
-        }
-        PEMlen = (uint32) (end - start);
-    }
-    else
-    {
-        psTraceCrypto("File buffer does not look to be in PKCS#1 PEM format\n");
-        psFree(keyBuf, pool);
-        return PS_PARSE_FAIL;
-    }
-
-    if (strstr((char *) keyBuf, "Proc-Type:") &&
-        strstr((char *) keyBuf, "4,ENCRYPTED"))
-    {
-#  if defined(USE_PKCS5) && defined(USE_PBKDF1)
-        if (password == NULL)
-        {
-            psTraceCrypto("No password given for encrypted private key file\n");
-            psFree(keyBuf, pool);
-            return PS_ARG_FAIL;
-        }
-        if ((start = strstr((char *) keyBuf, des3encryptHeader)) != NULL)
-        {
-            start += strlen(des3encryptHeader);
-            encrypted = 1;
-            /* we assume here that header points to at least 16 bytes of data */
-            tmp = hexToBinary((unsigned char *) start, cipherIV, DES3_IVLEN);
-        }
-        else if ((start = strstr((char *) keyBuf, aes128encryptHeader))
-                 != NULL)
-        {
-            start += strlen(aes128encryptHeader);
-            encrypted = 2;
-            /* we assume here that header points to at least 32 bytes of data */
-            tmp = hexToBinary((unsigned char *) start, cipherIV, 16);
-        }
-        else
-        {
-            psTraceCrypto("Unrecognized private key file encoding\n");
-            psFree(keyBuf, pool);
-            return PS_PARSE_FAIL;
-        }
-
-        if (tmp < 0)
-        {
-            psTraceCrypto("Invalid private key file salt\n");
-            psFree(keyBuf, pool);
-            return PS_FAILURE;
-        }
-        start += tmp;
-        if (psPkcs5Pbkdf1((unsigned char *) password, strlen(password),
-                cipherIV, 1, (unsigned char *) passKey) < 0)
-        {
-            psTraceCrypto("psPkcs5Pbkdf1 failed\n");
-            psFree(keyBuf, pool);
-            return PS_FAILURE;
-        }
-        PEMlen = (int32) (end - start);
-#  else /* !USE_PKCS5 || !USE_PBKDF1 */
-        /* The private key is encrypted, but PKCS5 support has been turned off */
-#   ifndef USE_PKCS5
-        psTraceCrypto("USE_PKCS5 must be enabled for key file password\n");
-#   endif /* USE_PKCS5 */
-#   ifndef USE_PBKDF1
-        psTraceCrypto("USE_PBKDF1 must be enabled for key file password\n");
-#   endif /* USE_PBKDF1 */
-        psFree(keyBuf, pool);
-        return PS_UNSUPPORTED_FAIL;
-#  endif /* USE_PKCS5 && USE_PBKDF1 */
-    }
-
-    /* Take the raw input and do a base64 decode */
-    dout = psMalloc(pool, PEMlen);
-    if (dout == NULL)
-    {
-        psFree(keyBuf, pool);
-        psError("Memory allocation error in psPkcs1DecodePrivFile\n");
-        return PS_MEM_FAIL;
-    }
-    *DERlen = PEMlen;
-    if ((rc = psBase64decode((unsigned char *) start, PEMlen, dout,
-             DERlen)) < 0)
-    {
-        psTraceCrypto("Error base64 decode of private key\n");
-        if (password)
-        {
-            psTraceCrypto("Is it possible the password is incorrect?\n");
-        }
-        psFree(dout, pool);
-        psFree(keyBuf, pool);
-        return rc;
-    }
-    psFree(keyBuf, pool);
-
-#  if defined(USE_PKCS5) && defined(USE_PBKDF1)
-    if (encrypted == 1 && password)
-    {
-        psDes3Init(&dctx, cipherIV, passKey);
-        psDes3Decrypt(&dctx, dout, dout, *DERlen);
-        memset_s(&dctx, sizeof(psDes3_t), 0x0, sizeof(psDes3_t));
-    }
-    if (encrypted == 2 && password)
-    {
-        /* AES 128 */
-        psAesInitCBC(&actx, cipherIV, passKey, 16, PS_AES_DECRYPT);
-        psAesDecryptCBC(&actx, dout, dout, *DERlen);
-        memset_s(&actx, sizeof(psAesCbc_t), 0x0, sizeof(psAesCbc_t));
-    }
-    /* SECURITY - zero out keys when finished */
-    memset_s(passKey, sizeof(passKey), 0x0, sizeof(passKey));
-#  endif /* USE_PKCS5 && USE_PBKDF1 */
-    *DERout = dout;
-
-    return PS_SUCCESS;
-}
-
-# endif /* MATRIX_USE_FILE_SYSTEM */
 #endif  /* USE_PRIVATE_KEY_PARSING */
 /******************************************************************************/
 
@@ -1961,7 +1303,7 @@ int32_t psPkcs5Pbkdf1(unsigned char *pass, uint32 passlen, unsigned char *salt,
     psMd5Update(&md.md5, pass, passlen);
     psMd5Update(&md.md5, salt, 8);
     psMd5Final(&md.md5, md5);
-    memcpy(key, md5, MD5_HASH_SIZE);
+    Memcpy(key, md5, MD5_HASH_SIZE);
 
     rc = psMd5Init(&md.md5);
     if (rc != PS_SUCCESS)
@@ -1974,7 +1316,7 @@ int32_t psPkcs5Pbkdf1(unsigned char *pass, uint32 passlen, unsigned char *salt,
     psMd5Update(&md.md5, pass, passlen);
     psMd5Update(&md.md5, salt, 8);
     psMd5Final(&md.md5, md5);
-    memcpy(key + MD5_HASH_SIZE, md5, 24 - MD5_HASH_SIZE);
+    Memcpy(key + MD5_HASH_SIZE, md5, 24 - MD5_HASH_SIZE);
 
     memset_s(md5, MD5_HASH_SIZE, 0x0, MD5_HASH_SIZE);
     memset_s(&md, sizeof(psDigestContext_t), 0x0, sizeof(psDigestContext_t));
@@ -2011,7 +1353,7 @@ void psPkcs5Pbkdf2(unsigned char *password, uint32 pLen,
     while (left != 0)
     {
         /* process block number blkno */
-        memset(buf[0], 0x0, SHA1_HASH_SIZE * 2);
+        Memset(buf[0], 0x0, SHA1_HASH_SIZE * 2);
 
         /* store current block number and increment for next pass */
         STORE32H(blkno, buf[1]);
@@ -2024,7 +1366,7 @@ void psPkcs5Pbkdf2(unsigned char *password, uint32 pLen,
         psHmacSha1Final(&hmac, buf[0]);
 
         /* now compute repeated and XOR it in buf[1] */
-        memcpy(buf[1], buf[0], SHA1_HASH_SIZE);
+        Memcpy(buf[1], buf[0], SHA1_HASH_SIZE);
         for (itts = 1; itts < rounds; ++itts)
         {
             psHmacSha1Init(&hmac, password, pLen);
@@ -2066,9 +1408,9 @@ int32_t psPkcs3ParseDhParamFile(psPool_t *pool, const char *fileName, psDhParams
 {
     unsigned char *pemOut, *p;
     char *dhFileBuf, *start, *end;
-    int32_t rc;
     psSize_t baseLen, pemOutLen;
-    int32_t dhFileLen;
+    psSizeL_t dhFileLen;
+    psRes_t rc;
 
     if (!params || !fileName)
     {
@@ -2083,20 +1425,20 @@ int32_t psPkcs3ParseDhParamFile(psPool_t *pool, const char *fileName, psDhParams
     /* Set end to end of file buffer */
     end = dhFileBuf + dhFileLen;
     /* Set start to start of token */
-    if ((start = strstr(dhFileBuf, "-----BEGIN DH PARAMETERS-----")) == NULL)
+    if ((start = Strstr(dhFileBuf, "-----BEGIN DH PARAMETERS-----")) == NULL)
     {
         psTraceStrCrypto("Error parsing dh file buffer header: %s\n", fileName);
         psFree(dhFileBuf, pool);
         return PS_PARSE_FAIL;
     }
     /* Move start to start of PEM data, skipping CR/LF */
-    start += 29; /* strlen("-----BEGIN DH PARAMETERS-----"); */
+    start += 29; /* Strlen("-----BEGIN DH PARAMETERS-----"); */
     while (start < end && (*start == '\x0d' || *start == '\x0a'))
     {
         start++;
     }
     /* Set end to end token */
-    if ((end = strstr(start, "-----END DH PARAMETERS-----")) == NULL)
+    if ((end = Strstr(start, "-----END DH PARAMETERS-----")) == NULL)
     {
         psTraceStrCrypto("Error parsing dh file buffer footer: %s\n", fileName);
         psFree(dhFileBuf, pool);
@@ -2113,6 +1455,7 @@ int32_t psPkcs3ParseDhParamFile(psPool_t *pool, const char *fileName, psDhParams
         return PS_MEM_FAIL;
     }
 
+#ifdef USE_BASE64_DECODE
     pemOutLen = baseLen;
     if (psBase64decode((unsigned char *) start, baseLen, p, &pemOutLen) != 0)
     {
@@ -2121,6 +1464,10 @@ int32_t psPkcs3ParseDhParamFile(psPool_t *pool, const char *fileName, psDhParams
         return PS_PARSE_FAIL;
     }
     psFree(dhFileBuf, pool);
+#else
+    pemOutLen = baseLen;
+    memcpy(pemOut, start, pemOutLen);
+#endif
 
     if ((rc = psPkcs3ParseDhParamBin(pool, p, pemOutLen, params)) < 0)
     {
@@ -2422,7 +1769,7 @@ int32 psPkcs1OaepEncode(psPool_t *pool, const unsigned char *msg, uint32 msglen,
  */
     x = hLen;
     y = modulus_len - msglen - 2 * hLen - 2;
-    memset(DB + x, 0, y);
+    Memset(DB + x, 0, y);
     x += y;
 
     DB[x++] = 0x01;
@@ -2430,7 +1777,7 @@ int32 psPkcs1OaepEncode(psPool_t *pool, const unsigned char *msg, uint32 msglen,
 /*
     Message (length = msglen)
  */
-    memcpy(DB + x, msg, msglen);
+    Memcpy(DB + x, msg, msglen);
     x += msglen;
 
 /*
@@ -2507,9 +1854,9 @@ int32 psPkcs1OaepEncode(psPool_t *pool, const unsigned char *msg, uint32 msglen,
  */
     x = 0;
     out[x++] = 0x00;
-    memcpy(out + x, lseed, hLen);
+    Memcpy(out + x, lseed, hLen);
     x += hLen;
-    memcpy(out + x, DB, modulus_len - hLen - 1);
+    Memcpy(out + x, DB, modulus_len - hLen - 1);
     x += modulus_len - hLen - 1;
 
     *outlen = x;
@@ -2633,13 +1980,13 @@ int32 psPkcs1OaepDecode(psPool_t *pool, const unsigned char *msg, uint32 msglen,
     Now read the masked seed
  */
     x = 1;
-    memcpy(seed, msg + x, hLen);
+    Memcpy(seed, msg + x, hLen);
     x += hLen;
 
 /*
     Now read the masked DB
  */
-    memcpy(DB, msg + x, modulus_len - hLen - 1);
+    Memcpy(DB, msg + x, modulus_len - hLen - 1);
     x += modulus_len - hLen - 1;
 
 /*
@@ -2724,7 +2071,7 @@ int32 psPkcs1OaepDecode(psPool_t *pool, const unsigned char *msg, uint32 msglen,
 /*
     Compare the lhash'es
  */
-    if (memcmp(seed, DB, hLen) != 0)
+    if (Memcmp(seed, DB, hLen) != 0)
     {
         psTraceCrypto("Seed/DB mismatch in OAEP decode\n");
         err = -1;
@@ -2763,7 +2110,7 @@ int32 psPkcs1OaepDecode(psPool_t *pool, const unsigned char *msg, uint32 msglen,
     Copy message
  */
     *outlen = (modulus_len - hLen - 1) - x;
-    memcpy(out, DB + x, modulus_len - hLen - 1 - x);
+    Memcpy(out, DB + x, modulus_len - hLen - 1 - x);
     x += modulus_len - hLen - 1;
 
     err = PS_SUCCESS;
@@ -2784,7 +2131,10 @@ LBL_ERR:
     PKCS #1 v2.00 Signature Encoding
     @param msghash          The hash to encode
     @param msghashlen       The length of the hash (octets)
-    @param saltlen          The length of the salt desired (octets)
+    @param tsalt            The salt to use. Pass NULL to use a random
+                            salt (recommended).
+    @param saltlen          The length of tsalt or the desired random
+                            salt (octets).
     @param hash_idx         The index of the hash desired
     @param modulus_bitlen   The bit length of the RSA modulus
     @param out              [out] The destination of the encoding
@@ -2820,13 +2170,25 @@ int32 psPkcs1PssEncode(psPool_t *pool, const unsigned char *msghash,
         psTraceCrypto(" Please enable USE_MD5\n");
         return PS_UNSUPPORTED_FAIL;
 # endif /* USE_MD5 */
-# ifdef USE_SHA256
     }
+# ifdef USE_SHA256
     else if (hash_idx == PKCS1_SHA256_ID)
     {
         hLen = SHA256_HASH_SIZE;
-# endif
     }
+# endif
+# ifdef USE_SHA384
+    else if (hash_idx == PKCS1_SHA384_ID)
+    {
+        hLen = SHA384_HASH_SIZE;
+    }
+# endif
+# ifdef USE_SHA512
+    else if (hash_idx == PKCS1_SHA512_ID)
+    {
+        hLen = SHA512_HASH_SIZE;
+    }
+# endif
     else
     {
         psTraceStrCrypto("Bad hash index to PSS encode\n", NULL);
@@ -2848,29 +2210,29 @@ int32 psPkcs1PssEncode(psPool_t *pool, const unsigned char *msghash,
     {
         return err;
     }
-    memset(DB, 0x0, modulus_len);
+    Memset(DB, 0x0, modulus_len);
     if ((mask = psMalloc(pool, modulus_len)) == NULL)
     {
         goto LBL_DB;
     }
-    memset(mask, 0x0, modulus_len);
+    Memset(mask, 0x0, modulus_len);
     if ((salt = psMalloc(pool, modulus_len)) == NULL)
     {
         goto LBL_MASK;
     }
-    memset(salt, 0x0, modulus_len);
+    Memset(salt, 0x0, modulus_len);
     if ((hash = psMalloc(pool, modulus_len)) == NULL)
     {
         goto LBL_SALT;
     }
-    memset(hash, 0x0, modulus_len);
+    Memset(hash, 0x0, modulus_len);
 
     /* generate random salt */
     if (saltlen > 0)
     {
         if (tsalt != NULL)
         {
-            memcpy(salt, tsalt, saltlen);
+            Memcpy(salt, tsalt, saltlen);
         }
         else
         {
@@ -2911,14 +2273,34 @@ int32 psPkcs1PssEncode(psPool_t *pool, const unsigned char *msghash,
         psSha256Final(&md.sha256, hash);
     }
 # endif
+# ifdef USE_SHA384
+    if (hash_idx == PKCS1_SHA384_ID)
+    {
+        psSha384Init(&md.sha384);
+        psSha384Update(&md.sha384, DB, 8); /* 8 0's */
+        psSha384Update(&md.sha384, msghash, msghashlen);
+        psSha384Update(&md.sha384, salt, saltlen);
+        psSha384Final(&md.sha384, hash);
+    }
+# endif
+# ifdef USE_SHA512
+    if (hash_idx == PKCS1_SHA512_ID)
+    {
+        psSha512Init(&md.sha512);
+        psSha512Update(&md.sha512, DB, 8); /* 8 0's */
+        psSha512Update(&md.sha512, msghash, msghashlen);
+        psSha512Update(&md.sha512, salt, saltlen);
+        psSha512Final(&md.sha512, hash);
+    }
+# endif
 
     /* generate DB = PS || 0x01 || salt
         PS == modulus_len - saltlen - hLen - 2 zero bytes */
     x = 0;
-    memset(DB + x, 0, modulus_len - saltlen - hLen - 2);
+    Memset(DB + x, 0, modulus_len - saltlen - hLen - 2);
     x += modulus_len - saltlen - hLen - 2;
     DB[x++] = 0x01;
-    memcpy(DB + x, salt, saltlen);
+    Memcpy(DB + x, salt, saltlen);
     x += saltlen;
 
     /* generate mask of length modulus_len - hLen - 1 from hash */
@@ -2944,11 +2326,11 @@ int32 psPkcs1PssEncode(psPool_t *pool, const unsigned char *msghash,
 
     /* DB len = modulus_len - hLen - 1 */
     y = 0;
-    memcpy(out + y, DB, modulus_len - hLen - 1);
+    Memcpy(out + y, DB, modulus_len - hLen - 1);
     y += modulus_len - hLen - 1;
 
     /* hash */
-    memcpy(out + y, hash, hLen);
+    Memcpy(out + y, hash, hLen);
     y += hLen;
 
     /* 0xBC */
@@ -3054,22 +2436,22 @@ int32 psPkcs1PssDecode(psPool_t *pool, const unsigned char *msghash,
     {
         return err;
     }
-    memset(DB, 0x0, modulus_len);
+    Memset(DB, 0x0, modulus_len);
     if ((mask = psMalloc(pool, modulus_len)) == NULL)
     {
         goto LBL_DB;
     }
-    memset(mask, 0x0, modulus_len);
+    Memset(mask, 0x0, modulus_len);
     if ((salt = psMalloc(pool, modulus_len)) == NULL)
     {
         goto LBL_MASK;
     }
-    memset(salt, 0x0, modulus_len);
+    Memset(salt, 0x0, modulus_len);
     if ((hash = psMalloc(pool, modulus_len)) == NULL)
     {
         goto LBL_SALT;
     }
-    memset(hash, 0x0, modulus_len);
+    Memset(hash, 0x0, modulus_len);
 
     /* ensure the 0xBC byte */
     if (sig[siglen - 1] != 0xBC)
@@ -3080,11 +2462,11 @@ int32 psPkcs1PssDecode(psPool_t *pool, const unsigned char *msghash,
 
     /* copy out the DB */
     x = 0;
-    memcpy(DB, sig + x, modulus_len - hLen - 1);
+    Memcpy(DB, sig + x, modulus_len - hLen - 1);
     x += modulus_len - hLen - 1;
 
     /* copy out the hash */
-    memcpy(hash, sig + x, hLen);
+    Memcpy(hash, sig + x, hLen);
     x += hLen;
 
     /* check the MSB */
@@ -3134,7 +2516,7 @@ int32 psPkcs1PssDecode(psPool_t *pool, const unsigned char *msghash,
     if (hash_idx == PKCS1_SHA1_ID)
     {
         psSha1Init(&md.sha1);
-        memset(mask, 0x0, 8);
+        Memset(mask, 0x0, 8);
         psSha1Update(&md.sha1, mask, 8);
         psSha1Update(&md.sha1, msghash, msghashlen);
         psSha1Update(&md.sha1, DB + x, saltlen);
@@ -3144,7 +2526,7 @@ int32 psPkcs1PssDecode(psPool_t *pool, const unsigned char *msghash,
     if (hash_idx == PKCS1_MD5_ID)
     {
         psMd5Init(&md.md5);
-        memset(mask, 0x0, 8);
+        Memset(mask, 0x0, 8);
         psMd5Update(&md.md5, mask, 8);
         psMd5Update(&md.md5, msghash, msghashlen);
         psMd5Update(&md.md5, DB + x, saltlen);
@@ -3156,7 +2538,7 @@ int32 psPkcs1PssDecode(psPool_t *pool, const unsigned char *msghash,
     if (hash_idx == PKCS1_SHA256_ID)
     {
         psSha256Init(&md.sha256);
-        memset(mask, 0x0, 8);
+        Memset(mask, 0x0, 8);
         psSha256Update(&md.sha256, mask, 8);
         psSha256Update(&md.sha256, msghash, msghashlen);
         psSha256Update(&md.sha256, DB + x, saltlen);
@@ -3167,7 +2549,7 @@ int32 psPkcs1PssDecode(psPool_t *pool, const unsigned char *msghash,
     if (hash_idx == PKCS1_SHA384_ID)
     {
         psSha384Init(&md.sha384);
-        memset(mask, 0x0, 8);
+        Memset(mask, 0x0, 8);
         psSha384Update(&md.sha384, mask, 8);
         psSha384Update(&md.sha384, msghash, msghashlen);
         psSha384Update(&md.sha384, DB + x, saltlen);
@@ -3178,7 +2560,7 @@ int32 psPkcs1PssDecode(psPool_t *pool, const unsigned char *msghash,
     if (hash_idx == PKCS1_SHA512_ID)
     {
         psSha512Init(&md.sha512);
-        memset(mask, 0x0, 8);
+        Memset(mask, 0x0, 8);
         psSha512Update(&md.sha512, mask, 8);
         psSha512Update(&md.sha512, msghash, msghashlen);
         psSha512Update(&md.sha512, DB + x, saltlen);
@@ -3187,7 +2569,7 @@ int32 psPkcs1PssDecode(psPool_t *pool, const unsigned char *msghash,
 # endif
 
     /* mask == hash means valid signature */
-    if (memcmp(mask, hash, hLen) == 0)
+    if (Memcmp(mask, hash, hLen) == 0)
     {
         *res = 1;
     }
@@ -3208,7 +2590,21 @@ LBL_DB:
 }
 #endif /* USE_PKCS1_PSS */
 
+#    if defined(USE_PKCS5) && defined(USE_PBKDF1)
 /******************************************************************************/
+/*
+    The standard is to write the number of pad bytes as the value for each
+    pad byte
+ */
+uint32 blockCipherWritePad(unsigned char *p, unsigned char padLen)
+{
+    unsigned char c = padLen;
 
+    while (c-- > 0)
+    {
+        *p++ = padLen;
+    }
+    return padLen;
+}
+#     endif /* USE_PKCS5 && USE_PBKDF1 */
 /******************************************************************************/
-

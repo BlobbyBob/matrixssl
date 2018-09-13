@@ -3,24 +3,24 @@
 # ifndef __STDC_WANT_LIB_EXT1__
 #  define __STDC_WANT_LIB_EXT1__ 1
 # endif
-# include <assert.h>
-# include <errno.h>
-# include <limits.h>
-# include <signal.h>
-# include <stddef.h>
-# include <stdint.h>
-# include <stdlib.h>
-# include <string.h>
+# include "osdep_assert.h"
+# include "osdep_errno.h"
+# include "osdep_limits.h"
+# include "osdep_signal.h"
+# include "osdep_stddef.h"
+# include "osdep_stdint.h"
+# include "osdep_stdlib.h"
+# include "osdep_string.h"
 
 # ifdef HAVE_SYS_MMAN_H
-#  include <sys/mman.h>
+#  include "osdep_sys_mman.h"
 # endif
 
 # ifdef _WIN32
-#  include <windows.h>
-#  include <wincrypt.h>
+#  include "osdep_windows.h"
+#  include "osdep_wincrypt.h"
 # else
-#  include <unistd.h>
+#  include "osdep_unistd.h"
 # endif
 
 # include "randombytes.h"
@@ -87,7 +87,7 @@ psSodium_memzero(void *const pnt, const size_t len)
     SecureZeroMemory(pnt, len);
 # elif defined(HAVE_MEMSET_S)
     if (len > 0U && memset_s(pnt, (rsize_t) len, 0, (rsize_t) len) != 0) {
-        abort(); /* LCOV_EXCL_LINE */
+        Abort(); /* LCOV_EXCL_LINE */
     }
 # elif defined(HAVE_EXPLICIT_BZERO)
     explicit_bzero(pnt, len);
@@ -299,7 +299,7 @@ psSodium_bin2hex(char *const hex, const size_t hex_maxlen,
     int          c;
 
     if (bin_len >= SIZE_MAX / 2 || hex_maxlen <= bin_len * 2U) {
-        abort(); /* LCOV_EXCL_LINE */
+        Abort(); /* LCOV_EXCL_LINE */
     }
     while (i < bin_len) {
         c = bin[i] & 0xf;
@@ -339,7 +339,7 @@ psSodium_hex2bin(unsigned char *const bin, const size_t bin_maxlen,
         c_alpha  = (c & ~32U) - 55U;
         c_alpha0 = ((c_alpha - 10U) ^ (c_alpha - 16U)) >> 8;
         if ((c_num0 | c_alpha0) == 0U) {
-            if (ignore != NULL && state == 0U && strchr(ignore, c) != NULL) {
+            if (ignore != NULL && state == 0U && Strchr(ignore, c) != NULL) {
                 hex_pos++;
                 continue;
             }
@@ -377,7 +377,7 @@ psSodium_alloc_init(void)
 {
 # ifdef HAVE_ALIGNED_MALLOC
 #  if defined(_SC_PAGESIZE)
-    long page_size_ = sysconf(_SC_PAGESIZE);
+    long page_size_ = Sysconf(_SC_PAGESIZE);
     if (page_size_ > 0L) {
         page_size = (size_t) page_size_;
     }
@@ -387,7 +387,7 @@ psSodium_alloc_init(void)
     page_size = (size_t) si.dwPageSize;
 #  endif
     if (page_size < CANARY_SIZE || page_size < sizeof(size_t)) {
-        abort(); /* LCOV_EXCL_LINE */
+        Abort(); /* LCOV_EXCL_LINE */
     }
 # endif
     randombytes_buf(canary, sizeof canary);
@@ -482,7 +482,7 @@ _out_of_bounds(void)
 #  elif defined(SIGKILL)
     raise(SIGKILL);
 #  endif
-    abort();
+    Abort();
 } /* LCOV_EXCL_LINE */
 
 static inline size_t
@@ -522,7 +522,7 @@ _free_aligned(unsigned char *const ptr, const size_t size)
 #  if defined(MAP_ANON) && defined(HAVE_MMAP)
     (void) munmap(ptr, size);
 #  elif defined(HAVE_POSIX_MEMALIGN)
-    free(ptr);
+    Free(ptr);
 #  elif defined(WINAPI_DESKTOP)
     VirtualFree(ptr, 0U, MEM_RELEASE);
 #  else
@@ -541,7 +541,7 @@ _unprotected_ptr_from_user_ptr(void *const ptr)
     page_mask = page_size - 1U;
     unprotected_ptr_u = ((uintptr_t) canary_ptr & (uintptr_t) ~page_mask);
     if (unprotected_ptr_u <= page_size * 2U) {
-        abort(); /* LCOV_EXCL_LINE */
+        Abort(); /* LCOV_EXCL_LINE */
     }
     return (unsigned char *) unprotected_ptr_u;
 }
@@ -552,7 +552,7 @@ _unprotected_ptr_from_user_ptr(void *const ptr)
 static __attribute__((malloc)) void *
 psSodium_malloc(const size_t size)
 {
-    return malloc(size > (size_t) 0U ? size : (size_t) 1U);
+    return Malloc(size > (size_t) 0U ? size : (size_t) 1U);
 }
 # else
 static __attribute__((malloc)) void *
@@ -571,7 +571,7 @@ psSodium_malloc(const size_t size)
         return NULL;
     }
     if (page_size <= sizeof canary || page_size < sizeof unprotected_size) {
-        abort(); /* LCOV_EXCL_LINE */
+        Abort(); /* LCOV_EXCL_LINE */
     }
     size_with_canary = (sizeof canary) + size;
     unprotected_size = _page_round(size_with_canary);
@@ -582,17 +582,17 @@ psSodium_malloc(const size_t size)
     unprotected_ptr = base_ptr + page_size * 2U;
     _mprotect_noaccess(base_ptr + page_size, page_size);
 #  ifndef HAVE_PAGE_PROTECTION
-    memcpy(unprotected_ptr + unprotected_size, canary, sizeof canary);
+    Memcpy(unprotected_ptr + unprotected_size, canary, sizeof canary);
 #  endif
     _mprotect_noaccess(unprotected_ptr + unprotected_size, page_size);
     psSodium_mlock(unprotected_ptr, unprotected_size);
     canary_ptr =
         unprotected_ptr + _page_round(size_with_canary) - size_with_canary;
     user_ptr = canary_ptr + sizeof canary;
-    memcpy(canary_ptr, canary, sizeof canary);
-    memcpy(base_ptr, &unprotected_size, sizeof unprotected_size);
+    Memcpy(canary_ptr, canary, sizeof canary);
+    Memcpy(base_ptr, &unprotected_size, sizeof unprotected_size);
     _mprotect_readonly(base_ptr, page_size);
-    assert(_unprotected_ptr_from_user_ptr(user_ptr) == unprotected_ptr);
+    Assert(_unprotected_ptr_from_user_ptr(user_ptr) == unprotected_ptr);
 
     return user_ptr;
 }
@@ -606,7 +606,7 @@ psSodium_malloc(const size_t size)
     if ((ptr = psSodium_malloc(size)) == NULL) {
         return NULL;
     }
-    memset(ptr, (int) GARBAGE_VALUE, size);
+    Memset(ptr, (int) GARBAGE_VALUE, size);
 
     return ptr;
 }
@@ -629,7 +629,7 @@ psSodium_allocarray(size_t count, size_t size)
 void
 psSodium_free(void *ptr)
 {
-    free(ptr);
+    Free(ptr);
 }
 # else
 void
@@ -647,7 +647,7 @@ psSodium_free(void *ptr)
     canary_ptr      = ((unsigned char *) ptr) - sizeof canary;
     unprotected_ptr = _unprotected_ptr_from_user_ptr(ptr);
     base_ptr        = unprotected_ptr - page_size * 2U;
-    memcpy(&unprotected_size, base_ptr, sizeof unprotected_size);
+    Memcpy(&unprotected_size, base_ptr, sizeof unprotected_size);
     total_size = page_size + page_size + unprotected_size + page_size;
     _mprotect_readwrite(base_ptr, total_size);
     if (psSodium_memcmp(canary_ptr, canary, sizeof canary) != 0) {
@@ -684,7 +684,7 @@ psSodium_mprotect(void *ptr, int (*cb)(void *ptr, size_t size))
 
     unprotected_ptr = _unprotected_ptr_from_user_ptr(ptr);
     base_ptr        = unprotected_ptr - page_size * 2U;
-    memcpy(&unprotected_size, base_ptr, sizeof unprotected_size);
+    Memcpy(&unprotected_size, base_ptr, sizeof unprotected_size);
 
     return cb(unprotected_ptr, unprotected_size);
 }

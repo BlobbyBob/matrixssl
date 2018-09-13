@@ -1,15 +1,14 @@
 #
 #   Makefile for MatrixSSL crypto static library
-#   'make' builds debug (Default).
-#   'make gold' builds optimized.
 #
-#   Copyright (c) 2013-2017 INSIDE Secure Corporation. All Rights Reserved.
+#   Copyright (c) 2013-2018 INSIDE Secure Corporation. All Rights Reserved.
 #
 
 MATRIXSSL_ROOT:=..
 include $(MATRIXSSL_ROOT)/common.mk
 
 SRC:=\
+	common/alg_info.c \
 	symmetric/aes.c \
 	symmetric/aesCBC.c \
 	symmetric/aesGCM.c \
@@ -19,6 +18,7 @@ SRC:=\
 	symmetric/idea.c \
 	symmetric/rc2.c \
 	symmetric/seed.c \
+	digest/sha256_standalone.c \
 	digest/sha1.c \
 	digest/sha256.c \
 	digest/sha512.c \
@@ -27,10 +27,13 @@ SRC:=\
 	digest/hmac.c \
 	digest/md4.c \
 	digest/md2.c \
+	digest/hkdf.c \
 	keyformat/asn1.c \
 	keyformat/asn1fmt.c \
 	keyformat/base64.c \
 	keyformat/crl.c \
+	keyformat/pem_decode_mem.c \
+	keyformat/pem_decode_file.c \
 	keyformat/pkcs.c \
 	keyformat/x509.c \
 	layer/matrix.c \
@@ -42,9 +45,42 @@ SRC:=\
 	prng/prng.c \
 	prng/yarrow.c \
 	pubkey/dh.c \
+	pubkey/dh_params.c \
+	pubkey/dh_export.c \
+	pubkey/dh_import.c \
+	pubkey/dh_gen_key.c \
+	pubkey/dh_gen_secret.c \
+	pubkey/dh_import_priv.c \
 	pubkey/ecc.c \
+	pubkey/ecc_curve.c \
+	pubkey/ecc_curve_data.c \
+	pubkey/ecc_curve_config.c \
+	pubkey/ecc_math.c \
+	pubkey/ecc_priv.c \
+	pubkey/ecc_priv_el_gamal.c \
+	pubkey/ecc_pub.c \
+	pubkey/ecc_keygen.c \
+	pubkey/ecc_gen_shared.c \
+	pubkey/ecc_parse_file.c \
+	pubkey/ecc_parse_mem.c \
+	pubkey/ecc_write_mem.c \
+	pubkey/ecc_write_file.c \
+	pubkey/ecc_export.c \
+	pubkey/ecc_import.c \
 	pubkey/pubkey.c \
-	pubkey/rsa.c
+	pubkey/pubkey_sign.c \
+	pubkey/pubkey_verify.c \
+	pubkey/pubkey_parse_mem.c \
+	pubkey/pubkey_parse_file.c \
+	pubkey/rsa.c \
+	pubkey/rsa_priv.c \
+	pubkey/rsa_pub.c \
+	pubkey/rsa_keygen.c \
+	pubkey/rsa_parse_mem.c \
+	pubkey/rsa_parse_file.c \
+	pubkey/rsa_write_mem.c \
+	pubkey/rsa_write_file.c \
+
 
 SRC_CHACHA20POLY = \
         aead/chacha20poly1305ietf/sse2/poly1305_sse2.c \
@@ -59,8 +95,28 @@ SRC_CHACHA20POLY = \
 	aead/chacha20poly1305ietf/utils.c \
 	aead/chacha20poly1305ietf/verify.c \
 	aead/chacha20poly1305ietf/runtime.c
-SRC+=$(SRC_CHACHA20POLY)
+
+SRC_CURVE25519 = \
+	scalarmult/curve25519/scalarmult_curve25519.c \
+	scalarmult/curve25519/ref10/x25519_ref10.c \
+	scalarmult/ed25519/ref10/scalarmult_ed25519_ref10.c \
+	scalarmult/crypto_scalarmult.c \
+	scalarmult/crypto_core/ed25519/core_ed25519.c \
+	scalarmult/crypto_core/ed25519/ref10/ed25519_ref10.c \
+	scalarmult/ps_x25519.c
+
+SRC_ED25519 = \
+	crypto_sign/crypto_sign.c \
+	crypto_sign/ed25519/ref10/sign.c \
+	crypto_sign/ed25519/ref10/open.c \
+	crypto_sign/ps_ed25519.c
+
+#	crypto_sign/ed25519/ref10/sign_ed25519.c
+
+SRC+=$(SRC_CHACHA20POLY) $(SRC_CURVE25519) $(SRC_ED25519)
 CFLAGS_ADDITIONAL_CHACHA20POLY=-I`pwd`/aead/chacha20poly1305ietf -I`pwd`
+CFLAGS_ADDITIONAL_X25519=$(CFLAGS_ADDITIONAL_CHACHA20POLY) -I`pwd`/scalarmult/include/sodium
+CFLAGS_ADDITIONAL_ED25519=$(CFLAGS_ADDITIONAL_X25519) -I`pwd`/crypto_sign/include/sodium -I`pwd`
 ifdef MATRIX_DEBUG
 OPT_CHACHA20POLY=-O2 -std=gnu99 -g
 else
@@ -90,6 +146,28 @@ aead/chacha20poly1305ietf/verify.o: CFLAGS_ADDITIONAL=$(CFLAGS_ADDITIONAL_CHACHA
 aead/chacha20poly1305ietf/verify.o: OPT=$(OPT_CHACHA20POLY)
 aead/chacha20poly1305ietf/runtime.o: CFLAGS_ADDITIONAL=$(CFLAGS_ADDITIONAL_CHACHA20POLY)
 aead/chacha20poly1305ietf/runtime.o: OPT=$(OPT_CHACHA20POLY)
+scalarmult/curve25519/scalarmult_curve25519.o: CFLAGS_ADDITIONAL=$(CFLAGS_ADDITIONAL_X25519)
+scalarmult/curve25519/scalarmult_curve25519.o: CFLAGS_OPTIMIZATION=$(OPT_X25519)
+scalarmult/curve25519/ref10/x25519_ref10.o: CFLAGS_ADDITIONAL=$(CFLAGS_ADDITIONAL_X25519)
+scalarmult/curve25519/ref10/x25519_ref10.o: CFLAGS_OPTIMIZATION=$(OPT_X25519)
+scalarmult/ed25519/ref10/scalarmult_ed25519_ref10.o: CFLAGS_ADDITIONAL=$(CFLAGS_ADDITIONAL_X25519)
+scalarmult/ed25519/ref10/scalarmult_ed25519_ref10.o: CFLAGS_OPTIMIZATION=$(OPT_X25519)
+scalarmult/crypto_scalarmult.o: CFLAGS_ADDITIONAL=$(CFLAGS_ADDITIONAL_X25519)
+scalarmult/crypto_scalarmult.o: CFLAGS_OPTIMIZATION=$(OPT_X25519)
+scalarmult/crypto_core/ed25519/core_ed25519.o: CFLAGS_ADDITIONAL=$(CFLAGS_ADDITIONAL_X25519)
+scalarmult/crypto_core/ed25519/core_ed25519.o: CFLAGS_OPTIMIZATION=$(OPT_X25519)
+scalarmult/crypto_core/ed25519/ref10/ed25519_ref10.o: CFLAGS_ADDITIONAL=$(CFLAGS_ADDITIONAL_X25519)
+scalarmult/crypto_core/ed25519/ref10/ed25519_ref10.o: CFLAGS_OPTIMIZATION=$(OPT_X25519)
+crypto_sign/crypto_sign.o: CFLAGS_ADDITIONAL=$(CFLAGS_ADDITIONAL_ED25519)
+crypto_sign/crypto_sign.o: CFLAGS_OPTIMIZATION=$(OPT_ED25519)
+crypto_sign/ed25519/ref10/sign.o: CFLAGS_ADDITIONAL=$(CFLAGS_ADDITIONAL_ED25519)
+crypto_sign/ed25519/ref10/sign.o: CFLAGS_OPTIMIZATION=$(OPT_ED25519)
+crypto_sign/ed25519/ref10/open.o: CFLAGS_ADDITIONAL=$(CFLAGS_ADDITIONAL_ED25519)
+crypto_sign/ed25519/ref10/open.o: CFLAGS_OPTIMIZATION=$(OPT_ED25519)
+crypto_sign/ed25519/ref10/keypair.o: CFLAGS_ADDITIONAL=$(CFLAGS_ADDITIONAL_ED25519)
+crypto_sign/ed25519/ref10/keypair.o: CFLAGS_OPTIMIZATION=$(OPT_ED25519)
+crypto_sign/ed25519/ref10/sign_ed25519.o: CFLAGS_ADDITIONAL=$(CFLAGS_ADDITIONAL_ED25519)
+crypto_sign/ed25519/ref10/sign_ed25519.o: CFLAGS_OPTIMIZATION=$(OPT_ED25519)
 
 #ifdef USE_OPENSSL_CRYPTO
 ifdef USE_OPENSSL_CRYPTO
@@ -174,10 +252,13 @@ $(OBJS): $(MATRIXSSL_ROOT)/common.mk Makefile *.h */$(BLANK)*.h
 $(STATIC): $(OBJS)
 	$(AR) -rcu $@ $^
 
+asn1enc_test :
+	gcc keyformat/asn1enc.c -o asn1enc_test
+
 clean:
 	rm -f $(STATIC) $(OBJS)
 
 # Allows to check configuration options.
+CPPFLAGS_EXTRACT_MACROS=-dM
 parse-config:
-	echo '#include "cryptoConfig.h"' | $(CC) $(CFLAGS) -dM -E -x c -
-
+	[ -f cryptoConfig.h ] && echo '#include "cryptoConfig.h"' | $(CC) $(CFLAGS) $(CPPFLAGS_EXTRACT_MACROS) -E -x c - || exit 0

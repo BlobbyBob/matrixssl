@@ -108,9 +108,9 @@ void psMd2Init(psMd2_t *md)
 # endif
 
     /* MD2 uses a zero'ed state... */
-    memset(md->X, 0x0, sizeof(md->X));
-    memset(md->chksum, 0x0, sizeof(md->chksum));
-    memset(md->buf, 0x0, sizeof(md->buf));
+    Memset(md->X, 0x0, sizeof(md->X));
+    Memset(md->chksum, 0x0, sizeof(md->chksum));
+    Memset(md->buf, 0x0, sizeof(md->buf));
     md->curlen = 0;
 }
 
@@ -130,7 +130,7 @@ int32_t psMd2Update(psMd2_t *md, const unsigned char *buf, uint32_t len)
     while (len > 0)
     {
         n = min(len, (16 - md->curlen));
-        memcpy(md->buf + md->curlen, buf, (size_t) n);
+        Memcpy(md->buf + md->curlen, buf, (size_t) n);
         md->curlen += n;
         buf            += n;
         len            -= n;
@@ -174,13 +174,13 @@ int32_t psMd2Final(psMd2_t *md, unsigned char *hash)
     md2_update_chksum(md);
 
     /* hash checksum */
-    memcpy(md->buf, md->chksum, 16);
+    Memcpy(md->buf, md->chksum, 16);
     md2_compress(md);
 
     /* output is lower 16 bytes of X */
-    memcpy(hash, md->X, 16);
+    Memcpy(hash, md->X, 16);
 
-    memset(md, 0x0, sizeof(psMd2_t));
+    Memset(md, 0x0, sizeof(psMd2_t));
     return PS_SUCCESS;
 }
 
