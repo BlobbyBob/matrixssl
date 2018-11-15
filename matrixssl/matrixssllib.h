@@ -259,6 +259,7 @@ extern "C" {
 # ifdef USE_DTLS
 #  define DTLS_HEADER_ADD_LEN        8
 # endif
+# define DTLS_HEADER_LEN             13
 
 # define TLS_CHACHA20_POLY1305_IETF_AAD_LEN   13
 # define TLS_GCM_AAD_LEN                 13
@@ -335,22 +336,12 @@ extern "C" {
 # define SSL_FLAGS_INTERCEPTOR   (1U << 26)
 # define SSL_FLAGS_EAP_FAST      (1U << 27)
 
-# define USING_TLS_1_2(SSL) ((SSL->flags & SSL_FLAGS_TLS_1_2) ? PS_TRUE : PS_FALSE)
 # define IS_SERVER(SSL) ((SSL->flags & SSL_FLAGS_SERVER) ? PS_TRUE : PS_FALSE)
 # define IS_CLIENT(SSL) !IS_SERVER(SSL)
 
-#  define USING_TLS_1_3(SSL) ((SSL->flags & SSL_FLAGS_TLS_1_3) ||       \
-            (SSL->flags & SSL_FLAGS_TLS_1_3_DRAFT_22) ||                \
-            (SSL->flags & SSL_FLAGS_TLS_1_3_DRAFT_23) ||                \
-            (SSL->flags & SSL_FLAGS_TLS_1_3_DRAFT_24) ||                \
-            (SSL->flags & SSL_FLAGS_TLS_1_3_DRAFT_26) ||                \
-            (SSL->flags & SSL_FLAGS_TLS_1_3_DRAFT_28)                   \
-                             ? PS_TRUE : PS_FALSE)
-#  define USING_TLS_1_3_AAD(SSL) tls13UsingAad(SSL)
-#  define USING_ONLY_TLS_1_3(SSL) (USING_TLS_1_3(SSL) && \
-            !(SSL->flags & SSL_FLAGS_TLS_1_2) &&                        \
-            !(SSL->flags & SSL_FLAGS_TLS_1_1) ? PS_TRUE : PS_FALSE)
-#  define NEGOTIATED_TLS_1_3(SSL) ((SSL->flags & SSL_FLAGS_TLS_1_3_NEGOTIATED) ? PS_TRUE : PS_FALSE)
+# include "matrixssllib_version.h"
+# include "matrixssllib_secconfig.h"
+
 #  define ENCRYPTING_RECORDS(SSL) ((SSL->flags & SSL_FLAGS_WRITE_SECURE) ? PS_TRUE : PS_FALSE)
 #  define DECRYPTING_RECORDS(SSL) ((SSL->flags & SSL_FLAGS_READ_SECURE) ? PS_TRUE : PS_FALSE)
 #  define RESUMED_HANDSHAKE(SSL) isResumedHandshake(SSL)
@@ -380,18 +371,6 @@ extern "C" {
 # define BFLAG_KEEP_PEER_CERTS    (1 << 3) /* Keep peer cert chain. */
 # define BFLAG_KEEP_PEER_CERT_DER (1 << 4) /* Keep raw DER of peer certs. */
 
-enum PACKED
-{
-    tls_v_1_0 = 1,
-    tls_v_1_1 = 2,
-    tls_v_1_2 = 3,
-    tls_v_1_3 = 4,
-    tls_v_1_3_draft_22 = 22,
-    tls_v_1_3_draft_23 = 23,
-    tls_v_1_3_draft_24 = 24,
-    tls_v_1_3_draft_26 = 26,
-    tls_v_1_3_draft_28 = 28
-};
 
 /*
     Number of bytes server must send before creating a re-handshake credit
@@ -658,6 +637,7 @@ static inline uint16_t HASH_SIG_MASK(uint8_t hash, uint8_t sig)
 # define TLS_DHE_PSK_WITH_AES_256_CBC_SHA        0x0091 /* 145 */
 # define TLS_RSA_WITH_AES_128_GCM_SHA256         0x009C /* 156 */
 # define TLS_RSA_WITH_AES_256_GCM_SHA384         0x009D /* 157 */
+# define TLS_DHE_RSA_WITH_AES_256_GCM_SHA384     0x009F /* 159 */
 
 # define TLS_EMPTY_RENEGOTIATION_INFO_SCSV       0x00FF /**< @see RFC 5746 */
 # define TLS_FALLBACK_SCSV                       0x5600 /**< @see RFC 7507 */
@@ -932,7 +912,7 @@ struct psTls13Psk
 
 # endif /* USE_TLS_1_3 */
 
-# if defined(USE_SERVER_SIDE_SSL) && defined(USE_STATELESS_SESSION_TICKETS)
+# if defined(USE_TLS_1_3_RESUMPTION) || (defined(USE_SERVER_SIDE_SSL) && defined(USE_STATELESS_SESSION_TICKETS))
 typedef int32 (*sslSessTicketCb_t)(void *keys, unsigned char[16], short);
 
 typedef struct sessTicketKey
@@ -1010,7 +990,7 @@ struct sslKeys
     sslIdentity_t *identity;
 # endif
 
-# if defined(USE_CLIENT_SIDE_SSL) || defined(USE_CLIENT_AUTH)
+# if defined(USE_IDENTITY_CERTIFICATES) || defined(USE_CA_CERTIFICATES)
     /* For a client this is the set of trust anchors used to authenticate the
        server, and for the server side this is set of trusted client
        certificate issuers. */
@@ -1025,7 +1005,7 @@ struct sslKeys
     psTls13Psk_t *tls13PskKeys;
 # endif
 # endif /* USE_PSK_CIPHER_SUITE */
-# if defined(USE_SERVER_SIDE_SSL) && defined(USE_STATELESS_SESSION_TICKETS)
+# if defined(USE_TLS_1_3_RESUMPTION) || (defined(USE_SERVER_SIDE_SSL) && defined(USE_STATELESS_SESSION_TICKETS))
     psSessionTicketKeys_t *sessTickets;
     sslSessTicketCb_t ticket_cb;
 # endif
@@ -1061,7 +1041,7 @@ struct sslSessOpts
                                                        CertificateVerify externally. */
 # endif /* USE_EXT_CERTIFICATE_VERIFY_SIGNING */
     int32 versionFlag;                              /* The SSL_FLAGS_TLS_ version (+ DTLS flag here) */
-    int32_t supportedVersions[TLS_MAX_SUPPORTED_VERSIONS]; /* Priority list of supported protocol versions*/
+    uint32_t supportedVersions[TLS_MAX_SUPPORTED_VERSIONS]; /* Priority list of supported protocol versions*/
     psSize_t supportedVersionsLen;
 # ifdef USE_TLS_1_3
     uint16_t tls13SupportedSigAlgsCert[TLS_MAX_SIGNATURE_ALGORITHMS];
@@ -1224,15 +1204,14 @@ typedef struct
     pubkeyCb_t pubkeyCb;
 # endif
 
-# ifndef USE_ONLY_PSK_CIPHER_SUITE
     sslKeySelectInfo_t keySelect;
+
+# ifndef USE_ONLY_PSK_CIPHER_SUITE
     sslIdentityCb_t identityCb;
-#  if defined(USE_CLIENT_SIDE_SSL) || defined(USE_CLIENT_AUTH)
-    /* Client side identity callback, and a pointer to client side
-       identity key selectors for external certificate/key loading */
+#  if defined(USE_IDENTITY_CERTIFICATES) || defined(USE_CERT_VALIDATE)
     psX509Cert_t *cert;
     sslCertCb_t validateCert;
-#  endif /* USE_CLIENT_SIDE_SSL || USE_CLIENT_AUTH */
+#  endif /* USE_IDENTITY_CERTIFICATES */
 # endif  /* USE_ONLY_PSK_CIPHER_SUITE */
 
 # ifdef USE_CLIENT_SIDE_SSL
@@ -1293,11 +1272,10 @@ typedef struct
     psEccKey_t *eccKeyPub;            /* remote key */
     psPool_t *eccDhKeyPool;           /* handshake-scope pool for clients */
     unsigned char *x25519KeyPub;
-#  ifdef USE_TLS_1_3
-    psPubKey_t *tls13KeyAgreeKeys[TLS_1_3_MAX_GROUPS];
-#  endif
 # endif
-
+# ifdef USE_TLS_1_3
+    psPubKey_t *tls13KeyAgreeKeys[TLS_1_3_MAX_GROUPS];
+# endif
     int32 anon;
 } sslSec_t;
 
@@ -1568,23 +1546,41 @@ struct ssl
     uint8_t hsState;                /* Next expected SSL_HS_ message type */
     uint8_t decState;               /* Most recent encoded SSL_HS_ message */
     uint8_t encState;               /* Most recent decoded SSL_HS_ message */
-    uint8_t reqMajVer;
-    uint8_t reqMinVer;
-    uint8_t majVer;
-    uint8_t minVer;
 
-    uint16_t supportedVersions[TLS_MAX_SUPPORTED_VERSIONS];
-    psSize_t supportedVersionsLen;
+# ifdef USE_SEC_CONFIG
+    psCipher16_t *supportedCiphers;
+    psSize_t supportedCiphersLen;
+    psPreDefinedSecProfile_t secProfile;
+    psSecConfig_t secConfig;
+    securityCb_t secCb;
+    uint32_t ecFlagsOverride;
+# endif /* USE_SEC_CONFIG */
+# ifdef USE_SSL_INFORMATIONAL_TRACE
+    /* Store information about the peer public key, to be printed
+       in matrixSslPrintHSDetails. */
+    uint8_t peerAuthKeyType;
+    uint8_t peerKeyExKeyType;
+    psSize_t peerAuthKeyNBits;
+    psSize_t peerKeyExKeyNBits;
+# endif
 
+    /* List of TLS spec versions supported by us. Both compile-time and
+       run-time configuration affect these. */
+    psProtocolVersion_t supportedVersions; /* TLS versions we support. */
+    psProtocolVersion_t supportedVersionsPeer; /* TLS versions the peer supports. */
+    psProtocolVersion_t ourHelloVersion; /* Version we encoded in ClientHello. */
+    psProtocolVersion_t peerHelloVersion; /* legacy_version from peer's hello msg. */
+    psProtocolVersion_t activeVersion; /* TLS spec version we are following.
+                                          If v_tls_negotiated flag is set,
+                                          this version has been succesfully
+                                          negotiated with the peer. */
+    /* Priority-ordering information for supported versions.*/
+    psProtocolVersion_t supportedVersionsPriority[TLS_MAX_SUPPORTED_VERSIONS];
+    psProtocolVersion_t supportedVersionsPriorityLen;
 #ifdef USE_TLS_1_3
-    /* The supported versions array is the client's supported
-     * versions list. It is either set through the API (when MatrixSSL is
-     * client) or filled when ClientHello is received (when MatrixSSL is
-     * server) */
-    uint8_t tls13NegotiatedMinorVer;
+    psProtocolVersion_t peerSupportedVersionsPriority[TLS_MAX_SUPPORTED_VERSIONS];
+    psSize_t peerSupportedVersionsPriorityLen;
     psBool_t tls13IncorrectDheKeyShare;
-    uint16_t tls13PeerSupportedVersions[TLS_MAX_SUPPORTED_VERSIONS];
-    psSize_t tls13PeerSupportedVersionsLen;
     psBool_t gotTls13CiphersuiteInCH; /* Does CH contain any 1.3 suites? */
     uint16_t tls13SupportedSigAlgsCert[TLS_MAX_SIGNATURE_ALGORITHMS];
     psSize_t tls13SupportedSigAlgsCertLen;
@@ -1736,14 +1732,15 @@ struct ssl
         uint32 deny_max_fragment_len : 1;
         uint32 deny_session_ticket : 1;
         /* Whether the server received this extension. */
-        uint32 got_key_share : 1;
-        uint32 got_supported_versions : 1;
-        uint32 got_pre_shared_key : 1;
         uint32 got_psk_key_exchange_modes : 1;
         uint32 got_cookie : 1;
-        uint32 got_early_data : 1;
         uint32 got_elliptic_points : 1;
 # endif
+        uint32 got_supported_versions : 1; /* server only; but 1bit only */
+        uint32 got_key_share : 1;          /* server only; but 1bit only */
+        uint32 got_pre_shared_key : 1;     /* server only; but 1bit only */
+
+        uint32 got_early_data : 1;
         /* Set if the extension was negotiated successfully */
         uint32 sni : 1;
         uint32 truncated_hmac : 1;
@@ -1842,35 +1839,6 @@ PSPUBLIC int32 matrixSslIsSessionCompressionOn(ssl_t *ssl);
 
 # ifdef USE_TLS_1_3
 static inline
-psBool_t tls13UsingAad(ssl_t *ssl)
-{
-    /* AAD is used from draft 26 onwards. */
-    if (ssl->tls13NegotiatedMinorVer == TLS_1_3_MIN_VER ||
-            ssl->tls13NegotiatedMinorVer >= TLS_1_3_DRAFT_26_MIN_VER)
-    {
-        return PS_TRUE;
-    }
-
-    /* If negotiated version is 0, we may be trying to encrypt early
-       data using a PSK-derived key. The PSK may not necessarily
-       have associated version information and even if it did, we
-       do not store the draft version. So, when using using a PSK,
-       we shall assume draft 26 if we are support it. Yes, this
-       is an ugly kludge, but whole draft version mess should
-       disappear once the final RFC has been approved and taken into
-       use. */
-    if (ssl->tls13NegotiatedMinorVer == 0 &&
-            ((ssl->flags & SSL_FLAGS_TLS_1_3) ||
-                    (ssl->flags & SSL_FLAGS_TLS_1_3_DRAFT_26) ||
-                    (ssl->flags & SSL_FLAGS_TLS_1_3_DRAFT_28)))
-    {
-        return PS_TRUE;
-    }
-
-    return PS_FALSE;
-}
-
-static inline
 psBool_t tls13IsResumedHandshake(ssl_t *ssl)
 {
     if (ssl->sec.tls13UsingPsk &&
@@ -1890,7 +1858,7 @@ static inline
 psBool_t isResumedHandshake(ssl_t *ssl)
 {
 # ifdef USE_TLS_1_3
-    if (NEGOTIATED_TLS_1_3(ssl))
+    if (NGTD_VER(ssl, v_tls_1_3_any))
     {
         return tls13IsResumedHandshake(ssl);
     }
@@ -1934,8 +1902,7 @@ extern int32 parseClientHelloExtensions(ssl_t *ssl, unsigned char **cp,
                                         unsigned short len);
 extern int32 parseClientKeyExchange(ssl_t *ssl, int32 hsLen, unsigned char **cp,
                                     unsigned char *end);
-extern int32 checkClientHelloVersion(ssl_t *ssl,
-            unsigned char *serverHighestMinor);
+extern int32 checkClientHelloVersion(ssl_t *ssl);
 extern int32 checkSupportedVersions(ssl_t *ssl);
 #  ifndef USE_ONLY_PSK_CIPHER_SUITE
 #   ifdef USE_CLIENT_AUTH
@@ -2004,10 +1971,8 @@ extern int32_t findFromUint16Array(const uint16_t *a,
         const uint16_t b);
 extern psBool_t anyTls13VersionSupported(ssl_t *ssl);
 extern psBool_t anyNonTls13VersionSupported(ssl_t *ssl);
-extern psBool_t tlsVersionSupported(ssl_t *ssl, const uint8_t minVersion);
 extern psBool_t peerOnlySupportsTls13(ssl_t *ssl);
 extern psBool_t weOnlySupportTls13(ssl_t *ssl);
-extern int32 tlsMinVerToVersionFlag(int32_t minVer);
 extern uint16_t tlsMinVerToOfficialVer(int32_t minVer);
 
 # ifdef USE_CERT_PARSE
@@ -2015,6 +1980,31 @@ extern uint16_t tlsMinVerToOfficialVer(int32_t minVer);
 extern void matrixSslReorderCertChain(psX509Cert_t *a_cert);
 #  endif
 # endif
+
+# ifndef USE_ONLY_PSK_CIPHER_SUITE
+extern int32_t tlsVerify(ssl_t *ssl,
+        const unsigned char *tbs,
+        psSizeL_t tbsLen,
+        const unsigned char *c,
+        const unsigned char *end,
+        psPubKey_t *pubKey,
+        psVerifyOptions_t *opts);
+extern psRes_t tlsPrepareSkeSignature(ssl_t *ssl,
+        int32_t skeSigAlg,
+        unsigned char *tbsStart,
+        unsigned char *c);
+extern psRes_t tlsMakeSkeSignature(ssl_t *ssl,
+        pkaAfter_t *pka,
+        psBuf_t *out);
+extern int32_t chooseSkeSigAlg(ssl_t *ssl,
+        sslIdentity_t *id);
+extern int accountForEcdsaSizeChange(ssl_t *ssl,
+        pkaAfter_t *pka,
+        int real,
+        unsigned char *sig,
+        psBuf_t *out,
+        int hsMsg);
+# endif /* USE_ONLY_PSK_CIPHER_SUITE */
 
 # ifdef USE_TLS_1_3
 /* Parsing. */
@@ -2275,9 +2265,12 @@ extern int32_t tls13ValidateSessionParams(ssl_t *ssl,
         psTls13SessionParams_t *params);
 
 /* Negotiation. */
+#ifdef USE_IDENTITY_CERTIFICATES
 extern int32_t tls13TryNegotiateParams(ssl_t *ssl,
         const sslCipherSpec_t *spec,
         sslIdentity_t *givenKey);
+# endif
+
 extern uint16_t tls13NegotiateGroup(ssl_t *ssl,
         uint16_t *peerList,
         psSize_t peerListLen);
@@ -2293,7 +2286,14 @@ extern int32_t tls13AddPeerSupportedGroup(ssl_t *ssl,
         uint16_t namedGroup);
 extern int32_t tls13AddPeerKeyShareGroup(ssl_t *ssl,
         uint16_t namedGroup);
-extern int32_t tls13IntersectionPrioritySelect(const uint16_t *a,
+extern int32_t tls13IntersectionPrioritySelect(const psProtocolVersion_t *a,
+        psSize_t aLen,
+        const psProtocolVersion_t *b,
+        psSize_t bLen,
+        const psProtocolVersion_t *f,
+        psSize_t fLen,
+        psProtocolVersion_t *selectedElement);
+extern int32_t tls13IntersectionPrioritySelectU16(const uint16_t *a,
         psSize_t aLen,
         const uint16_t *b,
         psSize_t bLen,
@@ -2635,6 +2635,8 @@ void matrixsslUpdateStat(ssl_t *ssl, int32_t type, int32_t value)
 /**  Pre-defined indent levels to use with psTracePrint*, etc. */
 #  define INDENT_CONN_ESTABLISHED 0
 #  define INDENT_NEGOTIATED_PARAM 0
+#  define INDENT_ERROR 0
+#  define INDENT_WARNING 0
 #  define INDENT_HS_MSG 5
 #  define INDENT_EXTENSION 6
 
@@ -2767,6 +2769,10 @@ void psPrintTls13SigAlgList(psSize_t indentLevel,
         uint16_t *algs,
         psSize_t numAlgs,
         psBool_t addNewline);
+void psPrintProtocolVersionNew(psSize_t indentLevel,
+        const char *where,
+        psProtocolVersion_t ver,
+        psBool_t addNewline);
 void psPrintProtocolVersion(psSize_t indentLevel,
         const char *where,
         unsigned char majVer,
@@ -2778,12 +2784,7 @@ void psPrintNegotiatedProtocolVersion(psSize_t indentLevel,
         psBool_t addNewline);
 void psPrintVersionsList(psSize_t indentLevel,
         const char *where,
-        uint16_t *list,
-        psSize_t listLen,
-        psBool_t addNewline);
-void psPrintVersionsList32(psSize_t indentLevel,
-        const char *where,
-        int32_t *list,
+        psProtocolVersion_t *list,
         psSize_t listLen,
         psBool_t addNewline);
 void psPrintSupportedVersionsList(psSize_t indentLevel,
@@ -2851,12 +2852,12 @@ void psPrintTranscriptHashUpdate(ssl_t *ssl,
     psPrintTls13SigAlgList(indentLevel, where, algs, numAlgs, addNewline)
 #  define psTracePrintProtocolVersion(indentLevel, where, majVer, minVer, addNewline) \
     psPrintProtocolVersion(indentLevel, where, majVer, minVer, addNewline)
+#  define psTracePrintProtocolVersionNew(indentLevel, where, ver, addNewline) \
+    psPrintProtocolVersionNew(indentLevel, where, ver, addNewline)
 #  define psTracePrintNegotiatedProtocolVersion(indentLevel, where, ssl, addNewline) \
     psPrintNegotiatedProtocolVersion(indentLevel, where, ssl, addNewline)
 #  define psTracePrintVersionsList(indentLevel, where, list, listLen, addNewline) \
     psPrintVersionsList(indentLevel, where, list, listLen, addNewline)
-#  define psTracePrintVersionsList32(indentLevel, where, list, listLen, addNewline) \
-    psPrintVersionsList32(indentLevel, where, list, listLen, addNewline)
 #  define psTracePrintSupportedVersionsList(indentLevel, where, ssl, peer, addNewline) \
     psPrintSupportedVersionsList(indentLevel, where, ssl, peer, addNewline)
 #  define psTracePrintTls13NamedGroup(indentLevel, where, curveId, addNewline) \
@@ -2895,6 +2896,7 @@ void psPrintTranscriptHashUpdate(ssl_t *ssl,
 #  define psTracePrintTls13SigAlg(indentLevel, where, sigAlg, addNewline)
 #  define psTracePrintTls13SigAlgList(indentLevel, where, algs, numAlg, addNewline)
 #  define psTracePrintProtocolVersion(indentLevel, where, majVer, minVer, addNewline)
+#  define psTracePrintProtocolVersionNew(indentLevel, where, ver, addNewline)
 #  define psTracePrintNegotiatedProtocolVersion(indentLevel, where, ssl, addNewline)
 #  define psTracePrintVersionsList(indentLevel, where, list, listLen, addNewline)
 #  define psTracePrintVersionsList32(indentLevel, where, list, listLen, addNewline)

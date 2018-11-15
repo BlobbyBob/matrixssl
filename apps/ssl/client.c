@@ -220,7 +220,7 @@ static int32 httpsClientConnection(sslKeys_t *keys, sslSessionId_t *sid,
     uint16_t groups[TLS_1_3_MAX_GROUPS] = {0};
 # endif
     uint16_t sigAlgs[TLS_MAX_SIGNATURE_ALGORITHMS] = {0};
-    int32_t supportedVersions[TLS_MAX_SUPPORTED_VERSIONS] = {0};
+    psProtocolVersion_t supportedVersions[TLS_MAX_SUPPORTED_VERSIONS] = {0};
     psSize_t i;
 
 # ifdef USE_ALPN
@@ -341,6 +341,7 @@ static int32 httpsClientConnection(sslKeys_t *keys, sslSessionId_t *sid,
         while (supportedVersion)
         {
             supportedVersions[i] = atoi((char* )supportedVersion->item);
+            supportedVersions[i] = DIGIT_TO_VER(supportedVersions[i]);
             supportedVersion = supportedVersion->next;
             i++;
         }
@@ -352,7 +353,6 @@ static int32 httpsClientConnection(sslKeys_t *keys, sslSessionId_t *sid,
             Printf("matrixSslSessOptsSetClientTlsVersions failed\n");
             goto L_CLOSE_ERR;
         }
-
     }
     else if (g_version_range_set)
     {
@@ -366,7 +366,7 @@ static int32 httpsClientConnection(sslKeys_t *keys, sslSessionId_t *sid,
     }
     else if (g_version != 0)
     {
-        options.versionFlag = tlsMinVerToVersionFlag(g_version);
+        options.versionFlag = psVerToFlag(DIGIT_TO_VER(g_version));
     }
 
     options.userPtr = keys;
@@ -962,6 +962,8 @@ static void usage(void)
         "                          rsa (for RSA keys)\n"
         "                          ec (for EC keys ECDSA signature)\n"
         "                          ecrsa (for EC keys with RSA signature)\n"
+        "--psk                    \n"
+        "                        - Load test PSKs.\n"
         "--groups <groups>\n"
         "                        - Supported groups.\n"
         "                          For example: secp256r1:secp384r1\n"
@@ -1220,8 +1222,9 @@ static int32 process_cmd_options(int32 argc, char **argv)
         case 'V':
             /* Single version. */
             version = atoi(optarg);
-            if (!matrixSslTlsVersionRangeSupported(version,
-                            version))
+            if (!matrixSslTlsVersionRangeSupported(
+                            DIGIT_TO_VER(version),
+                            DIGIT_TO_VER(version)))
             {
                 Printf("Invalid version: %d\n", version);
                 return -1;
@@ -1273,10 +1276,11 @@ static int32 process_cmd_options(int32 argc, char **argv)
                             optarg);
                     return -1;
                 }
-                g_min_version = atoi((char *)versionRangeList->item);
-                g_max_version = atoi((char *)versionRangeList->next->item);
+                g_min_version = DIGIT_TO_VER(atoi((char *)versionRangeList->item));
+                g_max_version = DIGIT_TO_VER(atoi((char *)versionRangeList->next->item));
                 psFreeList(versionRangeList, NULL);
-                if (!matrixSslTlsVersionRangeSupported(g_min_version,
+                if (!matrixSslTlsVersionRangeSupported(
+                                g_min_version,
                                 g_max_version))
                 {
                     Printf("Unsupported version range: %s\n",

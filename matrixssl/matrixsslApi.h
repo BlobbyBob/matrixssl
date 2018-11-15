@@ -98,6 +98,9 @@ extern "C" {
 #   error Must define USE_TLS_1_x_AND_ABOVE
 #  endif
 
+/* Type used for storing protocol versions. */
+typedef uint32_t psProtocolVersion_t;
+
 # if defined(USE_TLS_1_3) && defined(DISABLE_TLS_1_3)
 #  undef USE_TLS_1_3
 #  undef USE_TLS_AES_128_GCM_SHA256
@@ -158,7 +161,7 @@ extern "C" {
 
 
 /* Maximum number of simultaneous TLS versions supported */
-# define TLS_MAX_SUPPORTED_VERSIONS 8
+# define TLS_MAX_SUPPORTED_VERSIONS 16
 /* TLS 1.3: maximum number of algorithms in signature_algorithms extension. */
 # define TLS_MAX_SIGNATURE_ALGORITHMS 32
 /* TLS 1.3: maximum number of cipher suites to support in clientHello */
@@ -401,8 +404,8 @@ PSPUBLIC int32  matrixSslProcessedData(ssl_t *ssl,
 PSPUBLIC int32  matrixSslEncodeClosureAlert(ssl_t *ssl);
 PSPUBLIC void   matrixSslDeleteSession(ssl_t *ssl);
 
-PSPUBLIC psBool_t matrixSslTlsVersionRangeSupported(int32_t low,
-        int32_t high);
+PSPUBLIC psBool_t matrixSslTlsVersionRangeSupported(psProtocolVersion_t low,
+        psProtocolVersion_t high);
 PSPUBLIC int32_t matrixSslSessOptsSetKeyExGroups(sslSessOpts_t *options,
         uint16_t *namedGroups,
         psSize_t namedGroupsLen,
@@ -449,6 +452,7 @@ struct sslKeySelectInfo
        many elements. */
     psSize_t nCas;
 
+# if defined(USE_IDENTITY_CERTIFICATES)
     /* Array of certificate authority names, binary DER encoding, as received
        from the peer. Each element caNames[N] is a binary string whose lenght
        is caNameLens[N] octets.
@@ -457,6 +461,7 @@ struct sslKeySelectInfo
        certificate subject/issuer names. */
     const unsigned char **caNames;
     psSize_t *caNameLens;
+# endif
 
     /* Supported signature algorithm masks for transport and
        certificate chains (latter for TLS1.3) */
@@ -572,9 +577,10 @@ PSPUBLIC void   matrixSslDeleteHelloExtension(tlsExtension_t *extension);
 PSPUBLIC int32  matrixSslCreateSNIext(psPool_t *pool, unsigned char *host,
                                       int32 hostLen, unsigned char **extOut, int32 *extLen);
 PSPUBLIC int32_t matrixSslSessOptsSetClientTlsVersionRange(sslSessOpts_t *options,
-        int32_t low, int32_t high);
+        psProtocolVersion_t low,
+        psProtocolVersion_t high);
 PSPUBLIC int32_t matrixSslSessOptsSetClientTlsVersions(sslSessOpts_t *options,
-        const int32_t versions[],
+        const psProtocolVersion_t versions[],
         int32_t versionsLen);
 
 #  ifdef USE_ALPN
@@ -784,20 +790,73 @@ typedef sslKeys_t *(*pubkeyCb_t)(struct ssl *ssl, const sslPubkeyId_t *keyId);
    pskId is found. If key is not found, a negative error code shall be
    returned resulting into aborted handshake. */
 typedef int32_t (*pskCb_t)(struct ssl *ssl,
-                           const unsigned char pskId[SSL_PSK_MAX_ID_SIZE], uint8_t pskIdLen,
-                           unsigned char *psk[SSL_PSK_MAX_KEY_SIZE], uint8_t *pskLen);
+        const unsigned char pskId[SSL_PSK_MAX_ID_SIZE],
+        uint8_t pskIdLen,
+        unsigned char *psk[SSL_PSK_MAX_KEY_SIZE],
+        uint8_t *pskLen);
 
 PSPUBLIC int32_t matrixSslNewServer(ssl_t **ssl,
                                     pubkeyCb_t pubkeyCb,
                                     pskCb_t pskCb,
                                     sslCertCb_t certCb,
                                     sslSessOpts_t *options);
-PSPUBLIC int32 matrixSslSetCipherSuiteEnabledStatus(ssl_t *ssl, psCipher16_t cipherId,
-                                                    uint32 status);
-PSPUBLIC int32_t matrixSslSessOptsSetServerTlsVersionRange(sslSessOpts_t *options,
-        int32_t low, int32_t high);
-PSPUBLIC int32_t matrixSslSessOptsSetServerTlsVersions(sslSessOpts_t *options,
-        const int32_t versions[],
+PSPUBLIC int32 matrixSslSetCipherSuiteEnabledStatus(ssl_t *ssl,
+        psCipher16_t cipherId,
+        uint32 status);
+
+# ifdef USE_SEC_CONFIG
+/** Security operation IDs. */
+typedef enum
+{
+  secop_undefined = 0,
+  secop_symmetric_encrypt,
+  secop_hmac,
+  secop_hash_for_sig,
+  secop_rsa_encrypt,
+  secop_rsa_decrypt,
+  secop_rsa_sign,
+  secop_rsa_verify,
+  secop_rsa_load_key,
+  secop_ecdsa_sign,
+  secop_ecdsa_verify,
+  secop_ecdsa_load_key,
+  secop_dh_import_pub,
+  secop_ecdh_import_pub,
+  secop_proto_version_check,
+  secop_sigalg_check,
+  secop_cipher_check
+} psSecOperation_t;
+/** Security callback.
+    This function will be called by MatrixSSL or Matrix Crypto to query
+    the permissibility of an operation. */
+typedef psRes_t (*securityCb_t)(
+        void *ctx, /* Pointer to either ssl_t or crypto_t */
+        psSecOperation_t op, /* Crypto/TLS op code, e.g. CRYPTO_OP_RSA_PKCS1_5_SIGN. */
+        psSizeL_t nbits, /* Bits to use in the operation (key size or similar.) */
+        void *extraData); /* Extra decision-making info; format depends on op. */
+/** Set the security callback to use in TLS connections using ssl_t. */
+void matrixSslRegisterSecurityCallback(
+        ssl_t *ssl,
+        securityCb_t cb);
+/** Pre-defined security profiles. */
+typedef enum
+{
+    secprofile_default = 0,
+    secprofile_wpa3_1_0_enterprise_192 = 1
+} psPreDefinedSecProfile_t;
+/** Assign one of the pre-defined security profiles to ssl struct. */
+PSPUBLIC int32_t matrixSslSetSecurityProfile(
+        ssl_t *ssl,
+        psPreDefinedSecProfile_t profile);
+# endif /* USE_SEC_CONFIG */
+
+PSPUBLIC int32_t matrixSslSessOptsSetServerTlsVersionRange(
+        sslSessOpts_t *options,
+        psProtocolVersion_t low,
+        psProtocolVersion_t high);
+PSPUBLIC int32_t matrixSslSessOptsSetServerTlsVersions(
+        sslSessOpts_t *options,
+        const psProtocolVersion_t versions[],
         int32_t versionsLen);
 
 /* Callback function of this type is called from the matrix library on the

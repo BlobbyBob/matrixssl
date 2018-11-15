@@ -68,7 +68,7 @@
 int32_t sslInitHSHash(ssl_t *ssl)
 {
 # ifdef USE_DTLS
-    if (ssl->flags & SSL_FLAGS_DTLS)
+    if (ACTV_VER(ssl, v_dtls_any))
     {
         /* Don't allow CLIENT_HELLO message retransmit to reset hash */
         if (ssl->retransmit)
@@ -138,7 +138,7 @@ int32_t sslUpdateHSHash(ssl_t *ssl, const unsigned char *in, psSize_t len)
 #endif
 
 # ifdef USE_DTLS
-    if (ssl->flags & SSL_FLAGS_DTLS)
+    if (ACTV_VER(ssl, v_dtls_any))
     {
         /* Don't update handshake hashes on resends.  Already been through here */
         if (ssl->retransmit)
@@ -152,16 +152,13 @@ int32_t sslUpdateHSHash(ssl_t *ssl, const unsigned char *in, psSize_t len)
     /* Keep a running total of each for greatest RFC support when it comes
         to the CertificateVerify message.  Although, trying to be smart
         about MD5 and SHA-2 based on protocol version. */
-    if ((ssl->majVer == 0 && ssl->minVer == 0) ||
-#  ifdef USE_DTLS
-        ssl->minVer == DTLS_1_2_MIN_VER ||
-#  endif
-        ssl->minVer == TLS_1_2_MIN_VER)
+    if (!VersionNegotiationComplete(ssl)
+            || NGTD_VER(ssl, v_tls_sha2))
     {
         psSha256Update(&ssl->sec.msgHashSha256, in, len);
 #  ifdef USE_SHA1
         psSha1Update(&ssl->sec.msgHashSha1, in, len);
-#  endif
+#  endif /* USE_SHA1 */
 #  ifdef USE_SHA384
         psSha384Update(&ssl->sec.msgHashSha384, in, len);
 #  endif
@@ -169,7 +166,7 @@ int32_t sslUpdateHSHash(ssl_t *ssl, const unsigned char *in, psSize_t len)
         psSha512Update(&ssl->sec.msgHashSha512, in, len);
 #  endif
     }
-# endif
+# endif /* USE_TLS_1_2 */
 
 # ifndef USE_ONLY_TLS_1_2
     /* Below TLS 1.2, the hash is always the md5sha1 hash. If we negotiate
@@ -285,10 +282,11 @@ static int32_t tlsGenerateFinishedHash(ssl_t *ssl,
  */
     if (senderFlag >= 0)
     {
-        Memcpy(tmp, (senderFlag & SSL_FLAGS_SERVER) ? LABEL_SERVER : LABEL_CLIENT,
-            FINISHED_LABEL_SIZE);
+        Memcpy(tmp,
+                (senderFlag & SSL_FLAGS_SERVER) ? LABEL_SERVER : LABEL_CLIENT,
+                FINISHED_LABEL_SIZE);
 #  ifdef USE_TLS_1_2
-        if (ssl->flags & SSL_FLAGS_TLS_1_2)
+        if (ACTV_VER(ssl, v_tls_sha2))
         {
             if (ssl->cipher->flags & CRYPTO_FLAGS_SHA3)
             {
@@ -334,7 +332,7 @@ static int32_t tlsGenerateFinishedHash(ssl_t *ssl,
         /* Overloading this function to handle the client auth needs of
             handshake hashing. */
 #  ifdef USE_TLS_1_2
-        if (ssl->flags & SSL_FLAGS_TLS_1_2)
+        if (ACTV_VER(ssl, v_tls_sha2))
         {
             psSha256_t sha256_backup;
             psSha256Cpy(&sha256_backup, sha256);
@@ -422,7 +420,7 @@ int32_t extMasterSecretSnapshotHSHash(ssl_t *ssl, unsigned char *out,
     *outLen = 0;
 
 # ifdef USE_TLS_1_2
-    if (ssl->flags & SSL_FLAGS_TLS_1_2)
+    if (ACTV_VER(ssl, v_tls_sha2))
     {
         if (ssl->cipher->flags & CRYPTO_FLAGS_SHA3)
         {
@@ -472,7 +470,7 @@ int32_t sslSnapshotHSHash(ssl_t *ssl, unsigned char *out, int32 senderFlag)
     int32 len = PS_FAILURE;
 
 # ifdef USE_DTLS
-    if (ssl->flags & SSL_FLAGS_DTLS)
+    if (ACTV_VER(ssl, v_dtls_any))
     {
         /* Don't allow FINISHED message retransmit to re-calc hash */
         if (ssl->retransmit)
@@ -484,7 +482,7 @@ int32_t sslSnapshotHSHash(ssl_t *ssl, unsigned char *out, int32 senderFlag)
 # endif /* USE_DTLS */
 
 # ifdef USE_TLS
-    if (ssl->flags & SSL_FLAGS_TLS)
+    if (ACTV_VER(ssl, v_tls_any | v_dtls_any))
     {
         len = tlsGenerateFinishedHash(ssl,
 #  ifndef USE_ONLY_TLS_1_2
@@ -517,7 +515,7 @@ int32_t sslSnapshotHSHash(ssl_t *ssl, unsigned char *out, int32 senderFlag)
 # endif  /* USE_TLS */
 
 # ifdef USE_DTLS
-    if (ssl->flags & SSL_FLAGS_DTLS)
+    if (ACTV_VER(ssl, v_dtls_any))
     {
         if (len > 0)
         {

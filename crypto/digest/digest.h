@@ -44,6 +44,7 @@
 # define SHA512_HASH_SIZE    64
 # define MD2_HASH_SIZE       16
 # define MD5_HASH_SIZE       16
+# define MD5SHA1_HASH_SIZE   36
 
 # define SHA1_HASHLEN        20
 # define SHA224_HASHLEN      28
@@ -53,7 +54,7 @@
 # define MD2_HASHLEN         16
 # define MD4_HASHLEN         16
 # define MD5_HASHLEN         16
-# define MD5SHA1_HASHLEN (MD5_HASHLEN + SHA1_HASHLEN)
+# define MD5SHA1_HASHLEN     36
 
 # if defined(USE_SHA512)
 #  define MAX_HASH_SIZE SHA512_HASHLEN

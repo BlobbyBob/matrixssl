@@ -51,25 +51,46 @@ int32_t psSignHashEcdsaInternal(psPool_t *pool,
         psSize_t *outLen,
         psSignOpts_t *opts)
 {
-    unsigned char tmp[140];
-    psSize_t sigLen;
+    unsigned char tmp[142];
+    unsigned char *outBuf = tmp;
+    psSize_t sigLen = sizeof(tmp);
     int32_t rc;
+    uint8_t includeSize = 0;
+    psBool_t usePreAllocatedOutBuf = PS_FALSE;
+
+    if (opts && (opts->flags & PS_SIGN_OPTS_USE_PREALLOCATED_OUTBUF))
+    {
+        usePreAllocatedOutBuf = PS_TRUE;
+    }
+    if (opts && (opts->flags & PS_SIGN_OPTS_ECDSA_INCLUDE_SIZE))
+    {
+        includeSize = 1;
+    }
 
     sigLen = sizeof(tmp);
-    rc = psEccDsaSign(pool, &privKey->key.ecc,
-            in, inLen,
-            tmp, &sigLen,
-            0, NULL);
+    rc = psEccDsaSign(pool,
+            &privKey->key.ecc,
+            in,
+            inLen,
+            outBuf,
+            &sigLen,
+            includeSize,
+            opts ? opts->userData : NULL);
     if (rc < 0)
     {
         return rc;
     }
 
-    *out = psMalloc(pool, sigLen);
+    if (!usePreAllocatedOutBuf)
+    {
+        *out = psMalloc(pool, sigLen);
+    }
+    /* Check also the preallocated pointer. */
     if (*out == NULL)
     {
         return PS_MEM_FAIL;
     }
+
     Memcpy(*out, tmp, sigLen);
     *outLen = sigLen;
 
@@ -88,31 +109,71 @@ int32_t psSignHashRsa(psPool_t *pool,
         psSignOpts_t *opts)
 {
     int32_t rc;
+    unsigned char tmp[512];
     unsigned char *sig;
     psSize_t sigLen;
+    psBool_t usePreAllocatedOutBuf = PS_FALSE;
 
-    sigLen = privKey->keysize;
-    sig = psMalloc(pool, sigLen);
-    if (sig == NULL)
+    if (opts && (opts->flags & PS_SIGN_OPTS_USE_PREALLOCATED_OUTBUF))
     {
-        return PS_MEM_FAIL;
+        usePreAllocatedOutBuf = PS_TRUE;
     }
 
-    rc = psRsaEncryptPriv(pool,
-            &privKey->key.rsa,
-            in,
-            inLen,
-            sig,
-            sigLen,
-            NULL);
+    sigLen = privKey->keysize;
+
+    if (usePreAllocatedOutBuf)
+    {
+        sig = tmp;
+    }
+    else
+    {
+        sig = psMalloc(pool, sigLen);
+        if (sig == NULL)
+        {
+            return PS_MEM_FAIL;
+        }
+    }
+
+    if (sigAlg == OID_RSA_TLS_SIG_ALG)
+    {
+        /* TLS 1.0/1.1 style RSA signature. */
+        rc = psRsaEncryptPriv(pool,
+                &privKey->key.rsa,
+                in,
+                inLen,
+                sig,
+                sigLen,
+                opts ? opts->userData : NULL);
+    }
+    else
+    {
+        /* PKCS #1.5 signature. */
+        rc = privRsaEncryptSignedElement(pool,
+                &privKey->key.rsa,
+                in,
+                inLen,
+                sig,
+                sigLen,
+                opts ? opts->userData : NULL);
+    }
     if (rc != PS_SUCCESS)
     {
-        psFree(sig, pool);
+        if (!usePreAllocatedOutBuf)
+        {
+            psFree(sig, pool);
+        }
         return rc;
     }
 
-    *out = sig;
-    *outLen = sigLen;
+    if (usePreAllocatedOutBuf)
+    {
+        Memcpy(*out, sig, sigLen);
+    }
+    else
+    {
+        *out = sig;
+        *outLen = sigLen;
+    }
 
     return PS_SUCCESS;
 }
@@ -134,24 +195,40 @@ int32_t psSignHash(psPool_t *pool,
     case OID_SHA256_ECDSA_SIG:
     case OID_SHA384_ECDSA_SIG:
     case OID_SHA512_ECDSA_SIG:
-        return psSignHashEcdsaInternal(pool, privKey, sigAlg,
+    case OID_ECDSA_TLS_SIG_ALG:
+        if (privKey->type == PS_ECC || privKey->type == PS_ED25519)
+        {
+            return psSignHashEcdsaInternal(pool, privKey, sigAlg,
                 in, inLen, out, outLen, opts);
+        }
+        break;
 # endif /* USE_ECC */
 # ifdef USE_PKCS1_PSS
     case OID_RSASSA_PSS:
-        return psRsaPssSignHash(pool, privKey, sigAlg,
+        if (privKey->type == PS_RSA)
+        {
+            return psRsaPssSignHash(pool, privKey, sigAlg,
                 in, inLen, out, outLen, opts);
+        }
+        break;
 # endif /* USE_PKCS1_PSS */
 # ifdef USE_RSA
     case OID_SHA256_RSA_SIG:
     case OID_SHA384_RSA_SIG:
     case OID_SHA512_RSA_SIG:
-        return psSignHashRsa(pool, privKey, sigAlg,
+    case OID_RSA_TLS_SIG_ALG:
+    case OID_RSA_PKCS15_SIG_ALG:
+        if (privKey->type == PS_RSA)
+        {
+            return psSignHashRsa(pool, privKey, sigAlg,
                 in, inLen, out, outLen, opts);
+        }
 # endif
     default:
-        return PS_UNSUPPORTED_FAIL;
+        break;
     }
+    psTraceCrypto("Invalid privKey type or sigAlg in psSignHash\n");
+    return PS_UNSUPPORTED_FAIL;
 }
 
 int32_t psSign(psPool_t *pool,
@@ -180,6 +257,11 @@ int32_t psSign(psPool_t *pool,
     case OID_ED25519_KEY_ALG:
         /* Ed25519 is used to sign arbitrary data directly without
            pre-hashing. */
+        if (privKey->type != PS_ED25519)
+        {
+            psTraceCrypto("Invalid privKey type in psSign\n");
+            return PS_MEM_FAIL;
+        }
         sigOut = psMalloc(pool, 64);
         if (sigOut == NULL)
         {

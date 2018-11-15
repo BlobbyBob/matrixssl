@@ -139,12 +139,19 @@ static int32_t tls13ParseNewSessionTicket(ssl_t *ssl,
         psParseBuf_t *pb);
 static int32_t tls13ParseServerHello(ssl_t *ssl,
         psParseBuf_t *pb);
+#ifdef USE_IDENTITY_CERTIFICATES
+# ifdef USE_CLIENT_SIDE_SSL
 static int32_t tls13ParseCertificateRequest(ssl_t *ssl,
         psParseBuf_t *pb);
+# endif
 static int32_t tls13ParseCertificate(ssl_t *ssl,
         psParseBuf_t *pb);
+# ifdef USE_CERT_VALIDATE
 static int32_t tls13ParseCertificateVerify(ssl_t *ssl,
         psParseBuf_t *pb);
+# endif
+#endif
+
 static int32_t tls13HandleAlert(ssl_t *ssl,
         unsigned char level,
         unsigned char type,
@@ -661,9 +668,10 @@ static int32_t tls13CheckHsState(ssl_t *ssl,
     }
     else
     {
-        psTraceErrr("Received unexpected message.\n  Got: ");
+        psTraceErrr("Received unexpected handshake message.\n");
+        psTraceInfo(" Got ");
         psTracePrintHsMsgType(msg, PS_FALSE);
-        psTraceErrr(" in state: ");
+        psTraceInfo(" in state ");
         psTracePrintHsState(ssl->hsState, PS_TRUE);
         ssl->err = SSL_ALERT_UNEXPECTED_MESSAGE;
         return MATRIXSSL_ERROR;
@@ -918,6 +926,8 @@ static int32_t tls13ParseHandshakeMessage(ssl_t *ssl,
             ssl->hsState = SSL_HS_TLS_1_3_WAIT_CERT_CR;
         }
         break;
+# ifdef USE_IDENTITY_CERTIFICATES
+#  ifdef USE_CLIENT_SIDE_SSL
     case SSL_HS_CERTIFICATE_REQUEST:
         rc = tls13ParseCertificateRequest(ssl, &pb);
         if (rc < 0)
@@ -927,6 +937,10 @@ static int32_t tls13ParseHandshakeMessage(ssl_t *ssl,
         tls13TranscriptHashUpdate(ssl, msgStart, msgEnd-msgStart);
         ssl->hsState = SSL_HS_TLS_1_3_WAIT_CERT;
         break;
+#  endif
+# endif
+
+#  ifdef USE_CERT_VALIDATE
     case SSL_HS_CERTIFICATE:
         rc = tls13ParseCertificate(ssl, &pb);
         if (rc < 0)
@@ -948,6 +962,7 @@ static int32_t tls13ParseHandshakeMessage(ssl_t *ssl,
         tls13TranscriptHashUpdate(ssl, msgStart, msgEnd-msgStart);
         ssl->hsState = SSL_HS_TLS_1_3_WAIT_FINISHED;
         break;
+# endif /* USE_CERT_VALIDATE */
     case SSL_HS_EOED:
         psTracePrintHsMessageParse(ssl, SSL_HS_EOED);
         rc = tls13ActivateHsReadKeys(ssl);
@@ -1045,6 +1060,7 @@ static int32_t tls13ParseServerHello(ssl_t *ssl,
     uint32_t cipher;
     unsigned char compressionMethod;
     uint16_t tmp_u16;
+    uint16_t legacy_version;
 
     psTracePrintHsMessageParse(ssl, SSL_HS_SERVER_HELLO);
 
@@ -1060,14 +1076,16 @@ static int32_t tls13ParseServerHello(ssl_t *ssl,
     */
 
     /* ProtocolVersion legacy_version = 0x0303; */
-    if (!psParseOctet(pb, &ssl->reqMajVer)
-            || !psParseOctet(pb, &ssl->reqMinVer))
+    rc = psParseBufTryParseBigEndianUint16(pb, &legacy_version);
+    if (rc != 2)
     {
         return PS_PARSE_FAIL;
     }
-    psTracePrintProtocolVersion(INDENT_HS_MSG,
+    ssl->peerHelloVersion = psVerFromEncoding(legacy_version);
+    psTracePrintProtocolVersionNew(INDENT_HS_MSG,
             "legacy_version",
-            ssl->reqMajVer, ssl->reqMinVer, 1);
+            ssl->peerHelloVersion,
+            PS_TRUE);
     /* Ignore legacy_version. */
 
     /*
@@ -1228,7 +1246,8 @@ exit:
     return rc;
 }
 
-
+#ifdef USE_IDENTITY_CERTIFICATES
+# ifdef USE_CLIENT_SIDE_SSL
 static psRes_t tls13ParseCertificateRequest(ssl_t *ssl,
         psParseBuf_t *pb)
 {
@@ -1251,11 +1270,11 @@ static psRes_t tls13ParseCertificateRequest(ssl_t *ssl,
         ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
         return PS_PARSE_FAIL;
     }
-#ifdef DEBUG_TLS_1_3_DECODE_DUMP
+#  ifdef DEBUG_TLS_1_3_DECODE_DUMP
     psTraceBytes("Parsed CertificateRequest.certRequestContext",
             pb->buf.start,
             certificateRequestContextLen);
-# endif
+#  endif
     if (certificateRequestContextLen > 0)
     {
         /* Store the value from server */
@@ -1371,7 +1390,10 @@ static psRes_t tls13ParseCertificateRequest(ssl_t *ssl,
 
     return MATRIXSSL_SUCCESS;
 }
+#  endif /* USE_CLIENT_SIDE_SSL */
+# endif /* USE_IDENTITY_CERTIFICATES */
 
+# ifdef USE_CERT_VALIDATE
 static int32_t tls13ParseCertificate(ssl_t *ssl,
         psParseBuf_t *pb)
 {
@@ -1647,6 +1669,7 @@ static int32_t tls13ParseCertificateVerify(ssl_t *ssl,
 
     return MATRIXSSL_SUCCESS;
 }
+# endif /* USE_CERT_VALIDATE */
 
 static int32_t tls13ParseFinished(ssl_t *ssl, psParseBuf_t *pb)
 {
@@ -1941,8 +1964,8 @@ static int32_t tls13ParseNewSessionTicket(ssl_t *ssl, psParseBuf_t *pb)
     }
     params.alpn = NULL;
     params.alpnLen = 0;
-    params.majVer = TLS_MAJ_VER;
-    params.minVer = ssl->tls13NegotiatedMinorVer;
+    params.majVer = psEncodeVersionMaj(ssl->activeVersion);
+    params.minVer = psEncodeVersionMin(ssl->activeVersion);
     params.cipherId = ssl->cipher->ident;
     params.ticketLifetime = ticketLifetime;
     params.ticketAgeAdd = ticketAgeAdd;
@@ -1981,10 +2004,12 @@ static int32_t tls13ParseNewSessionTicket(ssl_t *ssl, psParseBuf_t *pb)
            multiple tickets in a single handshake, but we only support
            storing the last one. TODO: add support for storing multiple
            tickets. */
+# ifdef USE_STATELESS_SESSION_TICKETS
         if (ssl->sid->sessionTicket)
         {
             psFree(ssl->sid->sessionTicket, ssl->sid->pool);
         }
+# endif
         if (ssl->sid->psk)
         {
             tls13FreePsk(ssl->sid->psk, ssl->sid->pool);
@@ -2000,7 +2025,7 @@ static int32_t tls13ParseNewSessionTicket(ssl_t *ssl, psParseBuf_t *pb)
         Memset(ssl->sid, 0, sizeof(sslSessionId_t));
         ssl->sid->pool = ssl->hsPool;
     }
-
+# ifdef USE_STATELESS_SESSION_TICKETS
     ssl->sid->sessionTicket = psMalloc(ssl->sid->pool, ticketLen);
     if (ssl->sid->sessionTicket == NULL)
     {
@@ -2008,6 +2033,7 @@ static int32_t tls13ParseNewSessionTicket(ssl_t *ssl, psParseBuf_t *pb)
     }
     Memcpy(ssl->sid->sessionTicket, ticket, ticketLen);
     ssl->sid->sessionTicketLen = ticketLen;
+# endif
     ssl->sid->cipherId = psk->params->cipherId;
 
     ssl->sid->psk = tls13NewPsk(psk->pskKey,

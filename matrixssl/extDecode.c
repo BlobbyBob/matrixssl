@@ -252,7 +252,7 @@ int32 parseClientHelloExtensions(ssl_t *ssl, unsigned char **cp, unsigned short 
     }
 
 # if defined(USE_TLS_1_2) && defined(USE_CERT_PARSE)
-    if (ssl->flags & SSL_FLAGS_TLS_1_2)
+    if (NGTD_VER(ssl, v_tls_with_signature_algorithms))
     {
         if (!ssl->hashSigAlg)
         {
@@ -348,7 +348,7 @@ static int ClientHelloExt(ssl_t *ssl,
     int i;
     int32_t rc;
 # ifdef USE_ECC_CIPHER_SUITE
-    unsigned short dataLen, curveId;
+    unsigned short dataLen;
     uint32 ecFlags;
 # elif defined USE_OCSP_RESPONSE
     unsigned short dataLen;
@@ -714,6 +714,7 @@ static int ClientHelloExt(ssl_t *ssl,
         }
         ssl->extFlags.got_cookie = 1;
         break;
+# ifndef USE_ONLY_PSK_CIPHER_SUITE
     case EXT_KEY_SHARE:
     case EXT_KEY_SHARE_PRE_DRAFT_23:
         psTracePrintExtensionParse(ssl, EXT_KEY_SHARE);
@@ -787,6 +788,7 @@ static int ClientHelloExt(ssl_t *ssl,
                 psSizeL_t keyExchangeLen = 0;
                 psSize_t n;
                 psBool_t foundSupportedCurve = PS_FALSE;
+                unsigned short groupName;
 
                 /* 2-byte NamedGroup ID */
                 if (extLen < 2)
@@ -795,23 +797,23 @@ static int ClientHelloExt(ssl_t *ssl,
                     ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
                     return MATRIXSSL_ERROR;
                 }
-                curveId = *c << 8; c++;
-                curveId += *c; c++;
+                groupName = *c << 8; c++;
+                groupName += *c; c++;
                 extLen -= 2;
                 clientSharesLen -= 2;
 
                 psTracePrintTls13NamedGroup(INDENT_EXTENSION + 1,
-                        NULL, curveId, PS_TRUE);
-                if (tls13AddPeerKeyShareGroup(ssl, curveId) < 0)
+                        NULL, groupName, PS_TRUE);
+                if (tls13AddPeerKeyShareGroup(ssl, groupName) < 0)
                 {
                     ssl->err = SSL_ALERT_INTERNAL_ERROR;
                     return MATRIXSSL_ERROR;
                 }
-                if (tls13WeSupportGroup(ssl, curveId))
+                if (tls13WeSupportGroup(ssl, groupName))
                 {
                     psTracePrintTls13NamedGroup(INDENT_NEGOTIATED_PARAM,
                             "Found supported group",
-                            curveId,
+                            groupName,
                             PS_TRUE);
                     foundSupportedCurve = PS_TRUE;
                 }
@@ -837,7 +839,7 @@ static int ClientHelloExt(ssl_t *ssl,
                     rc = tls13ImportPublicValue(ssl,
                             c,
                             keyExchangeLen,
-                            curveId);
+                            groupName);
                     if (rc < 0)
                     {
                         return rc;
@@ -846,7 +848,7 @@ static int ClientHelloExt(ssl_t *ssl,
                     /* We will still iterate over the rest of the entries,
                        but will not try to import another public value. */
                     importedPeerPubValue = PS_TRUE;
-                    ssl->tls13NegotiatedGroup = curveId;
+                    ssl->tls13NegotiatedGroup = groupName;
                 }
 
                 c += keyExchangeLen;
@@ -856,7 +858,7 @@ static int ClientHelloExt(ssl_t *ssl,
         }
         ssl->extFlags.got_key_share = 1;
         break;
-
+# endif /* USE_ONLY_PSK_CIPHER_SUITE */
     case EXT_SUPPORTED_VERSIONS:
         /* This is defined in TLS 1.3 draft 22, but TLS 1.2 implementations
            SHOULD also be able to parse this. */
@@ -902,6 +904,8 @@ static int ClientHelloExt(ssl_t *ssl,
                 PS_FALSE);
         while (dataLen >= 2 && extLen >= 2)
         {
+            unsigned short curveId;
+
             curveId = *c << 8; c++;
             curveId += *c; c++;
             dataLen -= 2;
@@ -1551,7 +1555,7 @@ static int ServerHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
 
     if (rc < 0)
     {
-        if (ssl->minVer >= TLS_1_2_MIN_VER)
+        if (ACTV_VER(ssl, v_tls_with_unsupported_extension_alert))
         {
             /* This alert was added only in 1.2 */
             ssl->err = SSL_ALERT_UNSUPPORTED_EXTENSION;

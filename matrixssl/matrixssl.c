@@ -75,21 +75,19 @@ static void initSessionEntryChronList(void);
 
 #endif  /* USE_SERVER_SIDE_SSL */
 
-static int32 initSupportedVersions(ssl_t *ssl, sslSessOpts_t *options);
 #ifdef USE_TLS_1_3
 static int32 initSupportedGroups(ssl_t *ssl, sslSessOpts_t *options);
 #endif
 static int32 initSignatureAlgorithms(ssl_t *ssl, sslSessOpts_t *options);
 
 extern int32 getDefaultSigAlgs(ssl_t *ssl);
-extern psBool_t tlsVersionSupported(ssl_t *ssl, const uint8_t minVersion);
 extern psBool_t psIsSigAlgSupported(uint16_t sigAlg);
-extern int32 getClientDefaultVersions(ssl_t *ssl);
-extern int32 getServerDefaultVersions(ssl_t *ssl);
 #ifdef USE_TLS_1_3
 extern int32 tls13GetDefaultSigAlgsCert(ssl_t *ssl);
 extern int32 tls13GetDefaultGroups(ssl_t *ssl);
 #endif
+
+extern int32 initSupportedVersions(ssl_t *ssl, sslSessOpts_t *options);
 
 /******************************************************************************/
 /*
@@ -207,277 +205,6 @@ void matrixSslClose(void)
     psCryptoClose();
     *g_config = 'N';
 }
-
-psBool_t matrixSslTlsVersionRangeSupported(int32_t low,
-        int32_t high)
-{
-#ifdef USE_TLS_1_3
-    /* TODO:Document/handle case where range contains legacy versions and
-       draft versions for example 3 - 23. Currently not supported */
-    /* Handle TLS1.3 draft versions */
-    if (low >= MIN_ENABLED_TLS_1_3_DRAFT_VERSION &&
-        high <= MAX_ENABLED_TLS_1_3_DRAFT_VERSION &&
-        low <= high)
-    {
-        return PS_TRUE;
-    }
-#endif
-    if (low < MIN_ENABLED_TLS_VER)
-    {
-        psTraceIntInfo("Minimum of version range not supported " \
-                "by config: %d\n", low);
-        return PS_FALSE;
-    }
-    if (high > MAX_ENABLED_TLS_VER)
-    {
-        psTraceIntInfo("Maximum of version range not supported " \
-                "by config: %d\n", high);
-        return PS_FALSE;
-    }
-    if (low > high)
-    {
-        psTraceInfo("Invalid version range: low > high\n");
-        return PS_FALSE;
-    }
-
-    return PS_TRUE;
-}
-
-int32 tlsMinVerToVersionFlag(int32_t minVer)
-{
-    switch (minVer)
-    {
-    case tls_v_1_3_draft_28:
-        return SSL_FLAGS_TLS_1_3_DRAFT_28;
-    case tls_v_1_3_draft_26:
-        return SSL_FLAGS_TLS_1_3_DRAFT_26;
-    case tls_v_1_3_draft_24:
-        return SSL_FLAGS_TLS_1_3_DRAFT_24;
-    case tls_v_1_3_draft_23:
-        return SSL_FLAGS_TLS_1_3_DRAFT_23;
-    case tls_v_1_3_draft_22:
-        return SSL_FLAGS_TLS_1_3_DRAFT_22;
-    case tls_v_1_3:
-        return SSL_FLAGS_TLS_1_3;
-    case tls_v_1_2:
-        return SSL_FLAGS_TLS_1_2;
-    case tls_v_1_1:
-        return SSL_FLAGS_TLS_1_1;
-    case tls_v_1_0:
-        return SSL_FLAGS_TLS_1_0;
-    case 0:
-        return SSL_FLAGS_SSLV3;
-    default:
-        psTraceIntInfo("Unsupported minor version: %d\n", minVer);
-        return SSL_FLAGS_TLS_1_3;
-    }
-}
-
-#ifdef USE_CLIENT_SIDE_SSL
-int32_t matrixSslSessOptsSetClientTlsVersionRange(sslSessOpts_t *options,
-        int32_t low, int32_t high)
-{
-    int32_t versions[TLS_MAX_SUPPORTED_VERSIONS];
-    uint8_t numVersions = 0;
-    uint32_t i;
-
-    if (low < tls_v_1_0)
-    {
-        psTraceErrr("matrixSslSessOptsSetClientTlsVersionRange only " \
-                "supports TLS 1.0 to TLS 1.3. SSL 3.0 is not supported\n");
-        return PS_ARG_FAIL;
-    }
-    /* Copy the range to array for SetClientTlsVersions */
-    i = 0;
-    do
-    {
-        versions[i] = high;
-        numVersions++;
-        i++;
-        high--;
-    } while (high >= low);
-    return matrixSslSessOptsSetClientTlsVersions(options,
-                                                 versions,
-                                                 numVersions);
-}
-
-PSPUBLIC int32_t matrixSslSessOptsSetClientTlsVersions(sslSessOpts_t *options,
-                                                     const int32_t versions[],
-                                                     int32_t versionsLen)
-{
-    uint8_t i, k;
-    int32_t highestVersion = 0;
-# ifdef USE_TLS_1_3
-    psBool_t haveTls13Draft28 = PS_FALSE;
-# endif
-
-    if (options == NULL)
-    {
-        return PS_ARG_FAIL;
-    }
-    if (versionsLen == 0)
-    {
-        psTraceErrr("Please enable at least one version.\n");
-        return PS_ARG_FAIL;
-    }
-    if (versionsLen > TLS_MAX_SUPPORTED_VERSIONS)
-    {
-        psTraceErrr("Too many supported versions. Increase " \
-                    "TLS_MAX_SUPPORTED_VERSIONS.\n");
-        return PS_ARG_FAIL;
-    }
-# ifdef USE_TLS_1_3
-    for (i = 0; i < versionsLen; i++)
-    {
-        if (versions[i] == tls_v_1_3_draft_28)
-        {
-            haveTls13Draft28 = PS_TRUE;
-        }
-    }
-# endif
-
-    options->supportedVersionsLen = 0;
-    for (i = 0, k = 0; i < versionsLen; i++)
-    {
-        if (!matrixSslTlsVersionRangeSupported(versions[i], versions[i]))
-        {
-            psTraceErrr("Unsupported version. Please enable more " \
-                        "versions in matrixsslConfig.h.\n");
-            return PS_ARG_FAIL;
-        }
-        options->supportedVersions[k++] = versions[i];
-        options->supportedVersionsLen++;
-        if (versions[i] > highestVersion)
-        {
-            highestVersion = versions[i];
-        }
-# ifdef USE_TLS_1_3
-        if (versions[i] == tls_v_1_3 && !haveTls13Draft28)
-        {
-            /* Very little support in the wild for TLS 1.3 RFC version,
-               so add draft #28 as well. TODO: remove.*/
-            options->supportedVersions[k++] = tls_v_1_3_draft_28;
-            options->supportedVersionsLen++;
-        }
-# endif
-    }
-
-    /* Set the versionFlag always to highest version. Note that
-       versionFlag is not the same as the legacy version field
-       so it can contain also the 1.3 version.
-       Note that the priority order of the versions only affects to order of
-       versions in the TLS1.3 supportedVersions extension, nothing else */
-    options->versionFlag = tlsMinVerToVersionFlag(highestVersion);
-
-    return PS_SUCCESS;
-}
-
-#endif /* USE_CLIENT_SIDE_SSL */
-
-#ifdef USE_SERVER_SIDE_SSL
-
-int32_t matrixSslSessOptsSetServerTlsVersionRange(sslSessOpts_t *options,
-        int32_t low, int32_t high)
-{
-    int32_t versions[TLS_MAX_SUPPORTED_VERSIONS];
-    uint8_t numVersions = 0;
-    uint32_t i;
-
-    if (low < tls_v_1_0)
-    {
-        psTraceErrr("matrixSslSessOptsSetServerTlsVersionRange only " \
-                "supports TLS 1.0 to TLS 1.3. SSL 3.0 is not supported\n");
-        return PS_ARG_FAIL;
-    }
-    /* Copy the range to array for SetClientTlsVersions */
-    i = 0;
-    do
-    {
-        versions[i] = high;
-        numVersions++;
-        i++;
-        high--;
-    } while (high >= low);
-
-    return matrixSslSessOptsSetServerTlsVersions(options,
-                                                 versions,
-                                                 numVersions);
-}
-PSPUBLIC int32_t matrixSslSessOptsSetServerTlsVersions(sslSessOpts_t *options,
-        const int32_t versions[],
-        int32_t versionsLen)
-{
-    uint8_t i, k;
-# ifdef USE_TLS_1_3
-    psBool_t haveTls13Draft28 = PS_FALSE;
-# endif
-
-    /*
-      On the server side the version handling goes either of two
-      ways:
-      1. If single version is selected it is set to versionFlag
-      2. If multiple versions are selected then the non-enabled
-      versions are disabled through the disable flags and
-      the versionFlag = 0
-    */
-    if (options == NULL)
-    {
-        return PS_ARG_FAIL;
-    }
-    if (versionsLen == 0)
-    {
-        psTraceErrr("Please enable at least one version.\n");
-        return PS_ARG_FAIL;
-    }
-    if (versionsLen > TLS_MAX_SUPPORTED_VERSIONS)
-    {
-        psTraceErrr("Too many supported versions. Increase " \
-                    "TLS_MAX_SUPPORTED_VERSIONS.\n");
-        return PS_ARG_FAIL;
-    }
-
-# ifdef USE_TLS_1_3
-    for (i = 0; i < versionsLen; i++)
-    {
-        if (versions[i] == tls_v_1_3_draft_28)
-        {
-            haveTls13Draft28 = PS_TRUE;
-        }
-    }
-# endif
-    for (i = 0, k = 0; i < versionsLen; i++)
-    {
-        if (!matrixSslTlsVersionRangeSupported(versions[i], versions[i]))
-        {
-            psTraceErrr("Unsupported version. Please enable more " \
-                        "versions in matrixsslConfig.h.\n");
-            return PS_ARG_FAIL;
-        }
-        options->supportedVersions[k++] = versions[i];
-        options->supportedVersionsLen++;
-# ifdef USE_TLS_1_3
-        if (versions[i] == tls_v_1_3 && !haveTls13Draft28)
-        {
-            /* Very little support in the wild for TLS 1.3 RFC version,
-               so add draft #28 as well. TODO: remove.*/
-            options->supportedVersions[k++] = tls_v_1_3_draft_28;
-            options->supportedVersionsLen++;
-        }
-# endif
-    }
-
-    if (versionsLen == 1)
-    {
-        /* If on the server side only one version is enabled then it
-         * is handled through the versionFlag. If there are many versions
-         * enabled then they are handled through the supportedVersions */
-        options->versionFlag = tlsMinVerToVersionFlag(versions[0]);
-    }
-
-    return PS_SUCCESS;
-}
-
-#endif /* USE_SERVER_SIDE_SSL */
 
 # ifdef USE_TLS_1_3
 /** Set the (EC)DHE groups to support for key exchange.
@@ -684,20 +411,13 @@ int32 matrixSslNewSession(ssl_t **ssl, const sslKeys_t *keys,
 {
     psPool_t *pool = NULL;
     ssl_t *lssl;
-    int32_t specificVersion, flags, rc;
+    int32_t flags, rc;
 #ifdef USE_STATELESS_SESSION_TICKETS
     uint32_t i;
 #endif
 
     /* SERVER_SIDE and CLIENT_AUTH and others will have been added to
         versionFlag by callers */
-    /* TLS1.3 draft version handling */
-    if (options->versionFlag & SSL_FLAGS_TLS_1_3)
-    {
-        /* Substitute TLS_1_3 flag with latest draft flag */
-        options->versionFlag &= ~SSL_FLAGS_TLS_1_3;
-        options->versionFlag |= SSL_FLAGS_TLS_1_3_DRAFT_28;
-    }
     flags = options->versionFlag;
 
 /*
@@ -760,6 +480,45 @@ int32 matrixSslNewSession(ssl_t **ssl, const sslKeys_t *keys,
     Memset(lssl, 0x0, sizeof(ssl_t));
     lssl->memAllocPtr = options->memAllocPtr;
 
+# ifdef USE_SEC_CONFIG
+#  ifdef DEFAULT_SEC_CONFIG
+    rc = matrixSslSetSecurityProfile(lssl, DEFAULT_SEC_CONFIG);
+    if (rc < 0)
+    {
+        return rc;
+    }
+    {
+        sslIdentity_t *key = keys->identity;
+        psSizeL_t nBits;
+        uint8_t type;
+        psSecOperation_t op;
+
+        /* Check whether the loaded keys fulfill the security requirements. */
+        while (key != NULL)
+        {
+            type = key->privKey.type;
+            if (type == PS_RSA)
+            {
+                nBits = key->privKey.keysize * 8;
+                op = secop_rsa_load_key;
+            }
+            else if (type == PS_ECC)
+            {
+                nBits = key->privKey.key.ecc.curve->size * 8;
+                op = secop_ecdsa_load_key;
+
+            }
+            rc = matrixSslCallSecurityCallback(lssl, op, nBits, NULL);
+            if (rc < 0)
+            {
+                return rc;
+            }
+            key = key->next;
+        }
+    }
+#  endif
+# endif
+
 #ifdef USE_X509
     if (options->keep_peer_cert_der)
     {
@@ -778,7 +537,9 @@ int32 matrixSslNewSession(ssl_t **ssl, const sslKeys_t *keys,
     }
 
     if (options->userDataPtr != NULL)
+    {
         lssl->userDataPtr = options->userDataPtr;
+    }
 
 #ifdef USE_ECC
     /* If user specified EC curves they support, let's check that against
@@ -886,276 +647,21 @@ int32 matrixSslNewSession(ssl_t **ssl, const sslKeys_t *keys,
     if (flags & SSL_FLAGS_SERVER)
     {
         lssl->flags |= SSL_FLAGS_SERVER;
-/*
-        Client auth can only be requested by server, not set by client
- */
+        /*
+          Client auth can only be requested by server, not set by client
+        */
         if (flags & SSL_FLAGS_CLIENT_AUTH)
         {
             lssl->flags |= SSL_FLAGS_CLIENT_AUTH;
         }
         lssl->hsState = SSL_HS_CLIENT_HELLO;
-
-        /* Is caller requesting specific protocol version for this client?
-            Make sure it's enabled and use specificVersion var for err */
-        specificVersion = 0;
-        if (flags & SSL_FLAGS_SSLV3)
-        {
-#ifndef DISABLE_SSLV3
-            lssl->majVer = SSL3_MAJ_VER;
-            lssl->minVer = SSL3_MIN_VER;
-#else
-            specificVersion = 1;
-#endif
-        }
-
-        if (flags & SSL_FLAGS_TLS_1_0)
-        {
-#ifdef USE_TLS
-# ifndef DISABLE_TLS_1_0
-            lssl->majVer = TLS_MAJ_VER;
-            lssl->minVer = TLS_MIN_VER;
-# else
-            specificVersion = 1; /* TLS enabled but TLS_1_0 disabled */
-# endif
-#else
-            specificVersion = 1; /* TLS not even enabled */
-#endif
-        }
-
-        if (flags & SSL_FLAGS_TLS_1_1)
-        {
-#ifdef USE_TLS_1_1
-# ifndef DISABLE_TLS_1_1
-            lssl->majVer = TLS_MAJ_VER;
-            lssl->minVer = TLS_1_1_MIN_VER;
-# else
-            specificVersion = 1; /* TLS_1_1 enabled but TLS_1_1 disabled */
-# endif
-#else
-            specificVersion = 1; /* TLS not even enabled */
-#endif
-        }
-
-        if (flags & SSL_FLAGS_TLS_1_2)
-        {
-#ifdef USE_TLS_1_2
-            lssl->majVer = TLS_MAJ_VER;
-            lssl->minVer = TLS_1_2_MIN_VER;
-#else
-            specificVersion = 1; /* TLS_1_2 disabled */
-#endif
-        }
-        if (flags & SSL_FLAGS_TLS_1_3_DRAFT_22 ||
-                flags & SSL_FLAGS_TLS_1_3_DRAFT_23 ||
-                flags & SSL_FLAGS_TLS_1_3_DRAFT_24 ||
-                flags & SSL_FLAGS_TLS_1_3_DRAFT_26 ||
-                flags & SSL_FLAGS_TLS_1_3_DRAFT_28)
-        {
-#ifdef USE_TLS_1_3
-            lssl->majVer = TLS_MAJ_VER;
-            lssl->minVer = TLS_1_2_MIN_VER;
-#else
-            specificVersion = 1; /* TLS_1_3 disabled */
-#endif
-        }
-        if (specificVersion)
-        {
-            psTraceErrr("ERROR: protocol version isn't compiled into matrix\n");
-            matrixSslDeleteSession(lssl);
-            return PS_ARG_FAIL;
-        }
-        else if (options->supportedVersionsLen == 0)
-        {
-            /* Caller did not specify either versionFlags or supportedVersions */
-            if (getServerDefaultVersions(lssl) < 0)
-            {
-                psTraceErrr("ERROR: Setting default versions failed\n");
-                matrixSslDeleteSession(lssl);
-                return PS_ARG_FAIL;
-            }
-        }
-
-#ifdef USE_DTLS
-        /* FLAGS_DTLS used in conjuction with specific 1.1 or 1.2 protocol */
-        if (flags & SSL_FLAGS_DTLS)
-        {
-            if (lssl->majVer)
-            {
-                if (lssl->minVer == SSL3_MIN_VER || lssl->minVer == TLS_MIN_VER)
-                {
-                    psTraceErrr("ERROR: Can't use SSLv3 or TLS1.0 with DTLS\n");
-                    matrixSslDeleteSession(lssl);
-                    return PS_ARG_FAIL;
-                }
-                lssl->majVer = DTLS_MAJ_VER;
-                if (lssl->minVer == TLS_1_2_MIN_VER)
-                {
-                    lssl->minVer = DTLS_1_2_MIN_VER;
-                }
-                else if (lssl->minVer == TLS_1_1_MIN_VER)
-                {
-                    lssl->minVer = DTLS_MIN_VER;
-                }
-                else
-                {
-                    psTraceErrr("ERROR: Protocol version parse error\n");
-                    matrixSslDeleteSession(lssl);
-                    return PS_ARG_FAIL;
-                }
-            }
-        }
-#endif
-
     }
-    else
+    else /* Client. */
     {
-/*
-        Client is first to set protocol version information based on
-        compile and/or the 'flags' parameter so header information in
-        the handshake messages will be correctly set.
-
-        Look for specific version first... but still have to make sure library
-        has been compiled to support it
- */
-        specificVersion = 0;
-        if (flags & SSL_FLAGS_SSLV3)
-        {
-#ifndef DISABLE_SSLV3
-            lssl->majVer = SSL3_MAJ_VER;
-            lssl->minVer = SSL3_MIN_VER;
-            specificVersion = 1;
-#else
-            specificVersion = 2;
-#endif
-        }
-
-        if (flags & SSL_FLAGS_TLS_1_0)
-        {
-#ifdef USE_TLS
-# ifndef DISABLE_TLS_1_0
-            lssl->majVer = TLS_MAJ_VER;
-            lssl->minVer = TLS_MIN_VER;
-            /* Set flags here if caller has not entered supportedVersions.
-               Otherwise set them in initSupportedVersions */
-            if (options->supportedVersionsLen == 0)
-            {
-                lssl->flags |= SSL_FLAGS_TLS;
-            }
-            specificVersion = 1;
-# else
-            specificVersion = 2; /* TLS enabled but TLS_1_0 disabled */
-# endif
-#else
-            specificVersion = 2; /* TLS not even enabled */
-#endif
-        }
-
-        if (flags & SSL_FLAGS_TLS_1_1)
-        {
-#ifdef USE_TLS_1_1
-# ifndef DISABLE_TLS_1_1
-            lssl->majVer = TLS_MAJ_VER;
-            lssl->minVer = TLS_1_1_MIN_VER;
-            /* Set flags here if caller has not entered supportedVersions.
-               Otherwise set them in initSupportedVersions */
-            if (options->supportedVersionsLen == 0)
-            {
-                lssl->flags |= SSL_FLAGS_TLS | SSL_FLAGS_TLS_1_1;
-            }
-            specificVersion = 1;
-# else
-            specificVersion = 2; /* TLS_1_1 enabled but TLS_1_1 disabled */
-# endif
-#else
-            specificVersion = 2; /* TLS not even enabled */
-#endif
-        }
-
-        if (flags & SSL_FLAGS_TLS_1_2)
-        {
-#ifdef USE_TLS_1_2
-# ifndef DISABLE_TLS_1_2
-            lssl->majVer = TLS_MAJ_VER;
-            lssl->minVer = TLS_1_2_MIN_VER;
-            /* Set flags here if caller has not entered supportedVersions.
-               Otherwise set them in initSupportedVersions */
-            if (options->supportedVersionsLen == 0)
-            {
-                lssl->flags |= SSL_FLAGS_TLS | SSL_FLAGS_TLS_1_1 | SSL_FLAGS_TLS_1_2;
-            }
-            specificVersion = 1;
-# else
-            specificVersion = 2; /* TLS_1_2 disabled */
-# endif
-#else
-            specificVersion = 2; /* TLS 1.2 not even enabled */
-#endif
-        }
-        if (flags & SSL_FLAGS_TLS_1_3 ||
-                flags & SSL_FLAGS_TLS_1_3_DRAFT_22 ||
-                flags & SSL_FLAGS_TLS_1_3_DRAFT_23 ||
-                flags & SSL_FLAGS_TLS_1_3_DRAFT_24 ||
-                flags & SSL_FLAGS_TLS_1_3_DRAFT_26 ||
-                flags & SSL_FLAGS_TLS_1_3_DRAFT_28)
-        {
-#ifdef USE_TLS_1_3
-            /* majVer, minVer is what we are going to encode as the version
-               number in record, ClientHello and ServerHello legacy_version
-               fields. The TLS 1.3 spec says that we MUST use the TLS 1.2
-               version number. The version flag can be used to check
-               whether we are actually talking 1.3. */
-            lssl->majVer = TLS_MAJ_VER;
-            lssl->minVer = TLS_1_2_MIN_VER;
-            specificVersion = 1;
-#else
-            specificVersion = 2; /* TLS 1.3 not even enabled */
-#endif
-        }
-
-        if (specificVersion == 2)
-        {
-            psTraceErrr("ERROR: protocol version isn't compiled into matrix\n");
-            matrixSslDeleteSession(lssl);
-            return PS_ARG_FAIL;
-        }
-
-        if (specificVersion == 0)
-        {
-            /* Highest available if not specified (or not legal value)
-               so set default values */
-            if (getClientDefaultVersions(lssl) < 0)
-            {
-                psTraceErrr("ERROR: Setting default versions failed\n");
-                matrixSslDeleteSession(lssl);
-                return PS_ARG_FAIL;
-            }
-
-        } /* end non-specific version */
-
-#ifdef USE_DTLS
-        if (flags & SSL_FLAGS_DTLS && specificVersion == 1)
-        {
-            lssl->majVer = DTLS_MAJ_VER;
-            if (lssl->minVer == TLS_1_2_MIN_VER)
-            {
-                lssl->minVer = DTLS_1_2_MIN_VER;
-            }
-            else if (lssl->minVer == TLS_1_1_MIN_VER)
-            {
-                lssl->minVer = DTLS_MIN_VER;
-            }
-            else
-            {
-                psTraceErrr("ERROR: DTLS must be TLS 1.1 or TLS 1.2\n");
-                matrixSslDeleteSession(lssl);
-                return PS_ARG_FAIL;
-            }
-        }
-#endif
-
         lssl->hsState = SSL_HS_SERVER_HELLO;
         if (session != NULL && session->cipherId != SSL_NULL_WITH_NULL_NULL)
         {
+            /* Use the cipher specified in the session ID struct. */
             lssl->cipher = sslGetCipherSpec(lssl, session->cipherId);
             if (lssl->cipher == NULL)
             {
@@ -1239,212 +745,6 @@ int32 matrixSslNewSession(ssl_t **ssl, const sslKeys_t *keys,
     lssl->decState = SSL_HS_NONE;
     *ssl = lssl;
     return PS_SUCCESS;
-}
-
-static void addVersion(ssl_t *ssl, uint16_t ver)
-{
-# ifdef USE_TLS_1_3
-    /*
-      Don't include TLS 1.3 in ClientHello supported_versions if the
-      user did not enable any 1.3 suites.
-
-      Without TLS 1.3 suites in ClientHello, TLS 1.3 cannot be
-      negotiated. And if the server then chooses <1.3, the TLS 1.3
-      downgrade protection mechanism will be triggered on the client-side,
-      causing handshake failure.
-*/
-    if (IS_CLIENT(ssl)
-            && !ssl->tls13CiphersuitesEnabledClient
-            && ver >= TLS_1_3_VER)
-    {
-        psTraceInfo("Warning: tried to enable TLS 1.3 without enabling " \
-                "any TLS 1.3 ciphersuites. Disabling TLS 1.3 for this " \
-                "connection.\n");
-        return;
-    }
-# endif
-
-    ssl->supportedVersions[ssl->supportedVersionsLen] = ver;
-    ssl->supportedVersionsLen++;
-}
-
-static void addVersionMin(ssl_t *ssl, uint8_t min)
-{
-    uint16_t ver;
-    uint8_t maj = TLS_MAJ_VER;
-
-# ifdef USE_TLS_1_3
-    if (min >= MIN_ENABLED_TLS_1_3_DRAFT_VERSION)
-    {
-        maj = TLS_1_3_DRAFT_MAJ_VER;
-    }
-# endif
-
-    ver = (maj << 8) | min;
-    addVersion(ssl, ver);
-}
-
-/*
-  Convert 32-bit tls_v_1* enum values to official 2-byte version ids.
-*/
-uint16_t tlsMinVerToOfficialVer(int32_t minVer)
-{
-    uint16_t val;
-
-    switch (minVer)
-    {
-    case tls_v_1_3_draft_28:
-        val = TLS_1_3_DRAFT_MAJ_VER << 8;
-        val |= TLS_1_3_DRAFT_28_MIN_VER;
-        break;
-    case tls_v_1_3_draft_26:
-        val = TLS_1_3_DRAFT_MAJ_VER << 8;
-        val |= TLS_1_3_DRAFT_26_MIN_VER;
-        break;
-    case tls_v_1_3_draft_24:
-        val = TLS_1_3_DRAFT_MAJ_VER << 8;
-        val |= TLS_1_3_DRAFT_24_MIN_VER;
-        break;
-    case tls_v_1_3_draft_23:
-        val = TLS_1_3_DRAFT_MAJ_VER << 8;
-        val |= TLS_1_3_DRAFT_23_MIN_VER;
-        break;
-    case tls_v_1_3_draft_22:
-        val = TLS_1_3_DRAFT_MAJ_VER << 8;
-        val |= TLS_1_3_DRAFT_22_MIN_VER;
-        break;
-    case tls_v_1_3:
-        val = TLS_MAJ_VER << 8;
-        val |= TLS_1_3_MIN_VER;
-        break;
-    case tls_v_1_2:
-        val = TLS_MAJ_VER << 8;
-        val |= TLS_1_2_MIN_VER;
-        break;
-    case tls_v_1_1:
-        val = TLS_MAJ_VER << 8;
-        val |= TLS_1_1_MIN_VER;
-        break;
-    case tls_v_1_0:
-        val = TLS_MAJ_VER << 8;
-        val |= TLS_MIN_VER;
-        break;
-    case 0:
-    default:
-        val = SSL3_MAJ_VER << 8;
-        val |= SSL3_MIN_VER;
-        break;
-    }
-
-    return val;
-}
-
-/* Gets the supportedVersions list from options and saves it to ssl struct.
-   Also makes sure the ssl->flags and supportedVersions are synced. */
-static int32 initSupportedVersions(ssl_t *ssl, sslSessOpts_t *options)
-{
-    psSize_t i;
-    uint32 flags;
-    int32_t flag;
-    uint16_t ver;
-
-    for (i = 0; i < options->supportedVersionsLen; i++)
-    {
-        ver = tlsMinVerToOfficialVer(options->supportedVersions[i]);
-        addVersion(ssl, ver);
-    }
-
-    /* Unfortunately API user can bypass the API and just set the
-       version flags in options struct directly without settings
-       supportedVersions, in which case we must do it here. */
-
-    if (options->supportedVersionsLen == 0)
-    {
-        flags = options->versionFlag;
-        if ((flags & SSL_FLAGS_TLS_1_0) &&
-                !tlsVersionSupported(ssl, tls_v_1_0))
-        {
-            addVersionMin(ssl, TLS_1_0_MIN_VER);
-        }
-        if ((flags & SSL_FLAGS_TLS_1_1) &&
-                !tlsVersionSupported(ssl, tls_v_1_1))
-        {
-            addVersionMin(ssl, TLS_1_1_MIN_VER);
-        }
-        if ((flags & SSL_FLAGS_TLS_1_2) &&
-                !tlsVersionSupported(ssl, tls_v_1_2))
-        {
-            addVersionMin(ssl, TLS_1_2_MIN_VER);
-        }
-#ifdef USE_TLS_1_3
-        if ((flags & SSL_FLAGS_TLS_1_3) &&
-                !tlsVersionSupported(ssl, tls_v_1_3))
-        {
-            addVersionMin(ssl, TLS_1_3_MIN_VER);
-        }
-        if ((flags & SSL_FLAGS_TLS_1_3_DRAFT_22) &&
-                !tlsVersionSupported(ssl, tls_v_1_3_draft_22))
-        {
-            addVersionMin(ssl, TLS_1_3_DRAFT_22_MIN_VER);
-        }
-        if ((flags & SSL_FLAGS_TLS_1_3_DRAFT_23) &&
-                !tlsVersionSupported(ssl, tls_v_1_3_draft_23))
-        {
-            addVersionMin(ssl, TLS_1_3_DRAFT_23_MIN_VER);
-        }
-        if ((flags & SSL_FLAGS_TLS_1_3_DRAFT_24) &&
-                !tlsVersionSupported(ssl, tls_v_1_3_draft_24))
-        {
-            addVersionMin(ssl, TLS_1_3_DRAFT_24_MIN_VER);
-        }
-        if ((flags & SSL_FLAGS_TLS_1_3_DRAFT_26) &&
-                !tlsVersionSupported(ssl, tls_v_1_3_draft_26))
-        {
-            addVersionMin(ssl, TLS_1_3_DRAFT_26_MIN_VER);
-        }
-        if ((flags & SSL_FLAGS_TLS_1_3_DRAFT_28) &&
-                !tlsVersionSupported(ssl, tls_v_1_3_draft_28))
-        {
-            addVersionMin(ssl, TLS_1_3_DRAFT_28_MIN_VER);
-        }
-#endif
-    }
-
-    /* Client and server handle the flags differently.
-       One place of refactoring is to unify those */
-    if (!(ssl->flags & SSL_FLAGS_SERVER))
-    {
-        for (i = 0; i < ssl->supportedVersionsLen; i++)
-        {
-            flag = tlsMinVerToVersionFlag(
-                        ssl->supportedVersions[i] & 0xff);
-            if (flag > 0)
-            {
-                ssl->flags |= flag;
-            }
-        }
-    }
-
-    /* It seems the SSL_FLAGS_TLS is used as a flag for
-       TLS in general. On the other hand it is the same value
-       as SSL_FLAGS_TLS_1_0. TODO: Check that it does not mean
-       that it is allowed to negotiate 1.0 at any time! */
-    ssl->flags |= SSL_FLAGS_TLS;
-
-    /* In some places, the <1.3 code expects that flags for lesser
-       versions are enabled as well. TODO: the whole version flag
-       mechanism is a mess. */
-    if (USING_TLS_1_3(ssl))
-    {
-        ssl->flags |= SSL_FLAGS_TLS_1_2;
-        ssl->flags |= SSL_FLAGS_TLS_1_1;
-    }
-    else if (ssl->flags & SSL_FLAGS_TLS_1_2)
-    {
-        ssl->flags |= SSL_FLAGS_TLS_1_1;
-    }
-
-    return MATRIXSSL_SUCCESS;
 }
 
 #ifdef USE_TLS_1_3
@@ -1579,7 +879,7 @@ void matrixSslDeleteSession(ssl_t *ssl)
     }
 #endif
 
-#ifndef USE_ONLY_PSK_CIPHER_SUITE
+#if defined(USE_IDENTITY_CERTIFICATES)
     psFree(ssl->sec.keySelect.caNames, ssl->sPool);
     psFree(ssl->sec.keySelect.caNameLens, ssl->sPool);
 # if defined(USE_CLIENT_SIDE_SSL) || defined(USE_CLIENT_AUTH)
@@ -1595,7 +895,7 @@ void matrixSslDeleteSession(ssl_t *ssl)
 #ifdef USE_TLS_1_3
     {
         psSize_t i;
-
+# ifndef USE_ONLY_PSK_CIPHER_SUITE
         for (i = 0; i < TLS_1_3_MAX_GROUPS; i++)
         {
             if (ssl->sec.tls13KeyAgreeKeys[i] != NULL)
@@ -1608,7 +908,7 @@ void matrixSslDeleteSession(ssl_t *ssl)
             psFree(ssl->tls13CertRequestContext, ssl->hsPool);
             ssl->tls13CertRequestContext = NULL;
         }
-
+# endif
         tls13FreePsk(ssl->sec.tls13SessionPskList, ssl->hsPool);
         if (ssl->sec.tls13CookieFromServer)
         {
@@ -1823,6 +1123,13 @@ int32_t matrixSslHandshakeIsComplete(const ssl_t *ssl)
 */
 psBool_t matrixSslRehandshaking(const ssl_t *ssl)
 {
+# ifdef USE_TLS_1_3
+    if (NGTD_VER(ssl, v_tls_1_3_any))
+    {
+        /* TLS 1.3 does not allow re-handshakes. */
+        return PS_FALSE;
+    }
+# endif
     if (ssl->flags & SSL_FLAGS_ERROR)
     {
         /* Fatal alerts mean the handshake is over. */
@@ -1909,7 +1216,7 @@ int32 matrixRegisterSession(ssl_t *ssl)
      Don't reassign a new sessionId if we already have one or we blow the
      handshake hash
  */
-    if ((ssl->flags & SSL_FLAGS_DTLS) && ssl->sessionIdLen > 0)
+    if (ACTV_VER(ssl, v_dtls_any) && ssl->sessionIdLen > 0)
     {
         /* This is a retransmit case  */
         return PS_SUCCESS;
@@ -1970,8 +1277,8 @@ int32 matrixRegisterSession(ssl_t *ssl)
     with same SSL version.
  */
     psGetTime(&g_sessionTable[i].startTime, ssl->userPtr);
-    g_sessionTable[i].majVer = ssl->majVer;
-    g_sessionTable[i].minVer = ssl->minVer;
+    g_sessionTable[i].majVer = psEncodeVersionMaj(GET_NGTD_VER(ssl));
+    g_sessionTable[i].minVer = psEncodeVersionMin(GET_NGTD_VER(ssl));
 
     g_sessionTable[i].extendedMasterSecret = ssl->extFlags.extended_master_secret;
 
@@ -2062,8 +1369,8 @@ int32 matrixResumeSession(ssl_t *ssl)
     if ((Memcmp(g_sessionTable[i].id, id,
              (uint32) min(ssl->sessionIdLen, SSL_MAX_SESSION_ID_SIZE)) != 0) ||
         (psDiffMsecs(g_sessionTable[i].startTime,   accessTime, ssl->userPtr) >
-         SSL_SESSION_ENTRY_LIFE) || (g_sessionTable[i].majVer != ssl->majVer)
-        || (g_sessionTable[i].minVer != ssl->minVer))
+                SSL_SESSION_ENTRY_LIFE) || (g_sessionTable[i].majVer != psEncodeVersionMaj(GET_NGTD_VER(ssl)))
+            || (g_sessionTable[i].minVer != psEncodeVersionMin(GET_NGTD_VER(ssl))))
     {
         psUnlockMutex(&g_sessionTableLock);
         return PS_FAILURE;
@@ -2364,8 +1671,8 @@ int32 matrixCreateSessionTicket(ssl_t *ssl, unsigned char *out, int32 *outLen)
     Memcpy(c, randno, AES_IVLEN);
     c += AES_IVLEN;
     enc = c; /* encrypt start */
-    *c = ssl->majVer; c++;
-    *c = ssl->minVer; c++;
+    *c = psEncodeVersionMaj(GET_NGTD_VER(ssl)); c++;
+    *c = psEncodeVersionMin(GET_NGTD_VER(ssl)); c++;
     *c = (ssl->cipher->ident & 0xFF00) >> 8; c++;
     *c = ssl->cipher->ident & 0xFF; c++;
     /* Need to track if original handshake used extended master secret */
@@ -2568,8 +1875,9 @@ int32 matrixUnlockSessionTicket(ssl_t *ssl, unsigned char *in, int32 inLen)
     majVer = *enc; enc++;
     minVer = *enc; enc++;
 
-    /* Match protcol version */
-    if (majVer != ssl->majVer || minVer != ssl->minVer)
+    /* Match protocol version */
+    if (majVer != psEncodeVersionMaj(GET_NGTD_VER(ssl))
+            || minVer != psEncodeVersionMin(GET_NGTD_VER(ssl)))
     {
         psTraceErrr("Protocol check failure on session ticket\n");
         return PS_FAILURE;
@@ -2851,7 +2159,7 @@ void sslResetContext(ssl_t *ssl)
     state for attempting flight resends. If we are resetting context we
     know a handshake phase is starting up again
  */
-    if (ssl->flags & SSL_FLAGS_DTLS)
+    if (ACTV_VER(ssl, v_dtls_any))
     {
         ssl->appDataExch = 0;
     }
@@ -2944,6 +2252,40 @@ static int matchEmail(char *email, int32 emailLen,
     }
 
     return 0;
+}
+
+static
+int32_t checkPathLenConstraint(psX509Cert_t *ic,
+        psX509Cert_t *sc,
+        int32_t pathLen)
+{
+    if (ic->extensions.bc.pathLenConstraint >= 0)
+    {
+        /*
+          Make sure the pathLen is not exceeded.  If the sc and ic
+          are the same CA at this point, this means the peer
+          included the root CA in the chain it sent.  It's not good
+          practice to do this but implementations seem to allow it.
+          Subtract one from pathLen in this case since one got
+          added when it was truly just self-authenticating.
+        */
+        if (sc->sigHashLen == ic->sigHashLen &&
+                memcmpct(sc->sigHash, ic->sigHash, sc->sigHashLen) == 0)
+        {
+            if (pathLen > 0)
+            {
+                pathLen--;
+            }
+        }
+        if (ic->extensions.bc.pathLenConstraint < pathLen)
+        {
+            psTraceErrr("Authentication failed due to X.509 pathLen\n");
+            sc->authStatus = PS_CERT_AUTH_FAIL_PATH_LEN;
+            return PS_CERT_AUTH_FAIL_PATH_LEN;
+        }
+    }
+
+    return PS_SUCCESS;
 }
 
 /******************************************************************************/
@@ -3077,17 +2419,14 @@ int32 matrixValidateCertsExt(psPool_t *pool, psX509Cert_t *subjectCerts,
             {
                 return rc;
             }
-            if (ic->extensions.bc.pathLenConstraint >= 0)
+
+            rc = checkPathLenConstraint(ic, sc, pathLen);
+            if (rc < 0)
             {
-                /* Make sure the pathLen is not exceeded */
-                if (ic->extensions.bc.pathLenConstraint < pathLen)
-                {
-                    psTraceErrr("Authentication failed due to X.509 pathLen\n");
-                    sc->authStatus = PS_CERT_AUTH_FAIL_PATH_LEN;
-                    return PS_CERT_AUTH_FAIL_PATH_LEN;
-                }
+                return rc;
             }
             pathLen++;
+
             sc = sc->next;
             ic = sc->next;
         }
@@ -3099,15 +2438,11 @@ int32 matrixValidateCertsExt(psPool_t *pool, psX509Cert_t *subjectCerts,
         {
             return rc;
         }
-        if (ic->extensions.bc.pathLenConstraint >= 0)
+
+        rc = checkPathLenConstraint(ic, sc, pathLen);
+        if (rc < 0)
         {
-            /* Make sure the pathLen is not exceeded */
-            if (ic->extensions.bc.pathLenConstraint < pathLen)
-            {
-                psTraceErrr("Authentication failed due to X.509 pathLen\n");
-                sc->authStatus = PS_CERT_AUTH_FAIL_PATH_LEN;
-                return PS_CERT_AUTH_FAIL_PATH_LEN;
-            }
+                return rc;
         }
         pathLen++;
 /*
@@ -3129,29 +2464,10 @@ int32 matrixValidateCertsExt(psPool_t *pool, psX509Cert_t *subjectCerts,
         if ((rc = psX509AuthenticateCert(pool, sc, ic, foundIssuer, hwCtx,
                  poolUserPtr)) == PS_SUCCESS)
         {
-            if (ic->extensions.bc.pathLenConstraint >= 0)
+            rc = checkPathLenConstraint(ic, sc, pathLen);
+            if (rc < 0)
             {
-                /* Make sure the pathLen is not exceeded.  If the sc and ic
-                    are the same CA at this point, this means the peer
-                    included the root CA in the chain it sent.  It's not good
-                    practice to do this but implementations seem to allow it.
-                    Subtract one from pathLen in this case since one got
-                    added when it was truly just self-authenticating */
-                if (ic->signatureLen == sc->signatureLen &&
-                    (Memcmp(ic->signature, sc->signature,
-                         sc->signatureLen) == 0))
-                {
-                    if (pathLen > 0)
-                    {
-                        pathLen--;
-                    }
-                }
-                if (ic->extensions.bc.pathLenConstraint < pathLen)
-                {
-                    psTraceErrr("Authentication failed due to X.509 pathLen\n");
-                    rc = sc->authStatus = PS_CERT_AUTH_FAIL_PATH_LEN;
-                    return rc;
-                }
+                return rc;
             }
 
             if (opts->flags & VCERTS_FLAG_REVALIDATE_DATES)

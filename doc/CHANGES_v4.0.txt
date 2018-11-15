@@ -1,6 +1,55 @@
 
 
-MATRIXSSL 4.0 CHANGELOG
+MATRIXSSL 4.X CHANGELOG
+
+
+Changes between 4.0.0 and 4.0.1 [November 2018]
+
+This version improves the security of RSA PKCS #1.5 signature
+verification and adds better support for run-time security
+configuration.
+
+-   TLS:
+
+    -   Added a run-time security callback
+        feature (matrixSslRegisterSecurityCallback). The security
+        callback can allow or deny a cryptographic operation based on
+        the operation type and the key size. Currently only
+        authentication and key exchange operations are supported. The
+        default security callback supports pre-defined security
+        profiles (matrixSslSetSecurityProfile).
+
+    -   Added an example security profile: WPA3 1.0 Enterprise 192-bit
+        mode restrictions for EAP-TLS.
+
+    -   Added support for the
+        TLS_DHE_RSA_WITH_AES_256_GCM_SHA384 ciphersuite.
+
+    -   Changed the way how protocol version IDs are stored internally
+        and rewrote most of the version negotiation code. This is almost
+        entirely an internal code refactoring. To the API user, the only
+        visible change is that version selection APIs now take in an
+        argument of type psProtocolVersion_t instead of int32_t. See the
+        API reference guide for details.
+
+    -   Refactored ServerKeyExchange signature generation and
+        verification code.
+
+-   Crypto:
+
+    -   Changed from a parsing-based to a comparison-based approach in
+        DigestInfo validation when verifying RSA PKCS #1.5 signatures.
+        There are no known practical attacks against the old code, but
+        the comparison-based approach is theoretically more sound.
+        Thanks to Sze Yiu Chau from Purdue University for pointing
+        this out.
+
+    -   (MatrixSSL FIPS Edition only:) Fix DH key exchange when using DH
+        parameter files containing optional privateValueLength argument.
+
+    -   psX509AuthenticateCert now uses the common psVerifySig API for
+        signature verification. Previously, CRLs and certificates used
+        different code paths for signature verification.
 
 
 Changes between 3.9.5 and 4.0.0 [August 2018]

@@ -120,19 +120,15 @@ static const uint16_t allSigAlgs[] = {
 int32 getDefaultSigAlgs(ssl_t *ssl)
 {
     psSize_t i = 0, j = 0;
-    psBool_t tls12Enabled = tlsVersionSupported(ssl, tls_v_1_2);
-    psBool_t tls13Enabled = anyTls13VersionSupported(ssl);
-# ifdef USE_DTLS
+    psBool_t tls12Enabled = PS_FALSE;
+    psBool_t tls13Enabled = PS_FALSE;
 
-    /* DTLS 1.2 should use the TLS 1.2 list. */
-    if (ssl->flags & SSL_FLAGS_DTLS)
+    /* Note that DTLS 1.2 should use the TLS 1.2 list. */
+    if (SUPP_VER(ssl, v_tls_1_2) || SUPP_VER(ssl, v_dtls_1_2))
     {
-        if (ssl->minVer == DTLS_1_2_MIN_VER)
-        {
-            tls12Enabled = PS_TRUE;
-        }
+        tls12Enabled = PS_TRUE;
     }
-# endif /* USE_DTLS */
+    tls13Enabled = anyTls13VersionSupported(ssl);
 
     if (tls12Enabled && !tls13Enabled)
     {
@@ -280,119 +276,25 @@ int32 getDefaultCipherSuites(ssl_t *ssl, psPool_t *pool,
     return PS_SUCCESS;
 }
 
-int32 getClientDefaultVersions(ssl_t *ssl)
+extern void addVersion(ssl_t *ssl, psProtocolVersion_t ver);
+
+int32 getDefaultVersions(ssl_t *ssl)
 {
-#ifdef USE_TLS_1_3
-    uint32_t j;
-#endif
+    uint32_t k;
+    psProtocolVersion_t mask;
 
-#ifdef USE_TLS
-# ifndef DISABLE_TLS_1_0
-    ssl->majVer = TLS_MAJ_VER;
-    ssl->minVer = TLS_MIN_VER;
-# endif
-# if defined(USE_TLS_1_1) && !defined(DISABLE_TLS_1_1)
-    ssl->majVer = TLS_MAJ_VER;
-    ssl->minVer = TLS_1_1_MIN_VER;
-    ssl->flags |= SSL_FLAGS_TLS_1_1;
-# endif     /* USE_TLS_1_1 */
-# ifdef USE_TLS_1_2
-    ssl->majVer = TLS_MAJ_VER;
-    ssl->minVer = TLS_1_2_MIN_VER;
-    ssl->flags |= SSL_FLAGS_TLS_1_2 | SSL_FLAGS_TLS_1_1;
-# endif
-# ifdef USE_TLS_1_3
-    /* Set TLS1.3 as the highest priority but allow all others
-     * as well. For now, add both the RFC and draft 28. */
-    ssl->majVer = TLS_MAJ_VER;
-    ssl->minVer = TLS_1_2_MIN_VER;
-
-    j = 0;
-    ssl->supportedVersionsLen = 0;
-
-#define ADD_SUPPORTED_VER(ssl, maj, min)                \
-    do                                                  \
-    {                                                   \
-        ssl->flags |= tlsMinVerToVersionFlag(min);      \
-        ssl->supportedVersions[j++] = (maj << 8) | min; \
-        ssl->supportedVersionsLen++;                    \
-    } while(0)
-
-    ADD_SUPPORTED_VER(ssl, TLS_MAJ_VER, TLS_1_3_MIN_VER);
-    ADD_SUPPORTED_VER(ssl, TLS_1_3_DRAFT_MAJ_VER, TLS_1_3_DRAFT_28_MIN_VER);
-    ADD_SUPPORTED_VER(ssl, TLS_MAJ_VER, TLS_1_2_MIN_VER);
-#  if !defined(DISABLE_TLS_1_1)
-    ADD_SUPPORTED_VER(ssl, TLS_MAJ_VER, TLS_1_1_MIN_VER);
-#  endif
-#  if !defined(DISABLE_TLS_1_0)
-    ADD_SUPPORTED_VER(ssl, TLS_MAJ_VER, TLS_MIN_VER);
-#  endif
-# endif /* USE_TLS_1_3 */
-
-    if (ssl->majVer == 0)
+    /* Loop over versions from latest to earliest (priority order). */
+    mask = (1 << 23);
+    for (k = 23; k >= 1; k--)
     {
-        /* USE_TLS enabled but all DISABLE_TLS versions are enabled so
-            use SSLv3.  Compile time tests would catch if no versions
-            are enabled at all */
-        ssl->majVer = SSL3_MAJ_VER;
-        ssl->minVer = SSL3_MIN_VER;
-    }
-    else
-    {
-        ssl->flags |= SSL_FLAGS_TLS;
+        /* Supported by the build-time config? */
+        if (mask & v_compiled_in)
+        {
+            /* Add it. */
+            addVersion(ssl, mask);
+        }
+        mask >>= 1;
     }
 
-# ifdef USE_DTLS
-    /* ssl->flags will have already been set above.  Just set version */
-    if (ssl->flags & SSL_FLAGS_DTLS)
-    {
-        ssl->minVer = DTLS_MIN_VER;
-        ssl->majVer = DTLS_MAJ_VER;
-#  ifdef USE_TLS_1_2
-        ssl->minVer = DTLS_1_2_MIN_VER;
-#  endif
-    }
-# endif     /* USE_DTLS */
-
-#else /* USE_TLS */
-    ssl->majVer = SSL3_MAJ_VER;
-    ssl->minVer = SSL3_MIN_VER;
-#endif      /* USE_TLS */
-    return MATRIXSSL_SUCCESS;
-}
-
-int32 getServerDefaultVersions(ssl_t *ssl)
-{
-    uint32_t j;
-    j = 0;
-    ssl->supportedVersionsLen = 0;
-#ifdef USE_TLS_1_3
-    /* For now, add both the RFC and draft 28.*/
-    ssl->supportedVersions[j] = (TLS_MAJ_VER << 8) | TLS_1_3_MIN_VER;
-    ssl->supportedVersionsLen++;
-    j++;
-    ssl->supportedVersions[j] = (TLS_1_3_DRAFT_MAJ_VER << 8) |
-                                 TLS_1_3_DRAFT_28_MIN_VER;
-    ssl->supportedVersionsLen++;
-    j++;
-#endif
-#ifndef DISABLE_TLS_1_2
-    ssl->supportedVersions[j] = (TLS_MAJ_VER << 8) |
-                                 TLS_1_2_MIN_VER;
-    ssl->supportedVersionsLen++;
-    j++;
-#endif
-#ifndef DISABLE_TLS_1_1
-    ssl->supportedVersions[j] = (TLS_MAJ_VER << 8) |
-                                 TLS_1_1_MIN_VER;
-    ssl->supportedVersionsLen++;
-    j++;
-#endif
-#ifndef DISABLE_TLS_1_0
-    ssl->supportedVersions[j] = (TLS_MAJ_VER << 8) |
-                                 TLS_MIN_VER;
-    ssl->supportedVersionsLen++;
-    j++;
-#endif
     return MATRIXSSL_SUCCESS;
 }

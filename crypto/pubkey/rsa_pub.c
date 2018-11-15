@@ -37,14 +37,76 @@
 /******************************************************************************/
 /* TODO - the following functions are not implementation layer specific...
     move to a common file?
-
-    Matrix-specific starts at #ifdef USE_MATRIX_RSA
  */
+
+#ifdef USE_MATRIX_RSA
 
 #define ASN_OVERHEAD_LEN_RSA_SHA2   19
 #define ASN_OVERHEAD_LEN_RSA_SHA1   15
 
-#ifdef USE_MATRIX_RSA
+static
+int32_t psRsaDecryptPubExt(psPool_t *pool,
+        psRsaKey_t *key,
+        unsigned char *in,
+        psSize_t inlen,
+        unsigned char *out,
+        psSize_t *outlen,
+        psSize_t expectedLen,
+        void *data)
+{
+    int32_t err;
+    psSize_t ptLen, unpaddedLen;
+
+    if (inlen != key->size)
+    {
+        psTraceCrypto("Error on bad inlen parameter to psRsaDecryptPub\n");
+        return PS_ARG_FAIL;
+    }
+
+    ptLen = inlen;
+
+    /* Raw, in-place RSA decryption. */
+    err = psRsaCrypt(pool,
+            key,
+            in,
+            inlen,
+            in,
+            &ptLen,
+            PS_PUBKEY,
+            data);
+    if (err < PS_SUCCESS)
+    {
+        psTraceCrypto("Error performing psRsaDecryptPub\n");
+        return err;
+    }
+
+    /* In raw RSA decryption, size of the decrypted plaintext must equal
+       the size of the ciphertext. */
+    if (ptLen != inlen)
+    {
+        psTraceIntCrypto("Decrypted size error in psRsaDecryptPub %d\n", ptLen);
+        return PS_FAILURE;
+    }
+
+    /* Remove PKCS #1 padding and copy the decrypted and de-padded data
+       to out. */
+    err = pkcs1UnpadExt(in,
+            inlen,
+            out,
+            ptLen,
+            PS_PUBKEY,
+            PS_FALSE,
+            &unpaddedLen);
+    if (err < 0)
+    {
+        return err;
+    }
+
+    *outlen = unpaddedLen;
+
+    return PS_SUCCESS;
+}
+
 int32_t pubRsaDecryptSignedElement(psPool_t *pool, psRsaKey_t *key,
     unsigned char *in, psSize_t inlen,
     unsigned char *out, psSize_t outlen,
@@ -65,121 +127,112 @@ int32_t pubRsaDecryptSignedElement(psPool_t *pool, psRsaKey_t *key,
         signatureAlgorithm, data);
 }
 
-int32_t pubRsaDecryptSignedElementExt(psPool_t *pool, psRsaKey_t *key,
-    unsigned char *in, psSize_t inlen,
-    unsigned char *out, psSize_t outlen,
-    int32_t signatureAlgorithm, void *data)
+int32_t pubRsaDecryptSignedElementExt(psPool_t *pool,
+        psRsaKey_t *key,
+        unsigned char *in,
+        psSize_t inlen,
+        unsigned char *hashOut,
+        psSize_t hashOutLen,
+        int32_t signatureAlgorithm,
+        void *data)
 {
-    unsigned char *c, *front, *end;
-    uint16_t outlenWithAsn, len, plen;
-    int32_t oi, rc;
+    int32_t rc;
+    /* Reserve enough room for the largest supported decrypted and de-padded
+       plaintext: a SHA-512 DigestInfo (with NULL parameters). */
+    unsigned char decrypted[SHA512_HASH_SIZE + ASN_OVERHEAD_LEN_RSA_SHA2];
+    psSize_t decryptedLen = sizeof(decrypted);
+    const unsigned char *prefix;
+    unsigned char *decPrefixStart;
+    psSize_t decPrefixLen;
 
-    /* The      issue here is that the standard RSA decryption routine requires
-       the user to know the output length (usually just a hash size).  With
-       these "digitally signed elements" there is an algorithm
-       identifier surrounding the hash so we use the known magic numbers as
-       additional lengths of the wrapper since it is a defined ASN sequence,
-       ASN algorithm oid, and ASN octet string */
-    if (outlen == SHA256_HASH_SIZE)
+
+    /*
+      Check input arguments
+     */
+    if (key == NULL || in == NULL || hashOut == NULL)
     {
-        outlenWithAsn = SHA256_HASH_SIZE + ASN_OVERHEAD_LEN_RSA_SHA2;
-    }
-    else if (outlen == SHA1_HASH_SIZE)
-    {
-        outlenWithAsn = SHA1_HASH_SIZE + ASN_OVERHEAD_LEN_RSA_SHA1;
-    }
-    else if (outlen == SHA384_HASH_SIZE)
-    {
-        outlenWithAsn = SHA384_HASH_SIZE + ASN_OVERHEAD_LEN_RSA_SHA2;
-    }
-    else if (outlen == SHA512_HASH_SIZE)
-    {
-        outlenWithAsn = SHA512_HASH_SIZE + ASN_OVERHEAD_LEN_RSA_SHA2;
-    }
-    else
-    {
-        psTraceIntCrypto("Unsupported decryptSignedElement hash %d\n", outlen);
-        return PS_FAILURE;
+        psTraceCrypto(
+            "ERROR: invalid argument in pubRsaDecryptSignedElement\n");
+        return PS_ARG_FAIL;
     }
 
-    front = c = psMalloc(pool, outlenWithAsn);
-    if (front == NULL)
+    /*
+      Check that the hash length + signatureAlgorithm combination
+      is valid and that signatureAlgorithm is supported.
+    */
+    if (!psIsValidHashLenSigAlgCombination(hashOutLen, signatureAlgorithm))
     {
-        return PS_MEM_FAIL;
+        psTraceCrypto("Invalid hash length + signature alg combination: ");
+        psTraceIntCrypto("hash length: %d, ", hashOutLen);
+        psTraceIntCrypto("sig alg: %d\n", signatureAlgorithm);
+        return PS_ARG_FAIL;
     }
 
-    if ((rc = psRsaDecryptPub(pool, key, in, inlen, c, outlenWithAsn, data)) < 0)
+    /*
+      Perform RSA decryption + de-padding. After this, decryptedLen
+      becomes the length of the actual recovered DigestInfo.
+    */
+    rc = psRsaDecryptPubExt(pool,
+            key,
+            in,
+            inlen,
+            decrypted,
+            &decryptedLen,
+            hashOutLen,
+            data);
+    if (rc < 0)
     {
-        psFree(front, pool);
         psTraceCrypto("Couldn't public decrypt signed element\n");
         return rc;
     }
 
-    /* Parse it */
-    end = c + outlenWithAsn;
+    /*
+      Two alternatives for verifying the decrypted RSA message
+      representative:
 
-    /* @note Below we do a typecast to const to avoid a compiler warning,
-        although it should be fine to pass a non const pointer into an
-        api declaring it const, since it is just the API declaring the
-        contents will not be modified within the API. */
-    if (getAsnSequence((const unsigned char **) &c,
-            (uint16_t) (end - c), &len) < 0)
+      - Comparison-based: directly compare the known parts of the
+        DigestInfo against a reference DigestInfo.
+      - Parsing based: parse the decrypted DigestInfo and check that
+        each component is as expected.
+
+      In both approaches, the variable part (the embedded digest itself)
+      needs to be directly compared against the reference digest. We don't
+      perform that part here; this must be done by the caller.
+
+      We use the comparison-based approach, since its safer and easier
+      to implement correctly, see e.g. Kühn et al.: "Variants of
+      Bleichenbacher's Low-Exponent Attack on PKCS#1 RSA Signatures".
+    */
+
+    /*
+      Based on the signatureAlgorithm we were given, get a reference
+      DigestInfo prefix to compare against.
+    */
+    prefix = psGetDigestInfoPrefix(decryptedLen, signatureAlgorithm);
+    if (prefix == NULL)
     {
-        psTraceCrypto("Couldn't parse signed element sequence\n");
-        psFree(front, pool);
-        return PS_FAILURE;
-    }
-    if (getAsnAlgorithmIdentifier((const unsigned char **) &c,
-            (uint16_t) (end - c), &oi, &plen) < 0)
-    {
-        psTraceCrypto("Couldn't parse signed element octet string\n");
-        psFree(front, pool);
-        return PS_FAILURE;
+        return PS_ARG_FAIL;
     }
 
-    if (oi == OID_SHA256_ALG)
+    /*
+      Check that the decrypted DigestInfo prefix is valid.
+      If yes, copy the decrypted digest to out.
+    */
+    decPrefixStart = decrypted;
+    decPrefixLen = decryptedLen - hashOutLen;
+    if (memcmpct(prefix, decPrefixStart, decPrefixLen) == 0)
     {
-        psAssert(outlen == SHA256_HASH_SIZE);
+        Memcpy(hashOut, decrypted + decPrefixLen, hashOutLen);
+        rc = PS_SUCCESS;
     }
-    else if (oi == OID_SHA1_ALG)
-    {
-        psAssert(outlen == SHA1_HASH_SIZE);
-    }
-    else if (oi == OID_SHA384_ALG)
-    {
-        psAssert(outlen == SHA384_HASH_SIZE);
-    }
-# ifdef USE_MD2
-    else if (oi == OID_MD2_ALG)
-    {
-        psAssert(outlen == MD5_HASH_SIZE);
-    }
-# endif /* USE_MD2 */
-# ifdef USE_MD5
-    else if (oi == OID_MD5_ALG)
-    {
-        psAssert(outlen == MD5_HASH_SIZE);
-    }
-# endif /* USE_MD5 */
     else
     {
-        psAssert(outlen == SHA512_HASH_SIZE);
+        rc = PS_FAILURE;
     }
 
-    /* Note the last test here requires the buffer to be exactly outlen bytes */
-    if ((end - c) < 1 || (*c++ != ASN_OCTET_STRING) ||
-        getAsnLength((const unsigned char **) &c, (uint16_t) (end - c), &len) < 0 ||
-        (uint32_t) (end - c) != outlen)
-    {
+    Memset(decrypted, 0, sizeof(decrypted));
 
-        psTraceCrypto("Couldn't parse signed element octet string\n");
-        psFree(front, pool);
-        return PS_FAILURE;
-    }
-    /* Will finally be sitting at the hash now */
-    Memcpy(out, c, outlen);
-    psFree(front, pool);
-    return PS_SUCCESS;
+    return rc;
 }
 
 /******************************************************************************/
@@ -256,30 +309,29 @@ int32_t psRsaDecryptPub(psPool_t *pool, psRsaKey_t *key,
     unsigned char *out, psSize_t outlen,
     void *data)
 {
-    int32_t err;
+    int32_t rc;
     psSize_t ptLen;
 
-    if (inlen != key->size)
+    rc = psRsaDecryptPubExt(pool,
+            key,
+            in,
+            inlen,
+            out,
+            &ptLen,
+            outlen,
+            data);
+    if (rc != PS_SUCCESS)
     {
-        psTraceCrypto("Error on bad inlen parameter to psRsaDecryptPub\n");
-        return PS_ARG_FAIL;
+        return rc;
     }
-    ptLen = inlen;
-    if ((err = psRsaCrypt(pool, key, in, inlen, in, &ptLen,
-             PS_PUBKEY, data)) < PS_SUCCESS)
+
+    if (ptLen != outlen)
     {
-        psTraceCrypto("Error performing psRsaDecryptPub\n");
-        return err;
-    }
-    if (ptLen != inlen)
-    {
-        psTraceIntCrypto("Decrypted size error in psRsaDecryptPub %d\n", ptLen);
+        psTraceIntCrypto("Decrypted size error in psRsaDecryptPub %d\n",
+                ptLen);
         return PS_FAILURE;
     }
-    if ((err = pkcs1Unpad(in, inlen, out, outlen, PS_PUBKEY)) < 0)
-    {
-        return err;
-    }
+
     return PS_SUCCESS;
 }
 

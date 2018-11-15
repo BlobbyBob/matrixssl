@@ -389,20 +389,21 @@ int32_t tls13DeriveAppTrafficSecrets(ssl_t *ssl)
     unsigned char derivedSecret[MAX_TLS_1_3_HASH_SIZE];
     unsigned char zeroKey[MAX_TLS_1_3_HASH_SIZE] = {0};
     int32_t hmacAlg = tls13GetCipherHmacAlg(ssl);
-    psSize_t secretLen = psGetOutputBlockLength(hmacAlg);
+    psSize_t secretLen;
     psSize_t hsSecretLen;
     unsigned char zeroByte = 0;
-    int32_t rc;
+    int32_t rc = psGetOutputBlockLength(hmacAlg);
 
     if (ssl->sec.tls13KsState.deriveAppTrafficSecretsDone)
     {
         return PS_SUCCESS;
     }
 
-    if (secretLen < 0)
+    if (rc < 0)
     { /* this is an error code */
-        return secretLen;
+        return rc;
     }
+    secretLen = rc;
 
     /* Derive-Secret(Handshake Secret, "derived", "") */
     rc = tls13DeriveSecret(ssl,
@@ -499,13 +500,14 @@ int32_t tls13DeriveAppTrafficSecrets(ssl_t *ssl)
 int32_t tls13DeriveResumptionMasterSecret(ssl_t *ssl)
 {
     int32_t hmacAlg = tls13GetCipherHmacAlg(ssl);
-    psSize_t secretLen = psGetOutputBlockLength(hmacAlg);
-    int32_t rc;
+    psSize_t secretLen;
+    int32_t rc = psGetOutputBlockLength(hmacAlg);
 
-    if (secretLen < 0)
+    if (rc < 0)
     { /* this is an error code */
-        return secretLen;
+        return rc;
     }
+    secretLen = rc;
 
     /* Derive-Secret(Master Secret, "res master",
                      Transcript-Hash(ClientHello...client Finished) ) */
@@ -528,9 +530,9 @@ int32_t tls13DeriveResumptionMasterSecret(ssl_t *ssl)
 
 int32_t tls13DeriveHandshakeKeys(ssl_t *ssl)
 {
-    int32_t rc;
     int32_t hmacAlg = tls13GetCipherHmacAlg(ssl);
-    psSize_t secretLen = psGetOutputBlockLength(hmacAlg);
+    int32_t rc = psGetOutputBlockLength(hmacAlg);
+    psSize_t secretLen;
     psBool_t isServer = (ssl->flags & SSL_FLAGS_SERVER) ? PS_TRUE : PS_FALSE;
     unsigned char *inputSecretRead, *inputSecretWrite;
 
@@ -539,10 +541,11 @@ int32_t tls13DeriveHandshakeKeys(ssl_t *ssl)
         return PS_SUCCESS;
     }
 
-    if (secretLen < 0)
+    if (rc < 0)
     { /* this is an error code */
-        return secretLen;
+        return rc;
     }
+    secretLen = rc;
 
     if (isServer)
     {
@@ -761,9 +764,9 @@ int32_t tls13DeriveEarlyDataKeys(ssl_t *ssl)
 
 int32_t tls13DeriveAppKeys(ssl_t *ssl)
 {
-    int32_t rc;
     int32_t hmacAlg = tls13GetCipherHmacAlg(ssl);
-    psSize_t secretLen = psGetOutputBlockLength(hmacAlg);
+    int32_t rc = psGetOutputBlockLength(hmacAlg);
+    psSize_t secretLen;
     psBool_t isServer = (ssl->flags & SSL_FLAGS_SERVER) ? PS_TRUE : PS_FALSE;
     unsigned char *inputSecretRead, *inputSecretWrite;
 
@@ -772,10 +775,11 @@ int32_t tls13DeriveAppKeys(ssl_t *ssl)
         return PS_SUCCESS;
     }
 
-    if (secretLen < 0)
+    if (rc < 0)
     { /* this is an error code */
-        return secretLen;
+        return rc;
     }
+    secretLen = rc;
 
     if (isServer)
     {
@@ -883,15 +887,17 @@ int32_t tls13DeriveBinderKey(ssl_t *ssl,
         psSize_t *binderKeyOutLen)
 {
     int32 rc;
-    psSize_t secretLen = psGetOutputBlockLength(hmacAlg);
+    psSize_t secretLen;
     unsigned char *base_key;
 
     base_key = binderSecret;
 
-    if (secretLen < 0)
+    rc = psGetOutputBlockLength(hmacAlg);
+    if (rc < 0)
     { /* this is an error code */
-        return secretLen;
+        return rc;
     }
+    secretLen = rc;
 
     /*
       finished_key =
@@ -925,9 +931,9 @@ int32_t tls13DeriveBinderKey(ssl_t *ssl,
 
 int32_t tls13DeriveFinishedKey(ssl_t *ssl, psBool_t wantServerKey)
 {
-    int32 rc;
     int32_t hmacAlg = tls13GetCipherHmacAlg(ssl);
-    psSize_t secretLen = psGetOutputBlockLength(hmacAlg);
+    int32 rc = psGetOutputBlockLength(hmacAlg);
+    psSize_t secretLen;
     unsigned char *base_key;
 
     if (wantServerKey)
@@ -947,10 +953,11 @@ int32_t tls13DeriveFinishedKey(ssl_t *ssl, psBool_t wantServerKey)
         base_key = ssl->sec.tls13HsTrafficSecretClient;
     }
 
-    if (secretLen < 0)
+    if (rc < 0)
     { /* this is an error code */
-        return secretLen;
+        return rc;
     }
+    secretLen = rc;
 
     /*
       finished_key =

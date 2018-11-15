@@ -78,8 +78,8 @@ static inline
 void tls13MakeEncryptAad(ssl_t *ssl, unsigned char aadOut[5])
 {
     aadOut[0] = SSL_RECORD_TYPE_APPLICATION_DATA;
-    aadOut[1] = ssl->majVer;
-    aadOut[2] = ssl->minVer;
+    aadOut[1] = 0x03;
+    aadOut[2] = 0x03;
     aadOut[3] = (ssl->outRecLen & 0xff00) >> 8;
     aadOut[4] = (ssl->outRecLen & 0xff);
 }
@@ -88,8 +88,8 @@ static inline
 void tls13MakeDecryptAad(ssl_t *ssl, unsigned char aadOut[5])
 {
     aadOut[0] = SSL_RECORD_TYPE_APPLICATION_DATA;
-    aadOut[1] = ssl->majVer;
-    aadOut[2] = ssl->minVer;
+    aadOut[1] = 0x03;
+    aadOut[2] = 0x03;
     aadOut[3] = (ssl->rec.len & 0xff00) >> 8;
     aadOut[4] = (ssl->rec.len & 0xff);
 }
@@ -221,7 +221,7 @@ int32 csAesGcmDecryptTls13(void *ssl, unsigned char *ct,
     return bytes;
 }
 
-#ifdef USE_CHACHA20_POLY1305_IETF_CIPHER_SUITE
+#if defined(USE_CHACHA20_POLY1305_IETF_CIPHER_SUITE)  || defined(USE_CHACHA20_POLY1305_IETF)
 int32 csChacha20Poly1305IetfEncryptTls13(void *ssl, unsigned char *pt,
     unsigned char *ct, uint32 len)
 {

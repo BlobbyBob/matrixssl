@@ -205,7 +205,7 @@ int32 csAesGcmEncrypt(void *ssl, unsigned char *pt,
         meet this uniqueness requirement can significantly degrade security.
         The nonce_explicit MAY be the 64-bit sequence number. */
 #     ifdef USE_DTLS
-    if (lssl->flags & SSL_FLAGS_DTLS)
+    if (NGTD_VER(lssl, v_dtls_any))
     {
         Memcpy(nonce + 4, lssl->epoch, 2);
         Memcpy(nonce + 4 + 2, lssl->rsn, 6);
@@ -223,8 +223,8 @@ int32 csAesGcmEncrypt(void *ssl, unsigned char *pt,
         Memcpy(aad, lssl->sec.seq, 8);
     }
     aad[8] = lssl->outRecType;
-    aad[9] = lssl->majVer;
-    aad[10] = lssl->minVer;
+    aad[9] = psEncodeVersionMaj(GET_NGTD_VER(lssl));
+    aad[10] = psEncodeVersionMin(GET_NGTD_VER(lssl));
     aad[11] = ptLen >> 8 & 0xFF;
     aad[12] = ptLen & 0xFF;
 
@@ -233,7 +233,7 @@ int32 csAesGcmEncrypt(void *ssl, unsigned char *pt,
     psAesGetGCMTag(ctx, 16, ct + ptLen);
 
 #     ifdef USE_DTLS
-    if (lssl->flags & SSL_FLAGS_DTLS)
+    if (NGTD_VER(lssl, v_dtls_any))
     {
         return len;
     }
@@ -269,7 +269,7 @@ int32 csAesGcmDecrypt(void *ssl, unsigned char *ct,
     len -= TLS_EXPLICIT_NONCE_LEN;
 
 #    ifdef USE_DTLS
-    if (lssl->flags & SSL_FLAGS_DTLS)
+    if (NGTD_VER(lssl, v_dtls_any))
     {
         /* In the case of DTLS the counter is formed from the concatenation of
             the 16-bit epoch with the 48-bit sequence number.  */
@@ -285,8 +285,8 @@ int32 csAesGcmDecrypt(void *ssl, unsigned char *ct,
     }
     ctLen = len - TLS_GCM_TAG_LEN;
     aad[8] = lssl->rec.type;
-    aad[9] = lssl->majVer;
-    aad[10] = lssl->minVer;
+    aad[9] = psEncodeVersionMaj(GET_NGTD_VER(lssl));
+    aad[10] = psEncodeVersionMin(GET_NGTD_VER(lssl));
     aad[11] = ctLen >> 8 & 0xFF;
     aad[12] = ctLen & 0xFF;
 
@@ -374,7 +374,8 @@ int32 csAesDecrypt(void *ssl, unsigned char *ct,
 /******************************************************************************/
 
 /* #define DEBUG_CHACHA20_POLY1305_IETF_CIPHER_SUITE */
-#ifdef USE_CHACHA20_POLY1305_IETF_CIPHER_SUITE
+#if defined(USE_CHACHA20_POLY1305_IETF_CIPHER_SUITE)  || defined(USE_CHACHA20_POLY1305_IETF)
+
 int32 csChacha20Poly1305IetfInit(sslSec_t *sec, int32 type, uint32 keysize)
 {
     psRes_t err;
@@ -450,8 +451,8 @@ int32 csChacha20Poly1305IetfEncrypt(void *ssl, unsigned char *pt,
     i = TLS_AEAD_SEQNB_LEN;
 
     aad[i++] = lssl->outRecType;
-    aad[i++] = lssl->majVer;
-    aad[i++] = lssl->minVer;
+    aad[i++] = psEncodeVersionMaj(GET_NGTD_VER(lssl));
+    aad[i++] = psEncodeVersionMin(GET_NGTD_VER(lssl));
     aad[i++] = ptLen >> 8 & 0xFF;
     aad[i++] = ptLen & 0xFF;
 
@@ -540,8 +541,8 @@ int32 csChacha20Poly1305IetfDecrypt(void *ssl, unsigned char *ct,
     ctLen = len - TLS_CHACHA20_POLY1305_IETF_TAG_LEN;
 
     aad[i++] = lssl->rec.type;
-    aad[i++] = lssl->majVer;
-    aad[i++] = lssl->minVer;
+    aad[i++] = psEncodeVersionMaj(GET_NGTD_VER(lssl));
+    aad[i++] = psEncodeVersionMin(GET_NGTD_VER(lssl));
     aad[i++] = ctLen >> 8 & 0xFF;
     aad[i++] = ctLen & 0xFF;
 
@@ -723,38 +724,39 @@ static int32 csShaGenerateMac(void *sslv, unsigned char type,
     ssl_t *ssl = (ssl_t *) sslv;
     unsigned char mac[MAX_HASH_SIZE];
 
-# ifdef USE_TLS
-    if (ssl->flags & SSL_FLAGS_TLS)
+    if (NGTD_VER(ssl, v_tls_with_hmac))
     {
-#  ifdef USE_SHA256
-        if (ssl->nativeEnMacSize == SHA256_HASH_SIZE ||
-            ssl->nativeEnMacSize == SHA384_HASH_SIZE)
+        switch (ssl->nativeEnMacSize)
         {
-            tlsHMACSha2(ssl, HMAC_CREATE, type, data, len, mac,
-                ssl->nativeEnMacSize);
-        }
-        else
-        {
-#  endif
+# ifdef USE_SHA256
+        case SHA256_HASH_SIZE:
+# ifdef USE_SHA384
+        case SHA384_HASH_SIZE:
+# endif
+            tlsHMACSha2(ssl, HMAC_CREATE, type,
+                    data, len, mac, ssl->nativeEnMacSize);
+            break;
+# endif /* USE_SHA256 */
 #  ifdef USE_SHA1
-        tlsHMACSha1(ssl, HMAC_CREATE, type, data, len, mac);
-#  endif
-#  ifdef USE_SHA256
-    }
-#  endif
+        case SHA1_HASH_SIZE:
+            tlsHMACSha1(ssl, HMAC_CREATE, type,
+                    data, len, mac);
+            break;
+#  endif /* USE_SHA1 */
+        default:
+            return PS_ARG_FAIL;
+        }
     }
     else
     {
-# endif /* USE_TLS */
-# ifndef DISABLE_SSLV3
-    ssl3HMACSha1(ssl->sec.writeMAC, ssl->sec.seq, type, data,
-        len, mac);
+# ifdef DISABLE_SSLV3
+        return PS_ARG_FAIL;
 # else
-    return PS_ARG_FAIL;
-# endif /* DISABLE_SSLV3 */
-# ifdef USE_TLS
-}
-# endif /* USE_TLS */
+        ssl3HMACSha1(ssl->sec.writeMAC, ssl->sec.seq, type,
+                data, len, mac);
+# endif
+    }
+
 
     Memcpy(macOut, mac, ssl->enMacSize);
     return ssl->enMacSize;
@@ -766,7 +768,7 @@ static int32 csShaVerifyMac(void *sslv, unsigned char type,
     unsigned char buf[MAX_HASH_SIZE];
     ssl_t *ssl = (ssl_t *) sslv;
 
-    if (ssl->flags & SSL_FLAGS_TLS)
+    if (NGTD_VER(ssl, v_tls_with_hmac))
     {
         switch (ssl->nativeDeMacSize)
         {
@@ -814,7 +816,7 @@ static int32 csMd5GenerateMac(void *sslv, unsigned char type,
     ssl_t *ssl = (ssl_t *) sslv;
 
 # ifdef USE_TLS
-    if (ssl->flags & SSL_FLAGS_TLS)
+    if (NGTD_VER(ssl, v_tls_with_hmac))
     {
         tlsHMACMd5(ssl, HMAC_CREATE, type, data, len, mac);
     }
@@ -841,7 +843,7 @@ static int32 csMd5VerifyMac(void *sslv, unsigned char type, unsigned char *data,
     ssl_t *ssl = (ssl_t *) sslv;
 
 # ifdef USE_TLS
-    if (ssl->flags & SSL_FLAGS_TLS)
+    if (NGTD_VER(ssl, v_tls_with_hmac))
     {
         tlsHMACMd5(ssl, HMAC_VERIFY, type, data, len, buf);
     }
@@ -880,18 +882,20 @@ const static sslCipherSpec_t supportedCiphers[] = {
     256 ciphers max.
 
     The ordering of the ciphers is grouped and sub-grouped by the following:
-    1. Non-deprecated
-     2. Ephemeral
-      3. Authentication Method (PKI > PSK > anon)
-       4. Hash Strength (SHA384 > SHA256 > SHA > MD5)
-        5. Cipher Strength (AES256 > AES128 > 3DES > ARC4 > SEED > IDEA > NULL)
-         6. PKI Key Exchange (DHE > ECDHE > ECDH > RSA > PSK)
-          7. Cipher Mode (GCM > CBC)
-           8. PKI Authentication Method (ECDSA > RSA > PSK)
+    1. TLS 1.3
+     2. Non-deprecated
+      3. Ephemeral
+       4. Authentication Method (PKI > PSK > anon)
+        5. Hash Strength (SHA384 > SHA256 > SHA > MD5)
+         6. Cipher Strength (AES256 > AES128 > 3DES > ARC4 > SEED > IDEA > NULL)
+          7. PKI Key Exchange (DHE > ECDHE > ECDH > RSA > PSK)
+           8. Cipher Mode (GCM > CBC)
+            9. PKI Authentication Method (ECDSA > RSA > PSK)
  */
 
+#ifdef USE_TLS_1_3
 /* TLS 1.3 ciphersuites. */
-#ifdef USE_TLS_AES_128_GCM_SHA256
+# ifdef USE_TLS_AES_128_GCM_SHA256
     { TLS_AES_128_GCM_SHA256,                                     /* ident */
       CS_TLS13,                                                   /* type */
       CRYPTO_FLAGS_AES | CRYPTO_FLAGS_GCM | CRYPTO_FLAGS_SHA2,    /* flags */
@@ -904,9 +908,9 @@ const static sslCipherSpec_t supportedCiphers[] = {
       csAesGcmDecryptTls13,                                       /* decrypt */
       NULL,                                                       /* generateMac */
       NULL },                                                     /* verifyMac */
-#endif /* TLS_AES_128_GCM_SHA256 */
+# endif /* TLS_AES_128_GCM_SHA256 */
 
-#ifdef USE_TLS_AES_256_GCM_SHA384
+# ifdef USE_TLS_AES_256_GCM_SHA384
     { TLS_AES_256_GCM_SHA384,                                     /* ident */
       CS_TLS13,                                                   /* type */
       CRYPTO_FLAGS_AES256 | CRYPTO_FLAGS_GCM | CRYPTO_FLAGS_SHA3, /* flags */
@@ -919,9 +923,9 @@ const static sslCipherSpec_t supportedCiphers[] = {
       csAesGcmDecryptTls13,                                       /* decrypt */
       NULL,                                                       /* generateMac */
       NULL },                                                     /* verifyMac */
-#endif /* TLS_AES_128_GCM_SHA256 */
+# endif /* TLS_AES_128_GCM_SHA256 */
 
-#ifdef USE_TLS_CHACHA20_POLY1305_SHA256
+# ifdef USE_TLS_CHACHA20_POLY1305_SHA256
     { TLS_CHACHA20_POLY1305_SHA256,                               /* ident */
       CS_TLS13,                                                   /* type */
       CRYPTO_FLAGS_CHACHA | CRYPTO_FLAGS_SHA2,                    /* flags */
@@ -934,8 +938,8 @@ const static sslCipherSpec_t supportedCiphers[] = {
       csChacha20Poly1305IetfDecryptTls13,                         /* decrypt */
       NULL,                                                       /* generateMac */
       NULL },                                                     /* verifyMac */
-#endif /* USE_TLS_CHACHA20_POLY1305_SHA256 */
-
+# endif /* USE_TLS_CHACHA20_POLY1305_SHA256 */
+#endif /* USE_TLS_1_3 */
 /* Ephemeral ciphersuites */
 #ifdef USE_TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
     { TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,                    /* ident */
@@ -1026,6 +1030,21 @@ const static sslCipherSpec_t supportedCiphers[] = {
       csShaGenerateMac,
       csShaVerifyMac },
 #endif /* USE_TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384 */
+
+#ifdef USE_TLS_DHE_RSA_WITH_AES_256_GCM_SHA384
+    { TLS_DHE_RSA_WITH_AES_256_GCM_SHA384,
+      CS_DHE_RSA,
+      CRYPTO_FLAGS_AES256 | CRYPTO_FLAGS_GCM | CRYPTO_FLAGS_SHA3,
+      0,            /* macSize */
+      32,           /* keySize */
+      4,            /* ivSize */
+      0,            /* blocksize */
+      csAesGcmInit,
+      csAesGcmEncrypt,
+      csAesGcmDecrypt,
+      NULL,
+      NULL },
+#endif /* USE_TLS_DHE_RSA_WITH_AES_256_CBC_SHA256 */
 
 #ifdef USE_TLS_DHE_RSA_WITH_AES_256_CBC_SHA256
     { TLS_DHE_RSA_WITH_AES_256_CBC_SHA256,
@@ -1221,6 +1240,7 @@ const static sslCipherSpec_t supportedCiphers[] = {
       csShaGenerateMac,
       csShaVerifyMac },
 #endif /* USE_SSL_DHE_RSA_WITH_3DES_EDE_CBC_SHA */
+
 
 #ifdef USE_TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA
     { TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA,
@@ -1976,7 +1996,7 @@ static psRes_t validateKeyForExtensions(ssl_t *ssl, const sslCipherSpec_t *spec,
     }
 
 #  ifdef USE_TLS_1_3
-    if (NEGOTIATED_TLS_1_3(ssl))
+    if (NGTD_VER(ssl, v_tls_1_3_any))
     {
         int32_t rc;
 
@@ -1991,7 +2011,7 @@ static psRes_t validateKeyForExtensions(ssl_t *ssl, const sslCipherSpec_t *spec,
 
 #  ifdef USE_TLS_1_2
     /* hash and sig alg is a TLS 1.2 only extension */
-    if (ssl->flags & SSL_FLAGS_TLS_1_2)
+    if (NGTD_VER(ssl, v_tls_with_signature_algorithms))
     {
         /* Walk through each cert and confirm the client will be able to
             deal with them based on the algorithms provided in the extension */
@@ -2146,8 +2166,9 @@ static psRes_t haveCorrectKeyAlg(sslIdentity_t *idKey,
 
 # ifdef VALIDATE_KEY_MATERIAL
 static psRes_t haveKeyForAlg(sslKeys_t *keys,
-                               int32 keyAlg, int32 sigType,
-                               int anyOrFirst)
+        int32 keyAlg,
+        int32 sigType,
+        int anyOrFirst)
 {
     sslIdentity_t *idKey;
 
@@ -2178,8 +2199,8 @@ static psRes_t haveKeyForAlg(sslKeys_t *keys,
     SSL_FLAGS_SERVER test so no #else cases should be needed
  */
 int32_t haveKeyMaterial(const ssl_t *ssl,
-                        const sslCipherSpec_t *cipher,
-                        short reallyTest)
+        const sslCipherSpec_t *cipher,
+        short reallyTest)
 {
     int32 cipherType = cipher->type;
 
@@ -2188,6 +2209,7 @@ int32_t haveKeyMaterial(const ssl_t *ssl,
     if (cipherType == CS_TLS13)
     {
         psSize_t hashLen;
+
         /* The only meaningful check we can make here for TLS1.3 is that
            when using PSK we choose such cipher suite that matches the
            chosen PSK length */
@@ -2502,10 +2524,15 @@ chooseCS(ssl_t *ssl, uint32_t *suites, psSize_t nsuites)
 {
     sslKeys_t *givenKey = NULL, *keys;
 #ifdef USE_IDENTITY_CERTIFICATES
-    sslIdentity_t *idKey, *fallbackId = NULL;
+    sslIdentity_t *idKey;
 #endif
     psBool_t sniUsed = PS_FALSE;
+#ifdef USE_CS_FALLBACK
+#ifdef USE_IDENTITY_CERTIFICATES
+    sslIdentity_t  *fallbackId = NULL;
+#endif
     const sslCipherSpec_t *fallbackSuite = NULL;
+#endif
     int i;
 
     /* prefer keys loaded using SNI */
@@ -2545,7 +2572,7 @@ chooseCS(ssl_t *ssl, uint32_t *suites, psSize_t nsuites)
           When using TLS 1.3, just pick the first supported TLS 1.3 suite from
           the client's list. No need to check against key material.*/
 # ifdef USE_TLS_1_3
-        if (NEGOTIATED_TLS_1_3(ssl) && spec->type == CS_TLS13)
+        if (NGTD_VER(ssl, v_tls_1_3_any) && spec->type == CS_TLS13)
         {
             ssl->cipher = spec;
 #  ifdef USE_IDENTITY_CERTIFICATES
@@ -2643,7 +2670,7 @@ chooseCS(ssl_t *ssl, uint32_t *suites, psSize_t nsuites)
             if (spec->type == CS_ECDH_RSA || spec->type == CS_ECDH_ECDSA)
             {
                 reqKeyAlg = OID_ECDSA_KEY_ALG;
-                reqSigType = (spec->type == CS_ECDH_RSA) ? RSA_TYPE_SIG : ECDSA_TYPE_SIG;
+                reqSigType = ECDSA_TYPE_SIG;
             }
             else
             {
@@ -2667,6 +2694,7 @@ chooseCS(ssl_t *ssl, uint32_t *suites, psSize_t nsuites)
                                   KEY_ALG_FIRST) < 0 ||
                 validateKeyForExtensions(ssl, spec, idKey) < 0)
             {
+#ifdef USE_CS_FALLBACK
                 /* This key is not suitable, but might be a good
                    fallback, if nothing else is found. */
                 if (fallbackSuite == NULL)
@@ -2674,6 +2702,7 @@ chooseCS(ssl_t *ssl, uint32_t *suites, psSize_t nsuites)
                     fallbackSuite = spec;
                     fallbackId = idKey;
                 }
+#endif
                 continue;
             }
             /* this suite and key suits the requirements. */
@@ -2685,6 +2714,10 @@ chooseCS(ssl_t *ssl, uint32_t *suites, psSize_t nsuites)
         }
 #endif /* USE_IDENTITY_CERTIFICATES */
     }
+
+#ifdef USE_CS_FALLBACK
+    /* XXX: MatrixSSL 3 series used to fall back to what client proposed on
+       absense of key material. This is now gone. */
     if (fallbackSuite != NULL)
     {
         /* maybe productive to try the fallback. */
@@ -2694,6 +2727,7 @@ chooseCS(ssl_t *ssl, uint32_t *suites, psSize_t nsuites)
 #endif
         goto out_ok;
     }
+#endif
 
     psTraceErrr("No matching keys for any requested cipher suite.\n");
     return PS_UNSUPPORTED_FAIL; /* Server can't match anything */
@@ -2916,6 +2950,34 @@ psBool_t isAlpnSuite(const sslCipherSpec_t *spec)
     return PS_FALSE;
 }
 
+# ifdef USE_SEC_CONFIG
+static
+psBool_t ciphersuiteAllowedBySecConfig(ssl_t *ssl, const uint16_t id)
+{
+    psSize_t j;
+
+    if (ssl->supportedCiphersLen > 0)
+    {
+        /* The NULL ciphersuite is used before encryption is turned on.
+           We have to support that. */
+        if (id == SSL_NULL_WITH_NULL_NULL)
+        {
+            return PS_TRUE;
+        }
+        for (j = 0; j < ssl->supportedCiphersLen; j++)
+        {
+            if (ssl->supportedCiphers[j] == id)
+            {
+                return PS_TRUE;
+            }
+        }
+        return PS_FALSE;
+    }
+
+    return PS_TRUE;
+}
+# endif /* USE_SEC_CONFIG */
+
 /******************************************************************************/
 /**
     Lookup and validate the given cipher spec ID.
@@ -2924,7 +2986,7 @@ psBool_t isAlpnSuite(const sslCipherSpec_t *spec)
     @param[in] id The official ciphersuite id to find.
     @return A pointer to the cipher suite structure, if configured in build
         and appropriate for the constraints in 'ssl'.
-        If not defined or apprppriate, return NULL.
+        If not defined or appropriate, return NULL.
  */
 const sslCipherSpec_t *sslGetCipherSpec(const ssl_t *ssl, uint16_t id)
 {
@@ -2934,6 +2996,7 @@ const sslCipherSpec_t *sslGetCipherSpec(const ssl_t *ssl, uint16_t id)
     uint8_t j;
 #endif /* USE_SERVER_SIDE_SSL */
 
+    /* Loop over the global supportedCiphers array. */
     i = 0;
     do
     {
@@ -2974,6 +3037,18 @@ const sslCipherSpec_t *sslGetCipherSpec(const ssl_t *ssl, uint16_t id)
             return NULL;
         }
 #endif
+
+#ifdef USE_SEC_CONFIG
+        if (!ciphersuiteAllowedBySecConfig(ssl, id))
+        {
+            psTracePrintCiphersuiteName(0,
+                    "Ciphersuite not allowed by sec config",
+                    id,
+                    PS_TRUE);
+            psTraceErrr("Invalid ciphersuite selection\n");
+            return NULL;
+        }
+#endif /* USE_SEC_CONFIG */
 #ifdef USE_SERVER_SIDE_SSL
         /* Globally disabled? */
         if (disabledCipherFlags[i >> 5] & (1UL << (i & 31)))
@@ -2996,66 +3071,60 @@ const sslCipherSpec_t *sslGetCipherSpec(const ssl_t *ssl, uint16_t id)
             }
         }
 #endif  /* USE_SERVER_SIDE_SSL */
+
+        /*
+          Unusable because protocol doesn't allow?
+
+          Only perform this check if we already know which versions
+          we have been configured to support. If we have been called
+          during a resumption attempt to retrieve the ciphersuite stored
+          in the sessionId_t struct, we have not initialized our list
+          of supported versions yet. TODO: better fix.
+        */
+        if (GET_SUPP_VER(ssl) != v_undefined)
+        {
 #ifdef USE_TLS_1_2
-        /* Unusable because protocol doesn't allow? */
-# ifdef USE_DTLS
-        if (ssl->majVer == DTLS_MAJ_VER &&
-            ssl->minVer != DTLS_1_2_MIN_VER)
-        {
-            if (supportedCiphers[i].flags & CRYPTO_FLAGS_SHA3 ||
-                supportedCiphers[i].flags & CRYPTO_FLAGS_SHA2)
+            if (!SUPP_VER(ssl, v_tls_sha2) || NGTD_VER(ssl, v_tls_no_sha2))
             {
-                psTraceIntInfo(
-                    "Matched cipher suite %d but only allowed in DTLS 1.2\n", id);
-                return NULL;
+                if (supportedCiphers[i].flags & CRYPTO_FLAGS_SHA3 ||
+                        supportedCiphers[i].flags & CRYPTO_FLAGS_SHA2)
+                {
+                    psTraceIntInfo("Matched cipher suite %d " \
+                            "but not allowed in (D)TLS <1.2\n", id);
+                    return NULL;
+                }
             }
-        }
-        if (!(ssl->flags & SSL_FLAGS_DTLS))
-        {
-# endif
 # ifdef USE_TLS_1_3
-        /* Reject non-TLS1.3 cipher suites if TLS1.3 has been negotiated */
-        if (ssl->flags & SSL_FLAGS_TLS_1_3_NEGOTIATED)
-        {
-            if (supportedCiphers[i].type != CS_TLS13 &&
-                supportedCiphers[i].type != CS_NULL)
+            /* Reject non-TLS1.3 cipher suites if TLS1.3 has been negotiated */
+            if (NGTD_VER(ssl, v_tls_1_3_any))
             {
-                return NULL;
+                if (supportedCiphers[i].type != CS_TLS13 &&
+                        supportedCiphers[i].type != CS_NULL)
+                {
+                    return NULL;
+                }
             }
-        }
-        /* The server should reject TLS 1.3 cipher suites if TLS 1.3
-           is not enabled. */
-        if (IS_SERVER(ssl) && !USING_TLS_1_3(ssl))
-        {
-            if (supportedCiphers[i].type == CS_TLS13)
+            /* The server should reject TLS 1.3 cipher suites if TLS 1.3
+               is not enabled. */
+            if (IS_SERVER(ssl) && !SUPP_VER(ssl, v_tls_1_3_any))
             {
-                return NULL;
+                if (supportedCiphers[i].type == CS_TLS13)
+                {
+                    return NULL;
+                }
             }
-        }
-# endif
-        if (ssl->minVer < TLS_1_2_MIN_VER)
-        {
-            if (supportedCiphers[i].flags & CRYPTO_FLAGS_SHA3 ||
-                supportedCiphers[i].flags & CRYPTO_FLAGS_SHA2)
+# endif /* USE_TLS_1_3 */
+            if (NGTD_VER(ssl, v_dtls_1_2 | v_tls_1_2 | v_tls_1_3_any))
             {
-                psTraceIntInfo(
-                    "Matched cipher suite %d but not allowed in TLS <1.2\n", id);
-                return NULL;
+                if (supportedCiphers[i].flags & CRYPTO_FLAGS_MD5)
+                {
+                    psTraceIntInfo("Not allowing MD5 suite %d in TLS 1.2/1.3\n",
+                            id);
+                    return NULL;
+                }
             }
-        }
-        if (ssl->minVer == TLS_1_2_MIN_VER || USING_TLS_1_3(ssl))
-        {
-            if (supportedCiphers[i].flags & CRYPTO_FLAGS_MD5)
-            {
-                psTraceIntInfo("Not allowing MD5 suite %d in TLS 1.2/1.3\n",
-                    id);
-                return NULL;
-            }
-        }
-# ifdef USE_DTLS
-    }
-# endif
 #endif  /* TLS_1_2 */
+        } /* if (GET_SUPP_VER(ssl) != v_undefined */
 
         /** Check restrictions by HTTP2 (set by ALPN extension).
             This should filter out all ciphersuites specified in:
@@ -3089,8 +3158,8 @@ const sslCipherSpec_t *sslGetCipherSpec(const ssl_t *ssl, uint16_t id)
             }
         }
 
-        /*      The suite is available.  Want to reject if current key material
-            does not support? */
+        /* The suite is available.  Want to reject if current key material
+           does not support? */
 #ifdef VALIDATE_KEY_MATERIAL
         if (ssl->keys != NULL)
         {
@@ -3127,20 +3196,29 @@ const sslCipherSpec_t *sslGetCipherSpec(const ssl_t *ssl, uint16_t id)
     Write out a list of the supported cipher suites to the caller's buffer
     First 2 bytes are the number of cipher suite bytes, the remaining bytes are
     the cipher suites, as two byte, network byte order values.
+
+    If called with encodeList == PS_FALSE, only returns lengths of the list.
  */
-int32_t sslGetCipherSpecList(ssl_t *ssl, unsigned char *c, int32 len,
-    int32 addScsv)
+static
+int32_t sslGetCipherSpecListExt(const ssl_t *ssl,
+        unsigned char *c,
+        int32 len,
+        int32 addScsv,
+        psBool_t encodeList)
 {
     unsigned char *end, *p;
     unsigned short i;
     int32 ignored;
 
-    if (len < 4)
+    if (encodeList)
     {
-        return -1;
+        if (len < 4)
+        {
+            return -1;
+        }
+        end = c + len;
+        p = c; c += 2;
     }
-    end = c + len;
-    p = c; c += 2;
 
     ignored = 0;
     for (i = 0; supportedCiphers[i].ident != SSL_NULL_WITH_NULL_NULL; i++)
@@ -3149,8 +3227,7 @@ int32_t sslGetCipherSpecList(ssl_t *ssl, unsigned char *c, int32 len,
         /* The SHA-2 based cipher suites are TLS 1.2 only so don't send
             those if the user has requested a lower protocol in
             NewClientSession */
-# ifdef USE_DTLS
-        if (ssl->majVer == DTLS_MAJ_VER && ssl->minVer != DTLS_1_2_MIN_VER)
+        if (!SUPP_VER(ssl, v_tls_sha2))
         {
             if (supportedCiphers[i].flags & CRYPTO_FLAGS_SHA3 ||
                 supportedCiphers[i].flags & CRYPTO_FLAGS_SHA2)
@@ -3159,39 +3236,31 @@ int32_t sslGetCipherSpecList(ssl_t *ssl, unsigned char *c, int32 len,
                 continue;
             }
         }
-        if (!(ssl->flags & SSL_FLAGS_DTLS))
-        {
-# endif
-        if (ssl->minVer != TLS_1_2_MIN_VER)
-        {
-            if (supportedCiphers[i].flags & CRYPTO_FLAGS_SHA3 ||
-                supportedCiphers[i].flags & CRYPTO_FLAGS_SHA2)
-            {
-                ignored += 2;
-                continue;
-            }
-        }
-
-# ifdef USE_DTLS
-    }
-# endif
 #endif  /* TLS_1_2 */
 # ifdef USE_TLS_1_3
         /* At this point remove the cipher if TLS1.3 is
            the only enabled version */
-        if (USING_ONLY_TLS_1_3(ssl) && supportedCiphers[i].type != CS_TLS13)
+        if (!SUPP_VER(ssl, v_tls_legacy)
+                && supportedCiphers[i].type != CS_TLS13)
         {
             ignored += 2;
             continue;
         }
         /* Remove TLS1.3 ciphers in case TLS1.3 is not enabled */
-        if (!(USING_TLS_1_3(ssl)) &&
-            (supportedCiphers[i].type == CS_TLS13))
+        if (!SUPP_VER(ssl, v_tls_1_3_any)
+                && (supportedCiphers[i].type == CS_TLS13))
         {
             ignored += 2;
             continue;
         }
 # endif /* USE_TLS_1_3 */
+# ifdef USE_SEC_CONFIG
+        if (!ciphersuiteAllowedBySecConfig(ssl, supportedCiphers[i].ident))
+        {
+            ignored += 2;
+            continue;
+        }
+# endif /* USE_SEC_CONFIG */
 #ifdef VALIDATE_KEY_MATERIAL
         if (haveKeyMaterial(ssl, &supportedCiphers[i], 0) != PS_SUCCESS)
         {
@@ -3199,27 +3268,36 @@ int32_t sslGetCipherSpecList(ssl_t *ssl, unsigned char *c, int32 len,
             continue;
         }
 #endif
-        if (end - c < 2)
+
+        if (encodeList)
         {
-            return PS_MEM_FAIL;
+            if (end - c < 2)
+            {
+                return PS_MEM_FAIL;
+            }
+            *c = (unsigned char) ((supportedCiphers[i].ident & 0xFF00) >> 8); c++;
+            *c = (unsigned char) (supportedCiphers[i].ident & 0xFF); c++;
         }
-        *c = (unsigned char) ((supportedCiphers[i].ident & 0xFF00) >> 8); c++;
-        *c = (unsigned char) (supportedCiphers[i].ident & 0xFF); c++;
     }
+
     i *= 2;
     i -= (unsigned short) ignored;
+
 #ifdef ENABLE_SECURE_REHANDSHAKES
     if (addScsv == 1)
     {
 # ifdef USE_CLIENT_SIDE_SSL
-        ssl->extFlags.req_renegotiation_info = 1;
+        ((ssl_t*)ssl)->extFlags.req_renegotiation_info = 1;
 # endif
-        if (end - c < 2)
+        if (encodeList)
         {
-            return PS_MEM_FAIL;
+            if (end - c < 2)
+            {
+                return PS_MEM_FAIL;
+            }
+            *c = ((TLS_EMPTY_RENEGOTIATION_INFO_SCSV & 0xFF00) >> 8); c++;
+            *c = TLS_EMPTY_RENEGOTIATION_INFO_SCSV  & 0xFF; c++;
         }
-        *c = ((TLS_EMPTY_RENEGOTIATION_INFO_SCSV & 0xFF00) >> 8); c++;
-        *c = TLS_EMPTY_RENEGOTIATION_INFO_SCSV  & 0xFF; c++;
         i += 2;
     }
 #endif
@@ -3230,19 +3308,38 @@ int32_t sslGetCipherSpecList(ssl_t *ssl, unsigned char *c, int32 len,
     {
         /** Add the fallback signalling ciphersuite.
            @see https://tools.ietf.org/html/rfc7507 */
-        if (end - c < 2)
+        if (encodeList)
         {
-            return PS_MEM_FAIL;
+            if (end - c < 2)
+            {
+                return PS_MEM_FAIL;
+            }
+            *c = (TLS_FALLBACK_SCSV >> 8) & 0xFF; c++;
+            *c = TLS_FALLBACK_SCSV & 0xFF; c++;
         }
-        *c = (TLS_FALLBACK_SCSV >> 8) & 0xFF; c++;
-        *c = TLS_FALLBACK_SCSV & 0xFF; c++;
         i += 2;
     }
 #endif
 
-    *p = (unsigned char) (i >> 8); p++;
-    *p = (unsigned char) (i & 0xFF);
+    if (encodeList)
+    {
+        *p = (unsigned char) (i >> 8); p++;
+        *p = (unsigned char) (i & 0xFF);
+    }
+
     return i + 2;
+}
+
+int32_t sslGetCipherSpecList(ssl_t *ssl,
+        unsigned char *c,
+        int32 len,
+        int32 addScsv)
+{
+    return sslGetCipherSpecListExt(ssl,
+            c,
+            len,
+            addScsv,
+            PS_TRUE);
 }
 
 /******************************************************************************/
@@ -3252,65 +3349,11 @@ int32_t sslGetCipherSpecList(ssl_t *ssl, unsigned char *c, int32 len,
  */
 int32_t sslGetCipherSpecListLen(const ssl_t *ssl)
 {
-    int32 i, ignored;
-
-    ignored = 0;
-    for (i = 0; supportedCiphers[i].ident != SSL_NULL_WITH_NULL_NULL; i++)
-    {
-#ifdef USE_TLS_1_2
-        /* The SHA-2 based cipher suites are TLS 1.2 only so don't send
-            those if the user has requested a lower protocol in
-            NewClientSession */
-# ifdef USE_DTLS
-        if (ssl->majVer == DTLS_MAJ_VER && ssl->minVer != DTLS_1_2_MIN_VER)
-        {
-            if (supportedCiphers[i].flags & CRYPTO_FLAGS_SHA3 ||
-                supportedCiphers[i].flags & CRYPTO_FLAGS_SHA2)
-            {
-                ignored += 2;
-                continue;
-            }
-        }
-        if (!(ssl->flags & SSL_FLAGS_DTLS))
-        {
-# endif
-        if (ssl->minVer != TLS_1_2_MIN_VER)
-        {
-            if (supportedCiphers[i].flags & CRYPTO_FLAGS_SHA3 ||
-                supportedCiphers[i].flags & CRYPTO_FLAGS_SHA2)
-            {
-                ignored += 2;
-                continue;
-            }
-        }
-# ifdef USE_DTLS
-    }
-# endif
-#endif  /* USE_TLS_1_2 */
-# ifdef USE_TLS_1_3
-        /* At this point remove the cipher if TLS1.3 is
-           the only enabled version */
-        if (USING_ONLY_TLS_1_3(ssl) && supportedCiphers[i].type != CS_TLS13)
-        {
-            ignored += 2;
-            continue;
-        }
-        /* Remove TLS1.3 ciphers in case TLS1.3 is not enabled */
-        if (!(USING_TLS_1_3(ssl)) &&
-            (supportedCiphers[i].type == CS_TLS13))
-        {
-            ignored += 2;
-            continue;
-        }
-# endif /* USE_TLS_1_3 */
-#ifdef VALIDATE_KEY_MATERIAL
-        if (haveKeyMaterial(ssl, &supportedCiphers[i], 0) != PS_SUCCESS)
-        {
-            ignored += 2;
-        }
-#endif
-    }
-    return (i * 2) + 2 - ignored;
+    return sslGetCipherSpecListExt(ssl,
+            NULL,
+            0,
+            0,
+            PS_FALSE);
 }
 
 /******************************************************************************/

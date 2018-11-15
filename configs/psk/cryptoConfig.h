@@ -44,7 +44,7 @@
 /* #define USE_CRYPTO_TRACE */
 
 #  ifdef DEBUG
-/* #define CRYPTO_ASSERT	 *//**< Extra sanity asserts */
+/* #define CRYPTO_ASSERT     *//**< Extra sanity asserts */
 #  endif
 
 /******************************************************************************/
@@ -109,7 +109,7 @@
     @see http://csrc.nist.gov/groups/ST/toolkit/documents/dss/NISTReCur.pdf
  */
 #  ifdef USE_ECC
-/* #define USE_SECP192R1	 *//**< @security FIPS allowed for sig ver only. */
+/* #define USE_SECP192R1  *//**< @security FIPS allowed for sig ver only. */
 /* #define USE_SECP224R1 */
 /* #define USE_SECP256R1  *//**< @security NIST_SHALL */
 /* #define USE_SECP384R1  *//**< @security NIST_SHALL */
@@ -179,10 +179,10 @@
     SHA1 using TLS 1.2 and SHA2 based ciphersuites, and interacting
     only with newer certificates.
  */
-/* #define USE_SHA224	 *//**< @note Used only for cert signature */
+/* #define USE_SHA224         *//**< @note Used only for cert signature */
 #  define USE_SHA256/**< @note Required for TLS 1.2 and above */
 #  define USE_HMAC_SHA256
-/* #define USE_SHA384		 *//**< @pre USE_SHA512 */
+/* #define USE_SHA384         *//**< @pre USE_SHA512 */
 /* #define USE_HMAC_SHA384 */
 /* #define USE_SHA512 */
 
@@ -198,7 +198,7 @@
     @note ENABLE_MD5_SIGNED_CERTS can additionally be configured below.
  */
 /* #define USE_MD5 */
-/* #define USE_MD5SHA1		 *//* Required for < TLS 1.2 Handshake */
+/* #define USE_MD5SHA1        *//* Required for < TLS 1.2 Handshake */
 /* #define USE_HMAC_MD5 */
 
 /**
@@ -274,7 +274,7 @@
 #  ifdef USE_OCSP
 #    define USE_OCSP_RESPONSE
 #    define USE_OCSP_REQUEST
-#  elif defined(USE_X509) && defined(USE_SHA1)
+#  elif defined(USE_X509) && defined(USE_SHA1) && defined(USE_CERT_PARSE)
 /**
    Enable parsing and writing of OCSP responses. This is enough
    to support OCSP stapling.
@@ -287,15 +287,14 @@
     Various PKCS standards support
  */
 /* #define USE_PRIVATE_KEY_PARSING */
-/* #define USE_PKCS5		 *//**< v2.0 PBKDF encrypted priv keys. @pre USE_3DES */
+/* #define USE_PKCS5         *//**< v2.0 PBKDF encrypted priv keys. @pre USE_3DES */
 /**< Enable PBKDF1 in priv key PEM encryption. @pre USE_PKCS5 and @pre USE_MD5. @security Not recommended. */
 /* #define USE_PBKDF1 */
-/* #define USE_PKCS8		 *//* Alternative private key storage format */
-/* #define USE_PKCS12	 *//**< @pre USE_PKCS8 */
-/* #define USE_PKCS1_OAEP	 *//* OAEP padding algorithm */
-/* #define USE_PKCS1_PSS		 *//* PSS padding algorithm */
+/* #define USE_PKCS8          *//* Alternative private key storage format */
+/* #define USE_PKCS12         *//**< @pre USE_PKCS8 */
+/* #define USE_PKCS1_OAEP     *//* OAEP padding algorithm */
+/* #define USE_PKCS1_PSS      *//* PSS padding algorithm */
 
 #endif    /* _h_PS_CRYPTOCONFIG */
 
 /******************************************************************************/
-

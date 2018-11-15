@@ -160,12 +160,6 @@ static int32_t getImplicitBitString(psPool_t *pool, const unsigned char **pp,
                                     psSize_t len, int32_t impVal, unsigned char **bitString,
                                     psSize_t *bitLen);
 static int32_t issuedBefore(rfc_e rfc, const psX509Cert_t *cert);
-
-#  ifdef USE_RSA
-static int32_t x509ConfirmSignature(const unsigned char *sigHash,
-                                    const unsigned char *sigOut, psSize_t sigLen);
-#  endif
-
 # endif /* USE_CERT_PARSE */
 
 /******************************************************************************/
@@ -273,7 +267,7 @@ psRes_t psX509ParseCertFile(psPool_t *pool, const char *fileName,
         {
             psFreeList(fileList, pool);
             psX509FreeCert(certs);
-            psFree(pool, fileBuf);
+            psFree(fileBuf, pool);
             return rc;
         }
         psFree(fileBuf, pool);
@@ -1076,6 +1070,9 @@ static int parse_single_cert(psPool_t *pool, const unsigned char **pp,
         func_rc = PS_PARSE_FAIL;
         goto out;
     }
+
+    cert->sigHashLen = psSigAlgToHashLen(cert->sigAlgorithm);
+
     /*
       Compute the hash of the cert here for CA validation
     */
@@ -5292,33 +5289,16 @@ int32 psX509AuthenticateCert(psPool_t *pool, psX509Cert_t *subjectCert,
     void *hwCtx, void *poolUserPtr)
 {
     psX509Cert_t *ic, *sc;
-    int32 sigType, rc;
-    uint32 sigLen;
-    void *rsaData = NULL;
 
-#  ifdef USE_ECC
-    int32 sigStat;
-#  endif /* USE_ECC */
-#  ifdef USE_RSA
-    unsigned char sigOut[10 + MAX_HASH_SIZE + 9];   /* Max size */
-    unsigned char *tempSig = NULL;
-#  endif /* USE_RSA */
-    psPool_t *pkiPool = NULL;
-#   if defined(USE_PKCS1_PSS) && !defined(USE_CL_RSA)
-    psSize_t pssLen;
-#  endif
-
-    rc = 0;
-    sigLen = 0;
     if (subjectCert == NULL)
     {
         psTraceCrypto("No subject cert given to psX509AuthenticateCert\n");
         return PS_ARG_FAIL;
     }
 
-/*
-    Determine what we've been passed
- */
+    /*
+      Determine what we've been passed
+    */
     if (issuerCert == NULL)
     {
         /* reset auth flags in subjectCert chain and find first sc and ic */
@@ -5346,15 +5326,15 @@ int32 psX509AuthenticateCert(psPool_t *pool, psX509Cert_t *subjectCert,
         sc = subjectCert;
     }
 
-/*
-    Error on first problem seen and set the subject status to FAIL
- */
+    /*
+      Error on first problem seen and set the subject status to FAIL
+    */
     while (ic)
     {
-/*
-        Certificate authority constraint only available in version 3 certs.
-        Only parsing version 3 certs by default though.
- */
+        /*
+          Certificate authority constraint only available in version 3 certs.
+          Only parsing version 3 certs by default though.
+        */
         if ((ic->version > 1) && (ic->extensions.bc.cA != CA_TRUE))
         {
             if (sc != ic)
@@ -5365,9 +5345,9 @@ int32 psX509AuthenticateCert(psPool_t *pool, psX509Cert_t *subjectCert,
             }
         }
 
-/*
-        Use sha1 hash of issuer fields computed at parse time to compare
- */
+        /*
+          Use sha1 hash of issuer fields computed at parse time to compare
+        */
         if (Memcmp(sc->issuer.hash, ic->subject.hash, SHA1_HASH_SIZE) != 0)
         {
 #define ALLOW_INTERMEDIATES_AS_ROOTS
@@ -5427,261 +5407,54 @@ int32 psX509AuthenticateCert(psPool_t *pool, psX509Cert_t *subjectCert,
         }
 #  endif
 
-/*
-        Signature confirmation
-        The sigLen is the ASN.1 size in bytes for encoding the hash.
-        The magic 10 is comprised of the SEQUENCE and ALGORITHM ID overhead.
-        The magic 9, 8, or 5 is the OID length of the corresponding algorithm.
- */
-        switch (sc->sigAlgorithm)
-        {
-#  ifdef USE_RSA
-#   ifdef ENABLE_MD5_SIGNED_CERTS
-#    ifdef USE_MD2
-        case OID_MD2_RSA_SIG:
-#    endif
-        case OID_MD5_RSA_SIG:
-            sigType = RSA_TYPE_SIG;
-            sigLen = 10 + MD5_HASH_SIZE + 8;
-            break;
-#   endif
-#   ifdef ENABLE_SHA1_SIGNED_CERTS
-        case OID_SHA1_RSA_SIG:
-        case OID_SHA1_RSA_SIG2:
-            sigLen = 10 + SHA1_HASH_SIZE + 5;
-            sigType = RSA_TYPE_SIG;
-            break;
-#   endif
-#   ifdef USE_SHA224
-        case OID_SHA224_RSA_SIG:
-            sigLen = 10 + SHA224_HASH_SIZE + 9;
-            sigType = RSA_TYPE_SIG;
-            break;
-#   endif
-#   ifdef USE_SHA256
-        case OID_SHA256_RSA_SIG:
-            sigLen = 10 + SHA256_HASH_SIZE + 9;
-            sigType = RSA_TYPE_SIG;
-            break;
-#   endif
-#   ifdef USE_SHA384
-        case OID_SHA384_RSA_SIG:
-            sigLen = 10 + SHA384_HASH_SIZE + 9;
-            sigType = RSA_TYPE_SIG;
-            break;
-#   endif
-#   ifdef USE_SHA512
-        case OID_SHA512_RSA_SIG:
-            sigLen = 10 + SHA512_HASH_SIZE + 9;
-            sigType = RSA_TYPE_SIG;
-            break;
-#   endif
-#  endif    /* USE_RSA */
-#  ifdef USE_ECC
-#   ifdef ENABLE_SHA1_SIGNED_CERTS
-        case OID_SHA1_ECDSA_SIG:
-            sigLen = SHA1_HASH_SIZE;
-            sigType = ECDSA_TYPE_SIG;
-            break;
-#   endif
-#   ifdef USE_SHA224
-        case OID_SHA224_ECDSA_SIG:
-            sigLen = SHA224_HASH_SIZE;
-            sigType = ECDSA_TYPE_SIG;
-            break;
-#   endif
-#   ifdef USE_SHA256
-        case OID_SHA256_ECDSA_SIG:
-            sigLen = SHA256_HASH_SIZE;
-            sigType = ECDSA_TYPE_SIG;
-            break;
-#   endif
-#   ifdef USE_SHA384
-        case OID_SHA384_ECDSA_SIG:
-            sigLen = SHA384_HASH_SIZE;
-            sigType = ECDSA_TYPE_SIG;
-            break;
-#   endif
-#   ifdef USE_SHA512
-        case OID_SHA512_ECDSA_SIG:
-            sigLen = SHA512_HASH_SIZE;
-            sigType = ECDSA_TYPE_SIG;
-            break;
-#   endif
-#  endif    /* USE_ECC */
-#  ifdef USE_ED25519
-        case OID_ED25519_KEY_ALG:
-            sigLen = 64;
-            sigType = ED25519_TYPE_SIG;
-            break;
-#  endif
-#  ifdef USE_PKCS1_PSS
-        case OID_RSASSA_PSS:
-            switch (sc->pssHash)
-            {
-#   ifdef ENABLE_MD5_SIGNED_CERTS
-            case PKCS1_MD5_ID:
-                sigLen = MD5_HASH_SIZE;
-                break;
-#   endif
-#   ifdef ENABLE_SHA1_SIGNED_CERTS
-            case PKCS1_SHA1_ID:
-                sigLen = SHA1_HASH_SIZE;
-                break;
-#   endif
-#   ifdef USE_SHA224
-            case PKCS1_SHA224_ID:
-                sigLen = SHA224_HASH_SIZE;
-                break;
-#   endif
-#   ifdef USE_SHA256
-            case PKCS1_SHA256_ID:
-                sigLen = SHA256_HASH_SIZE;
-                break;
-#   endif
-#   ifdef USE_SHA384
-            case PKCS1_SHA384_ID:
-                sigLen = SHA384_HASH_SIZE;
-                break;
-#   endif
-#   ifdef USE_SHA512
-            case PKCS1_SHA512_ID:
-                sigLen = SHA512_HASH_SIZE;
-                break;
-#   endif
-            default:
-                return PS_UNSUPPORTED_FAIL;
-            }
-            sigType = RSAPSS_TYPE_SIG;
-            break;
-#  endif
-        default:
-            sigType = PS_UNSUPPORTED_FAIL;
-            break;
-        }
-
-        if (sigType == PS_UNSUPPORTED_FAIL)
-        {
-            sc->authStatus = PS_CERT_AUTH_FAIL_SIG;
-            psTraceIntCrypto("Unsupported certificate signature algorithm %d\n",
-                subjectCert->sigAlgorithm);
-            return sigType;
-        }
-
-#  ifdef USE_RSA
-        if (sigType == RSA_TYPE_SIG || sigType == RSAPSS_TYPE_SIG)
-        {
-        }
-        /* Now do the signature validation */
-        if (sigType == RSA_TYPE_SIG)
-        {
-            psAssert(sigLen <= sizeof(sigOut));
-/*
-            psRsaDecryptPub destroys the 'in' parameter so let it be a tmp
- */
-            tempSig = psMalloc(pool, sc->signatureLen);
-            if (tempSig == NULL)
-            {
-                psError("Memory allocation error: psX509AuthenticateCert\n");
-                return PS_MEM_FAIL;
-            }
-            Memcpy(tempSig, sc->signature, sc->signatureLen);
-
-            if ((rc = psRsaDecryptPub(pkiPool, &ic->publicKey.key.rsa,
-                     tempSig, sc->signatureLen, sigOut, sigLen, rsaData)) < 0)
-            {
-
-                psTraceCrypto("Unable to RSA decrypt certificate signature\n");
-                sc->authStatus = PS_CERT_AUTH_FAIL_SIG;
-                psFree(tempSig, pool);
-                return rc;
-            }
-            psFree(tempSig, pool);
-            rc = x509ConfirmSignature(sc->sigHash, sigOut, sigLen);
-        }
-#   if defined(USE_PKCS1_PSS) && !defined(USE_CL_RSA)
-        if (sigType == RSAPSS_TYPE_SIG)
-        {
-            tempSig = psMalloc(pool, sc->signatureLen);
-            if (tempSig == NULL)
-            {
-                psError("Memory allocation error: psX509AuthenticateCert\n");
-                return PS_MEM_FAIL;
-            }
-            pssLen = sc->signatureLen;
-            if ((rc = psRsaCrypt(pkiPool, &ic->publicKey.key.rsa,
-                     sc->signature, sc->signatureLen, tempSig, &pssLen,
-                     PS_PUBKEY, rsaData)) < 0)
-            {
-                psFree(tempSig, pool);
-                return rc;
-            }
-
-            if (psPkcs1PssDecode(pkiPool, sc->sigHash, sigLen, tempSig,
-                    pssLen, sc->saltLen, sc->pssHash, ic->publicKey.keysize * 8,
-                    &rc) < 0)
-            {
-                psFree(tempSig, pool);
-                return PS_FAILURE;
-            }
-            psFree(tempSig, pool);
-
-            if (rc == 0)
-            {
-                /* This is an indication the hash did NOT match */
-                rc = -1; /* The test below is looking for < 0 */
-            }
-        }
-#   endif /* defined(USE_PKCS1_PSS) && !defined(USE_CL_RSA)      */
-#  endif  /* USE_RSA */
-
-#  ifdef USE_ECC
-        if (sigType == ECDSA_TYPE_SIG)
-        {
-            if ((rc = psEccDsaVerify(pkiPool,
-                     &ic->publicKey.key.ecc,
-                     sc->sigHash, sigLen,
-                     sc->signature, sc->signatureLen,
-                     &sigStat, rsaData)) != 0)
-            {
-                psTraceCrypto("Error validating ECDSA certificate signature\n");
-                sc->authStatus = PS_CERT_AUTH_FAIL_SIG;
-                return rc;
-            }
-            if (sigStat == -1)
-            {
-                /* No errors, but signature didn't pass */
-                psTraceCrypto("ECDSA certificate signature failed\n");
-                rc = -1;
-            }
-        }
-#  endif /* USE_ECC */
-#  ifdef USE_ED25519
-        if (sigType == ED25519_TYPE_SIG)
+        /*
+          Try to verify the subject cert's signature using the issuer cert's
+          public key.
+        */
         {
             psRes_t res;
+            const unsigned char *tbs = sc->sigHash;
+            psSizeL_t tbsLen = sc->sigHashLen;
+            psVerifyOptions_t opts;
+            psBool_t verifyResult = PS_FALSE;
 
-            res = psEd25519Verify(sc->signature,
-                    sc->tbsCertStart,
-                    sc->tbsCertLen,
-                    ic->publicKey.key.ed25519.pub);
-            if (res != PS_SUCCESS)
+            memset(&opts, 0, sizeof(opts));
+            opts.msgIsDigestInfo = PS_TRUE;
+
+            /* Special cases: RSASSA-PSS, Ed25519 and DSA verification
+               needs some extra information. */
+# ifdef USE_PKCS1_PSS
+            if (sc->sigAlgorithm == OID_RSASSA_PSS)
             {
-                psTraceCrypto("Ed25519 certificate signature failed\n");
-                rc = -1;
+                opts.rsaPssHashAlg = sc->pssHash;
+                opts.rsaPssHashLen = psPssHashAlgToHashLen(sc->pssHash);
+                opts.rsaPssSaltLen = sc->saltLen;
+                opts.useRsaPss = PS_TRUE;
+            }
+# endif /* USE_PKCS1_PSS */
+# ifdef USE_ED25519
+            if (sc->sigAlgorithm == OID_ED25519_KEY_ALG)
+            {
+                tbs = sc->tbsCertStart;
+                tbsLen = sc->tbsCertLen;
+                opts.msgIsDigestInfo = PS_FALSE;
+            }
+# endif /* USE_ED25519 */
+            res = psVerifySig(NULL,
+                    tbs,
+                    tbsLen,
+                    sc->signature,
+                    sc->signatureLen,
+                    &ic->publicKey,
+                    sc->sigAlgorithm,
+                    &verifyResult,
+                    &opts);
+            if (res != PS_SUCCESS || verifyResult != PS_TRUE)
+            {
+                sc->authStatus = PS_CERT_AUTH_FAIL_SIG;
+                return PS_CERT_AUTH_FAIL_SIG;
             }
         }
-#  endif /* USE_ED25519 */
-
-/*
-        Test what happen in the signature test?
- */
-        if (rc < PS_SUCCESS)
-        {
-            sc->authStatus = PS_CERT_AUTH_FAIL_SIG;
-            return rc;
-        }
-
 
         /* X.509 extension tests.  Problems below here will be collected
             in flags and given to the user */
@@ -5742,6 +5515,7 @@ int32 psX509AuthenticateCert(psPool_t *pool, psX509Cert_t *subjectCert,
             will always contain the relevant information. */
         if ( !(ic->extensions.keyUsageFlags & KEY_USAGE_KEY_CERT_SIGN))
         {
+            int32 rc = 0;
             /* @security If keyUsageFlags is zero, it may not exist at all
                 in the cert. This is allowed if the cert was issued before
                 the RFC was updated to require this field for CA certificates.
@@ -5750,10 +5524,7 @@ int32 psX509AuthenticateCert(psPool_t *pool, psX509Cert_t *subjectCert,
             {
                 rc = issuedBefore(RFC_3280, ic);
             }
-            else
-            {
-                rc = 0; /* Awkward code to force the compare below */
-            }
+
             /* Iff rc == 1 we won't error */
             if (!rc)
             {
@@ -5812,125 +5583,6 @@ L_INTERMEDIATE_ROOT:
     }
     return PS_SUCCESS;
 }
-
-#  ifdef USE_RSA
-/******************************************************************************/
-/*
-    Do the signature validation for a subject certificate against a
-    known CA certificate
- */
-static int32_t x509ConfirmSignature(const unsigned char *sigHash,
-    const unsigned char *sigOut, psSize_t sigLen)
-{
-    const unsigned char *end;
-    const unsigned char *p = sigOut;
-    unsigned char hash[MAX_HASH_SIZE];
-    int32_t oi;
-    psSize_t len, plen;
-
-    end = p + sigLen;
-/*
-    DigestInfo ::= SEQUENCE {
-        digestAlgorithm DigestAlgorithmIdentifier,
-        digest Digest }
-
-    DigestAlgorithmIdentifier ::= AlgorithmIdentifier
-
-    Digest ::= OCTET STRING
- */
-    if (getAsnSequence(&p, (uint32) (end - p), &len) < 0)
-    {
-        psTraceCrypto("Initial parse error in x509ConfirmSignature\n");
-        return PS_PARSE_FAIL;
-    }
-
-    /* Could be MD5 or SHA1 */
-    if (getAsnAlgorithmIdentifier(&p, (uint32) (end - p), &oi, &plen) < 0)
-    {
-        psTraceCrypto("Algorithm ID parse error in x509ConfirmSignature\n");
-        return PS_PARSE_FAIL;
-    }
-    psAssert(plen == 0);
-    if ((*p++ != ASN_OCTET_STRING) ||
-        getAsnLength(&p, (uint32) (end - p), &len) < 0 ||
-        (uint32) (end - p) <  len)
-    {
-        psTraceCrypto("getAsnLength parse error in x509ConfirmSignature\n");
-        return PS_PARSE_FAIL;
-    }
-    Memcpy(hash, p, len);
-    switch (oi)
-    {
-#   ifdef ENABLE_MD5_SIGNED_CERTS
-#    ifdef USE_MD2
-    case OID_MD2_ALG:
-#    endif
-    case OID_MD5_ALG:
-        if (len != MD5_HASH_SIZE)
-        {
-            psTraceCrypto("MD5_HASH_SIZE error in x509ConfirmSignature\n");
-            return PS_LIMIT_FAIL;
-        }
-        break;
-#   endif
-#   ifdef ENABLE_SHA1_SIGNED_CERTS
-    case OID_SHA1_ALG:
-        if (len != SHA1_HASH_SIZE)
-        {
-            psTraceCrypto("SHA1_HASH_SIZE error in x509ConfirmSignature\n");
-            return PS_LIMIT_FAIL;
-        }
-        break;
-#   endif
-#   ifdef USE_SHA224
-    case OID_SHA224_ALG:
-        if (len != SHA224_HASH_SIZE)
-        {
-            psTraceCrypto("SHA224_HASH_SIZE error in x509ConfirmSignature\n");
-            return PS_LIMIT_FAIL;
-        }
-        break;
-#   endif
-#   ifdef USE_SHA256
-    case OID_SHA256_ALG:
-        if (len != SHA256_HASH_SIZE)
-        {
-            psTraceCrypto("SHA256_HASH_SIZE error in x509ConfirmSignature\n");
-            return PS_LIMIT_FAIL;
-        }
-        break;
-#   endif
-#   ifdef USE_SHA384
-    case OID_SHA384_ALG:
-        if (len != SHA384_HASH_SIZE)
-        {
-            psTraceCrypto("SHA384_HASH_SIZE error in x509ConfirmSignature\n");
-            return PS_LIMIT_FAIL;
-        }
-        break;
-#   endif
-#   ifdef USE_SHA512
-    case OID_SHA512_ALG:
-        if (len != SHA512_HASH_SIZE)
-        {
-            psTraceCrypto("SHA512_HASH_SIZE error in x509ConfirmSignature\n");
-            return PS_LIMIT_FAIL;
-        }
-        break;
-#   endif
-    default:
-        psTraceCrypto("Unsupported alg ID error in x509ConfirmSignature\n");
-        return PS_UNSUPPORTED_FAIL;
-    }
-    /* hash should match sigHash */
-    if (memcmpct(hash, sigHash, len) != 0)
-    {
-        psTraceCrypto("Signature failure in x509ConfirmSignature\n");
-        return PS_SIGNATURE_MISMATCH;
-    }
-    return PS_SUCCESS;
-}
-#  endif /* USE_RSA */
 
 /******************************************************************************/
 # endif /* USE_CERT_PARSE */
@@ -6951,7 +6603,7 @@ int32_t psOcspResponseValidate(psPool_t *pool, psX509Cert_t *trustedOCSP,
 {
     static psValidateOCSPResponseOptions_t vOptsDefault;
     psX509Cert_t *curr, *issuer, *subject, *ocspResIssuer;
-    psOcspSingleResponse_t *subjectResponse;
+    psOcspSingleResponse_t *subjectResponse = NULL;
     unsigned char sigOut[MAX_HASH_SIZE];
     int32 sigOutLen, sigType, index;
     psPool_t *pkiPool = NULL;
@@ -7109,7 +6761,8 @@ int32_t psOcspResponseValidate(psPool_t *pool, psX509Cert_t *trustedOCSP,
     while (index < MAX_OCSP_RESPONSES)
     {
         subjectResponse = &response->singleResponse[index];
-        if ((subject->serialNumberLen == subjectResponse->certIdSerialLen) &&
+        if ((subject->serialNumberLen > 0) &&
+            (subject->serialNumberLen == subjectResponse->certIdSerialLen) &&
             (Memcmp(subject->serialNumber, subjectResponse->certIdSerial,
                  subject->serialNumberLen) == 0))
         {

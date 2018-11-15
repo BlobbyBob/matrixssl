@@ -215,6 +215,10 @@ int32_t tls13WriteRecordHeader(ssl_t *ssl,
         if (bodyLen + 1 > TLS_1_3_MAX_INNER_PLAINTEXT_LEN)
         {
             psTraceErrr("Error: tried to encode oversized TLSInnerPlaintext.\n");
+            if (mustFreeBody)
+            {
+                psFree(body, pool);
+            }
             return PS_ARG_FAIL;
         }
         psDynBufInit(pool, &TLSInnerPlaintext, bodyLen + 1 + *padLen);
@@ -614,6 +618,8 @@ static int32_t makeHsRecord(ssl_t *ssl,
     return PS_SUCCESS;
 }
 
+#ifdef USE_SERVER_SIDE_SSL
+
 static int32 tls13WriteServerHello(ssl_t *ssl, sslBuf_t *out,
                                    psBool_t isHelloRetryRequest)
 {
@@ -877,6 +883,7 @@ static int32 tls13WriteCertificateRequest(ssl_t *ssl, sslBuf_t *out)
         return rc;
     }
 
+#  ifdef USE_IDENTITY_CERTIFICATES
     rc = tls13WriteCertificateAuthorities(ssl,
             &extBuf);
     if (rc < 0)
@@ -885,7 +892,7 @@ static int32 tls13WriteCertificateRequest(ssl_t *ssl, sslBuf_t *out)
         psDynBufUninit(&extBuf);
         return rc;
     }
-
+#  endif
     ext = psDynBufDetachPsSize(&extBuf, &extLen);
     if (ext == NULL)
     {
@@ -926,6 +933,9 @@ out_internal_error:
     return MATRIXSSL_ERROR;
 }
 
+# endif /* USE_SERVER_SIDE_SSL */
+
+# ifdef USE_IDENTITY_CERTIFICATES
 static int32 tls13WriteCertificate(ssl_t *ssl, sslBuf_t *out)
 {
     int32 rc;
@@ -983,6 +993,7 @@ static int32 tls13WriteCertificate(ssl_t *ssl, sslBuf_t *out)
         {
             for (i = 0; i < ssl->sec.keySelect.peerCertSigAlgsLen; i++)
             {
+#  ifdef USE_RSA
                 if (c->sigAlgorithm == OID_SHA256_RSA_SIG ||
                     c->sigAlgorithm == OID_SHA384_RSA_SIG ||
                     c->sigAlgorithm == OID_SHA512_RSA_SIG)
@@ -992,15 +1003,18 @@ static int32 tls13WriteCertificate(ssl_t *ssl, sslBuf_t *out)
                         break;
                     }
                 }
-                else if (c->sigAlgorithm == OID_SHA256_ECDSA_SIG ||
-                         c->sigAlgorithm == OID_SHA384_ECDSA_SIG ||
-                         c->sigAlgorithm == OID_SHA512_ECDSA_SIG)
+#  endif
+#  ifdef USE_ECC
+                if (c->sigAlgorithm == OID_SHA256_ECDSA_SIG ||
+                    c->sigAlgorithm == OID_SHA384_ECDSA_SIG ||
+                    c->sigAlgorithm == OID_SHA512_ECDSA_SIG)
                 {
                     if (tls13IsEcdsaSigAlg(ssl->sec.keySelect.peerCertSigAlgs[i]))
                     {
                         break;
                     }
                 }
+#  endif
             }
         }
         if (c == NULL || i == ssl->sec.keySelect.peerCertSigAlgsLen)
@@ -1027,6 +1041,7 @@ static int32 tls13WriteCertificate(ssl_t *ssl, sslBuf_t *out)
         extData = NULL;
         extDataLen = 0;
 
+# ifdef USE_OCSP_RESPONSE
         /* Add the OCSP status request extension, if requested.
            Only support adding the extension for our own (server) cert. */
         if (ssl->extFlags.status_request == 1 && c == ssl->chosenIdentity->cert)
@@ -1042,9 +1057,11 @@ static int32 tls13WriteCertificate(ssl_t *ssl, sslBuf_t *out)
             extData = psDynBufDetach(&extBuf, &extDataLen);
             if (extData == NULL)
             {
-                goto out_internal_error;
+                ssl->err = SSL_ALERT_INTERNAL_ERROR;
+                return MATRIXSSL_ERROR;
             }
         }
+# endif
 
         /* Extension extensions<0..2^16-1>; */
         psDynBufAppendTlsVector(&certListBuf,
@@ -1062,6 +1079,7 @@ static int32 tls13WriteCertificate(ssl_t *ssl, sslBuf_t *out)
     certList = psDynBufDetachPsSize(&certListBuf, &certListLen);
     if (certList == NULL)
     {
+        ssl->err = SSL_ALERT_INTERNAL_ERROR;
         return PS_MEM_FAIL;
     }
 
@@ -1075,6 +1093,7 @@ static int32 tls13WriteCertificate(ssl_t *ssl, sslBuf_t *out)
     certData = psDynBufDetachPsSize(&certBuf, &certDataLen);
     if (certData == NULL)
     {
+        ssl->err = SSL_ALERT_INTERNAL_ERROR;
         return PS_MEM_FAIL;
     }
 
@@ -1087,15 +1106,7 @@ static int32 tls13WriteCertificate(ssl_t *ssl, sslBuf_t *out)
             PS_TRUE,
             out);
     psFree(certData, ssl->hsPool);
-    if (rc < 0)
-    {
-        return rc;
-    }
-    return MATRIXSSL_SUCCESS;
-
-out_internal_error:
-    ssl->err = SSL_ALERT_INTERNAL_ERROR;
-    return MATRIXSSL_ERROR;
+    return rc;
 }
 
 /* Should be good for both client and server? */
@@ -1129,6 +1140,7 @@ static int32 tls13WriteCertificateVerify(ssl_t *ssl, sslBuf_t *out)
             ssl->sec.keySelect.peerSigAlgsLen);
     if (chosenSigAlg == 0 || hmacLen < 0)
     {
+        psTraceErrr("Failed to negotiate CertificateVerify sig alg\n");
         ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
         return SSL_SEND_RESPONSE;
     }
@@ -1184,6 +1196,7 @@ static int32 tls13WriteCertificateVerify(ssl_t *ssl, sslBuf_t *out)
 #ifdef TLS_1_3_VERIFY_OWN_SIG
         verifyOwnSig = PS_TRUE;
 #else
+# ifdef USE_RSA
         if (tls13IsRsaSigAlg(chosenSigAlg))
         {
             /*
@@ -1194,14 +1207,16 @@ static int32 tls13WriteCertificateVerify(ssl_t *ssl, sslBuf_t *out)
               When using crypto-cl, the self-verification has already
               been done within CL/SL (CL_HashSafeSign).
             */
-# ifndef USE_CL_RSA
+#  ifndef USE_CL_RSA
             verifyOwnSig = PS_TRUE;
-# endif
+#  endif
         }
+# endif
 #endif
 
         if (verifyOwnSig)
         {
+# ifdef USE_CERT_PARSE
             /* Verify the signature we just generated. */
             rc = tls13Verify(ssl->hsPool,
                     &ssl->chosenIdentity->cert->publicKey,
@@ -1218,6 +1233,7 @@ static int32 tls13WriteCertificateVerify(ssl_t *ssl, sslBuf_t *out)
                 psTraceErrr("Could not verify own sig!!\n");
                 return rc;
             }
+# endif
         }
 
         ssl->sec.tls13KsState.generateCvSigDone = 1;
@@ -1250,6 +1266,9 @@ static int32 tls13WriteCertificateVerify(ssl_t *ssl, sslBuf_t *out)
     return MATRIXSSL_SUCCESS;
 }
 
+# endif /* USE_IDENTITY_CERTIFICATES */
+
+# ifdef USE_CLIENT_SIDE_SSL
 static int32 tls13WriteEndOfEarlyData(ssl_t *ssl, sslBuf_t *out)
 {
     int32 rc;
@@ -1271,6 +1290,7 @@ static int32 tls13WriteEndOfEarlyData(ssl_t *ssl, sslBuf_t *out)
     }
     return PS_SUCCESS;
 }
+# endif
 
 static int32 tls13WriteFinished(ssl_t *ssl, sslBuf_t *out)
 {
@@ -1360,6 +1380,7 @@ static int32 tls13WriteFinished(ssl_t *ssl, sslBuf_t *out)
     return PS_SUCCESS;
 }
 
+# ifdef USE_SERVER_SIDE_SSL
 static
 int32_t tls13WriteNewSessionTicket(ssl_t *ssl, sslBuf_t *out)
 {
@@ -1467,6 +1488,7 @@ out_internal_error:
     ssl->err = SSL_ALERT_INTERNAL_ERROR;
     return MATRIXSSL_ERROR;
 }
+# endif /* USE_SERVER_SIDE_SSL */
 
 /* Estimate buffer size needed for the next flight we are going
    to send. */
@@ -1512,15 +1534,15 @@ void tls13ClearHsTemporaryState(ssl_t *ssl)
 static inline
 psBool_t clientKeyShareOk(ssl_t *ssl)
 {
-    if (ssl->sec.eccKeyPub != NULL ||
-# ifdef USE_DH
-            ssl->sec.dhKeyPub != NULL ||
+# ifdef USE_ECC
+    if (ssl->sec.eccKeyPub != NULL) return PS_TRUE;
 # endif
-            ssl->sec.x25519KeyPub != NULL)
-    {
-        return PS_TRUE;
-    }
-
+# ifdef USE_DH
+    if (ssl->sec.dhKeyPub != NULL)  return PS_TRUE;
+# endif
+# ifdef USE_X25519
+    if (ssl->sec.x25519KeyPub != NULL) return PS_TRUE;
+# endif
     return PS_FALSE;
 }
 
@@ -1742,6 +1764,7 @@ int32_t tls13EncodeResponseServer(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
                "Servers which are authenticating with a PSK MUST NOT send
                the CertificateRequest in the main handshake."
             */
+#  ifdef USE_SERVER_SIDE_SSL
             if (ssl->flags & SSL_FLAGS_CLIENT_AUTH)
             {
                 rc = tls13WriteCertificateRequest(ssl, out);
@@ -1750,6 +1773,8 @@ int32_t tls13EncodeResponseServer(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
                     return rc;
                 }
             }
+#  endif
+#  ifdef USE_IDENTITY_CERTIFICATES
             rc = tls13WriteCertificate(ssl, out);
             if (rc < 0)
             {
@@ -1760,6 +1785,7 @@ int32_t tls13EncodeResponseServer(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
             {
                 return rc;
             }
+#  endif
         }
         rc = tls13WriteFinished(ssl, out);
         if (rc < 0)
@@ -1853,6 +1879,7 @@ int32 tls13EncodeResponseClient(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
                  return rc;
             }
         }
+#  ifdef USE_IDENTITY_CERTIFICATES
         /* In the client side the only way we know about peer signature
            algorithms is that we have received CertificateRequest. Respond
            to that here */
@@ -1872,6 +1899,7 @@ int32 tls13EncodeResponseClient(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
                 }
             }
         }
+#  endif
         rc = tls13WriteFinished(ssl, out);
         if (rc < 0)
         {
@@ -1917,24 +1945,19 @@ int32 tls13EncodeResponse(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
 
 void tls13ResetState(ssl_t *ssl)
 {
-    Memset(ssl->tls13PeerSupportedVersions,
-            0, sizeof(ssl->tls13PeerSupportedVersions));
-    ssl->tls13PeerSupportedVersionsLen = 0;
-    ssl->tls13NegotiatedMinorVer = 0;
+    Memset(ssl->peerSupportedVersionsPriority,
+            0, sizeof(ssl->peerSupportedVersionsPriority));
+    ssl->peerSupportedVersionsPriorityLen = 0;
     ssl->tls13ServerEarlyDataEnabled = PS_FALSE;
+# ifdef USE_IDENTITY_CERTIFICATES
     Memset(ssl->sec.keySelect.peerSigAlgs,
             0, sizeof(ssl->sec.keySelect.peerSigAlgs));
     ssl->sec.keySelect.peerSigAlgsLen = 0;
     Memset(ssl->sec.keySelect.peerCertSigAlgs,
             0, sizeof(ssl->sec.keySelect.peerCertSigAlgs));
     ssl->sec.keySelect.peerCertSigAlgsLen = 0;
-    ssl->flags &= ~(SSL_FLAGS_TLS_1_3 |
-            SSL_FLAGS_TLS_1_3_DRAFT_22 |
-            SSL_FLAGS_TLS_1_3_DRAFT_23 |
-            SSL_FLAGS_TLS_1_3_DRAFT_24 |
-            SSL_FLAGS_TLS_1_3_DRAFT_26 |
-            SSL_FLAGS_TLS_1_3_DRAFT_28);
-    ssl->flags &= ~SSL_FLAGS_TLS_1_3_NEGOTIATED;
+# endif
+    RESET_ACTV_VER(ssl);
     Memset(ssl->sec.seq, 0, sizeof(ssl->sec.seq));
     Memset(ssl->sec.remSeq, 0, sizeof(ssl->sec.remSeq));
 }
@@ -2018,7 +2041,10 @@ int32_t tls13EncryptMessage(ssl_t *ssl,
             /* This was actually a HelloRetryRequest.
                Now we need to start over and negotiate TLS 1.3 anew. */
             tls13ResetState(ssl);
-            /* Return to the <1.3 code path. */
+            /* Return to the <1.3 code path. We must do this because:
+               1) we wish to start version negotiation from scratch
+               2) we have no TLS 1.3-specific ClientHello parsing function.
+            */
             ssl->hsState = SSL_HS_CLIENT_HELLO;
         }
         else
@@ -2265,6 +2291,7 @@ int32_t tls13EncodeAlert(ssl_t *ssl,
     return MATRIXSSL_SUCCESS;
 }
 
+# ifdef USE_CLIENT_SIDE_SSL
 static int32_t tls13SetUpClientEarlyData(ssl_t *ssl)
 {
     int32_t rc;
@@ -2356,6 +2383,7 @@ int32 tls13WriteClientHello(ssl_t *ssl, sslBuf_t *out,
     /* ProtocolVersion legacy_version == 0x0303 */
     psDynBufAppendByte(&chBuf, TLS_MAJ_VER);
     psDynBufAppendByte(&chBuf, TLS_1_2_MIN_VER);
+    ssl->ourHelloVersion = v_tls_1_2;
 
     if (ssl->sec.tls13KsState.generateRandomDone == 0)
     {
@@ -2508,4 +2536,6 @@ out_internal_error:
     ssl->err = SSL_ALERT_INTERNAL_ERROR;
     return MATRIXSSL_ERROR;
 }
+
+# endif /* USE_CLIENT_SIDE_SSL */
 #endif /* USE_TLS_1_3 */

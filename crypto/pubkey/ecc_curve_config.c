@@ -72,6 +72,7 @@ void userSuppliedEccList(unsigned char *curveList, uint8_t *len, uint32_t curves
     const psEccCurve_t *curve;
     uint8_t listLen = 0;
 
+# ifdef USE_SECP521R1
     if (curves & IS_SECP521R1)
     {
         if (getEccParamById(IANA_SECP521R1, &curve) == 0)
@@ -83,6 +84,8 @@ void userSuppliedEccList(unsigned char *curveList, uint8_t *len, uint32_t curves
             }
         }
     }
+# endif
+# ifdef USE_BRAIN512R1
     if (curves & IS_BRAIN512R1)
     {
         if (getEccParamById(IANA_BRAIN512R1, &curve) == 0)
@@ -94,6 +97,8 @@ void userSuppliedEccList(unsigned char *curveList, uint8_t *len, uint32_t curves
             }
         }
     }
+# endif
+# ifdef USE_SECP384R1
     if (curves & IS_SECP384R1)
     {
         if (getEccParamById(IANA_SECP384R1, &curve) == 0)
@@ -105,6 +110,8 @@ void userSuppliedEccList(unsigned char *curveList, uint8_t *len, uint32_t curves
             }
         }
     }
+# endif
+# ifdef USE_BRAIN384R1
     if (curves & IS_BRAIN384R1)
     {
         if (getEccParamById(IANA_BRAIN384R1, &curve) == 0)
@@ -116,6 +123,8 @@ void userSuppliedEccList(unsigned char *curveList, uint8_t *len, uint32_t curves
             }
         }
     }
+# endif
+# ifdef USE_SECP256R1
     if (curves & IS_SECP256R1)
     {
         if (getEccParamById(IANA_SECP256R1, &curve) == 0)
@@ -127,6 +136,8 @@ void userSuppliedEccList(unsigned char *curveList, uint8_t *len, uint32_t curves
             }
         }
     }
+# endif
+# ifdef USE_BRAIN256R1
     if (curves & IS_BRAIN256R1)
     {
         if (getEccParamById(IANA_BRAIN256R1, &curve) == 0)
@@ -138,6 +149,8 @@ void userSuppliedEccList(unsigned char *curveList, uint8_t *len, uint32_t curves
             }
         }
     }
+# endif
+# ifdef USE_SECP224R1
     if (curves & IS_SECP224R1)
     {
         if (getEccParamById(IANA_SECP224R1, &curve) == 0)
@@ -149,6 +162,8 @@ void userSuppliedEccList(unsigned char *curveList, uint8_t *len, uint32_t curves
             }
         }
     }
+# endif
+# ifdef USE_BRAIN224R1
     if (curves & IS_BRAIN224R1)
     {
         if (getEccParamById(IANA_BRAIN224R1, &curve) == 0)
@@ -160,6 +175,8 @@ void userSuppliedEccList(unsigned char *curveList, uint8_t *len, uint32_t curves
             }
         }
     }
+# endif
+# ifdef USE_SECP192R1
     if (curves & IS_SECP192R1)
     {
         if (getEccParamById(IANA_SECP192R1, &curve) == 0)
@@ -171,6 +188,7 @@ void userSuppliedEccList(unsigned char *curveList, uint8_t *len, uint32_t curves
             }
         }
     }
+# endif
 
     *len = listLen;
 }

@@ -243,7 +243,7 @@ int32_t psDhGenKeyParams(psPool_t *pool, const psDhParams_t *params,
     else
     {
         return psDhGenKeyIntsSize(pool, params->size, &params->p,
-                                  &params->g, params->x_bitlen, key, usrData);
+                                  &params->g, params->x_bitlen/8, key, usrData);
     }
 }
 

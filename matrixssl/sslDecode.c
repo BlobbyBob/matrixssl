@@ -59,6 +59,227 @@ static int32 addCompressCount(ssl_t *ssl, int32 padLen);
 # define MATRIX_INFLATE_FINISHED_OH  128
 #endif
 
+static inline
+psResSize_t parseSslv2RecordHdr(ssl_t *ssl,
+        unsigned char *c)
+{
+#if defined(USE_INTERCEPTOR) || defined(ALLOW_SSLV2_CLIENT_HELLO_PARSE)
+    ssl->rec.type = SSL_RECORD_TYPE_HANDSHAKE;
+    ssl->rec.majVer = 2;
+    ssl->rec.minVer = 0;
+    ssl->rec.len = (*c & 0x7f) << 8; c++;
+    ssl->rec.len += *c;
+    return PS_SUCCESS;
+#else
+    /* OpenSSL 0.9.8 will send a SSLv2 CLIENT_HELLO.  Use the -no_ssl2
+       option when running a 0.9.8 client to prevent this */
+    ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
+    psTraceErrr("SSLv2 records not supported\n");
+    return MATRIXSSL_ERROR;
+#endif
+}
+
+static inline
+psRes_t validateRecordHdrType(ssl_t *ssl)
+{
+    switch (ssl->rec.type)
+    {
+    case SSL_RECORD_TYPE_CHANGE_CIPHER_SPEC:
+    case SSL_RECORD_TYPE_ALERT:
+    case SSL_RECORD_TYPE_HANDSHAKE:
+    case SSL_RECORD_TYPE_APPLICATION_DATA:
+        break;
+    /* Any other case is unrecognized */
+    default:
+        ssl->err = SSL_ALERT_UNEXPECTED_MESSAGE;
+        psTraceErrr("Invalid record header type\n");
+        psTraceIntInfo("Record header type not valid: %d\n", ssl->rec.type);
+        return MATRIXSSL_ERROR;
+    }
+
+    return MATRIXSSL_SUCCESS;
+}
+
+static inline
+psRes_t validateRecordHdrVersion(ssl_t *ssl)
+{
+    psProtocolVersion_t recordVer;
+    psBool_t ok = PS_TRUE;
+
+    recordVer = psVerFromEncodingMajMin(ssl->rec.majVer, ssl->rec.minVer);
+    if (recordVer == v_undefined)
+    {
+        psTraceErrr("Unrecognized record header version\n");
+        goto out_fail;
+    }
+
+    /* If we have negotiated a protocol version, check that the
+       record header version matches the version we have negotiated.
+       However, if we are using TLS 1.3, the record header version
+       number MUST be ignored. Also do not perform the check for
+       ClientHellos, as the these could be renegotation ClientHellos
+       or DTLS' 2nd ClientHellos, both of which require version
+       negotiation to be performed anew. */
+    if (ssl->hsState != SSL_HS_CLIENT_HELLO &&
+            VersionNegotiationComplete(ssl))
+    {
+        if (!NGTD_VER(ssl, v_tls_1_3_any) &&
+                !NGTD_VER(ssl, recordVer))
+        {
+            ok = PS_FALSE;
+        }
+    }
+# ifdef USE_DTLS
+    else
+    {
+        if (recordVer & v_dtls_any)
+        {
+            if (!SUPP_VER(ssl, v_dtls_any))
+            {
+                psTraceErrr("Received a DTLS record, but DTLS not enabled\n");
+                goto out_fail;
+            }
+            /* Set this as the active version now, so that we are able to
+               decode using the correct format. Support for this version
+               will be checked later. */
+            if (!ACTV_VER(ssl, v_dtls_any))
+            {
+                SET_ACTV_VER(ssl, recordVer);
+            }
+        }
+    }
+# endif
+
+    if (ok)
+    {
+        return MATRIXSSL_SUCCESS;
+    }
+    else
+    {
+#ifdef SSL_REHANDSHAKES_ENABLED
+            /*
+              If in DONE state and this version doesn't match the previously
+              negotiated one that can be OK because a CLIENT_HELLO for a
+              rehandshake might be acting like a first time send and using
+              a lower version to get to the parsing phase.  Unsupported
+              versions will be weeded out at CLIENT_HELLO parse time.
+            */
+            if (ssl->hsState != SSL_HS_DONE ||
+                ssl->rec.type != SSL_RECORD_TYPE_HANDSHAKE)
+            {
+                goto out_fail_mismatch;
+            }
+#else
+            goto out_fail_mismatch;
+#endif
+    }
+
+out_fail_mismatch:
+    psTraceErrr("Record header version does not match negotiated\n");
+
+out_fail:
+    ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
+    psTracePrintProtocolVersionNew(INDENT_ERROR,
+            "Unexpected version",
+            recordVer,
+            PS_TRUE);
+    ssl->err = SSL_ALERT_PROTOCOL_VERSION;
+    return MATRIXSSL_ERROR;
+}
+
+static inline
+psRes_t validateRecordHdrLen(ssl_t *ssl)
+{
+    /*
+      Verify max and min record lengths
+    */
+    if (ssl->rec.len > SSL_MAX_RECORD_LEN || ssl->rec.len == 0)
+    {
+        ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
+        psTraceErrr("Invalid record header length\n");
+        psTraceIntInfo("Record header length not valid: %d\n", ssl->rec.len);
+        return MATRIXSSL_ERROR;
+    }
+
+    return MATRIXSSL_SUCCESS;
+}
+
+/** Parse and validate a record header.
+    Returns the number of bytes parsed or < 0 on error. */
+static inline
+psResSize_t handleRecordHdr(ssl_t *ssl,
+        unsigned char *c,
+        unsigned char *end,
+        uint32_t *requiredLen,
+        int32 *error)
+{
+    unsigned char *orig_c = c;
+    psRes_t res;
+
+    if ((*c & 0x80) && (GET_NGTD_VER(ssl) == v_undefined))
+    {
+        res = parseSslv2RecordHdr(ssl, c);
+        if (res < 0)
+        {
+            return res;
+        }
+        c += 2;
+    }
+
+    psAssert(ssl->recordHeadLen == SSL3_HEADER_LEN ||
+            ssl->recordHeadLen == DTLS_HEADER_LEN);
+
+    if (end - c < ssl->recordHeadLen)
+    {
+        *requiredLen = ssl->recordHeadLen;
+        return SSL_PARTIAL;
+    }
+
+    /*
+      Parse and validate the record header. The type must be valid,
+      the major and minor versions must match the negotiated versions
+      (if we're past ClientHello) and the length must be < 16K and > 0
+    */
+    ssl->rec.type = *c; c++;
+    res = validateRecordHdrType(ssl);
+    if (res != MATRIXSSL_SUCCESS)
+    {
+        return res;
+    }
+
+    ssl->rec.majVer = *c; c++;
+    ssl->rec.minVer = *c; c++;
+    res = validateRecordHdrVersion(ssl);
+    if (res != MATRIXSSL_SUCCESS)
+    {
+        return res;
+    }
+
+#ifdef USE_DTLS
+    if (ACTV_VER(ssl, v_dtls_any))
+    {
+        ssl->rec.epoch[0] = *c++;
+        ssl->rec.epoch[1] = *c++;
+        ssl->rec.rsn[0] = *c++;
+        ssl->rec.rsn[1] = *c++;
+        ssl->rec.rsn[2] = *c++;
+        ssl->rec.rsn[3] = *c++;
+        ssl->rec.rsn[4] = *c++;
+        ssl->rec.rsn[5] = *c++;
+    }
+#endif
+
+    ssl->rec.len = *c << 8; c++;
+    ssl->rec.len += *c++;
+    res = validateRecordHdrLen(ssl);
+    if (res != MATRIXSSL_SUCCESS)
+    {
+        return res;
+    }
+
+    return (c - orig_c);
+}
+
 /******************************************************************************/
 /*
     Parse incoming data per http://wp.netscape.com/eng/ssl3
@@ -135,6 +356,7 @@ int32 matrixSslDecode(ssl_t *ssl, unsigned char **buf, uint32 *len,
 #ifdef USE_TLS_1_3
     psBool_t useOutbufForResponse = PS_FALSE;
 #endif
+
 /*
     If we've had a protocol error, don't allow further use of the session
  */
@@ -179,8 +401,7 @@ int32 matrixSslDecode(ssl_t *ssl, unsigned char **buf, uint32 *len,
               entire ServerHello. Without this check, we could fail for
               an obscure reason, such as the ServerHello not containing
               renegotiation_info extension if the client sent it.*/
-            if (ssl->supportedVersionsLen > 0
-                    && !anyNonTls13VersionSupported(ssl))
+            if (!SUPP_VER(ssl, v_tls_legacy))
             {
                 psTraceErrr("Server tried to downgrade to an earlier" \
                         " version, but we only support TLS 1.3\n");
@@ -191,12 +412,6 @@ int32 matrixSslDecode(ssl_t *ssl, unsigned char **buf, uint32 *len,
         }
         /*
           Pre-TLS 1.3 version negotiated.*/
-        ssl->flags &= ~(SSL_FLAGS_TLS_1_3 |
-                SSL_FLAGS_TLS_1_3_DRAFT_22 |
-                SSL_FLAGS_TLS_1_3_DRAFT_23 |
-                SSL_FLAGS_TLS_1_3_DRAFT_24 |
-                SSL_FLAGS_TLS_1_3_DRAFT_26 |
-                SSL_FLAGS_TLS_1_3_DRAFT_28);
     }
 #endif /* USE_TLS_1_3 */
 
@@ -217,6 +432,7 @@ int32 matrixSslDecode(ssl_t *ssl, unsigned char **buf, uint32 *len,
         goto encodeResponse;
     }
 #endif /* USE_EXT_CLIENT_CERT_KEY_LOADING */
+
 # ifdef USE_EXT_CERTIFICATE_VERIFY_SIGNING
     if (ssl->hwflags & SSL_HWFLAGS_PENDING_PKA_W ||
         ssl->hwflags & SSL_HWFLAGS_PENDING_FLIGHT_W)
@@ -300,140 +516,18 @@ decodeMore:
     }
 #endif /* USE_CERT_CHAIN_PARSING */
 
-    if (ssl->majVer != 0 || (*c & 0x80) == 0)
+    /* Parse and validate the record header. */
+    rc = handleRecordHdr(ssl, c, end, requiredLen, error);
+    if (rc < 0)
     {
-        if (end - c < ssl->recordHeadLen)
+        if (ssl->err != SSL_ALERT_NONE)
         {
-            *requiredLen = ssl->recordHeadLen;
-            return SSL_PARTIAL;
-        }
-        ssl->rec.type = *c; c++;
-        ssl->rec.majVer = *c; c++;
-        ssl->rec.minVer = *c; c++;
-#ifdef USE_DTLS
-        if (ssl->flags & SSL_FLAGS_DTLS)
-        {
-            if (ssl->rec.majVer == DTLS_MAJ_VER &&
-                ssl->rec.minVer >= DTLS_1_2_MIN_VER)
-            {
-                ssl->rec.epoch[0] = *c++;
-                ssl->rec.epoch[1] = *c++;
-                ssl->rec.rsn[0] = *c++;
-                ssl->rec.rsn[1] = *c++;
-                ssl->rec.rsn[2] = *c++;
-                ssl->rec.rsn[3] = *c++;
-                ssl->rec.rsn[4] = *c++;
-                ssl->rec.rsn[5] = *c++;
-            }
-            else
-            {
-                psTraceIntDtls("Expecting DTLS record version. Got %d\n",
-                    ssl->rec.majVer);
-                *error = PS_PROTOCOL_FAIL;
-                return MATRIXSSL_ERROR;
-            }
-        }
-        else   /* Note: The else branch (not DTLS) is below,
-                  in code outside USE_DTLS */
-#endif /* USE_DTLS */
-#ifndef USE_SSL_PROTOCOL_VERSIONS_OTHER_THAN_3
-        {
-            /* RFC 5246 Suggests to accept all RSA minor versions,
-               but only major version 0x03 (SSLv3, TLS 1.0,
-               TLS 1.1, TLS 1.2, TLS 1.3 etc) */
-            if (ssl->rec.majVer != 0x03)
-            {
-                /* Consider invalid major version protocol
-                   version error. */
-                ssl->err = SSL_ALERT_PROTOCOL_VERSION;
-                //*error = PS_PROTOCOL_FAIL;
-                psTraceErrr(
-                    "Won't support client's SSL major version. (or maybe decode unexpected data)\n");
-                *error = PS_PROTOCOL_FAIL;
-                return MATRIXSSL_ERROR;
-            }
-        }
-#else
-        { } /* No check for rec.MajVer. */
-#endif /* USE_SSL_PROTOCOL_VERSIONS_OTHER_THAN_3 */
-
-        ssl->rec.len = *c << 8; c++;
-        ssl->rec.len += *c; c++;
-    }
-    else
-    {
-#if defined(USE_INTERCEPTOR) || defined(ALLOW_SSLV2_CLIENT_HELLO_PARSE)
-        ssl->rec.type = SSL_RECORD_TYPE_HANDSHAKE;
-        ssl->rec.majVer = 2;
-        ssl->rec.minVer = 0;
-        ssl->rec.len = (*c & 0x7f) << 8; c++;
-        ssl->rec.len += *c; c++;
-#else
-        /* OpenSSL 0.9.8 will send a SSLv2 CLIENT_HELLO.  Use the -no_ssl2
-            option when running a 0.9.8 client to prevent this */
-        ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-        psTraceErrr("SSLv2 records not supported\n");
-        goto encodeResponse;
-#endif
-    }
-
-/*
-    Validate the various record headers.  The type must be valid,
-    the major and minor versions must match the negotiated versions (if we're
-    past ClientHello) and the length must be < 16K and > 0
- */
-    switch (ssl->rec.type)
-    {
-    case SSL_RECORD_TYPE_CHANGE_CIPHER_SPEC:
-    case SSL_RECORD_TYPE_ALERT:
-    case SSL_RECORD_TYPE_HANDSHAKE:
-    case SSL_RECORD_TYPE_APPLICATION_DATA:
-        break;
-    /* Any other case is unrecognized */
-    default:
-        ssl->err = SSL_ALERT_UNEXPECTED_MESSAGE;
-        psTraceIntInfo("Record header type not valid: %d\n", ssl->rec.type);
-        goto encodeResponse;
-    }
-
-/*
-    Verify the record version numbers unless this is the first record we're
-    reading.
- */
-    if (ssl->hsState != SSL_HS_SERVER_HELLO &&
-        ssl->hsState != SSL_HS_CLIENT_HELLO)
-    {
-        if (ssl->rec.majVer != ssl->majVer || ssl->rec.minVer != ssl->minVer)
-        {
-#ifdef SSL_REHANDSHAKES_ENABLED
-            /* If in DONE state and this version doesn't match the previously
-                negotiated one that can be OK because a CLIENT_HELLO for a
-                rehandshake might be acting like a first time send and using
-                a lower version to get to the parsing phase.  Unsupported
-                versions will be weeded out at CLIENT_HELLO parse time */
-            if (ssl->hsState != SSL_HS_DONE ||
-                ssl->rec.type != SSL_RECORD_TYPE_HANDSHAKE)
-            {
-                ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-                psTraceErrr("Record header version not valid\n");
-                goto encodeResponse;
-            }
-#else
-            ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-            psTraceErrr("Record header version not valid\n");
             goto encodeResponse;
-#endif
         }
+        return rc;
     }
-/*
-    Verify max and min record lengths
- */
-    if (ssl->rec.len > SSL_MAX_RECORD_LEN || ssl->rec.len == 0)
-    {
-        ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-        psTraceIntInfo("Record header length not valid: %d\n", ssl->rec.len);
-        goto encodeResponse;
-    }
+    c += rc; /* handleRecordHdr returns number of bytes parsed. */
+
 /*
     This implementation requires the entire SSL record to be in the 'in' buffer
     before we parse it.  This is because we need to MAC the entire record before
@@ -570,7 +664,7 @@ SKIP_RECORD_PARSE:
     if (end - c < ssl->rec.len)
     {
 # ifdef USE_DTLS
-        if (ssl->flags & SSL_FLAGS_DTLS)
+        if (ACTV_VER(ssl, v_dtls_any))
         {
             psTraceErrr("DTLS error: Received PARTIAL record from peer.\n");
             psTraceErrr("This indicates a PMTU mismatch\n");
@@ -585,7 +679,7 @@ SKIP_RECORD_PARSE:
 #endif
 
 #ifdef USE_DTLS
-    if (ssl->flags & SSL_FLAGS_DTLS)
+    if (ACTV_VER(ssl, v_dtls_any))
     {
 
         /* Epoch and RSN validation. Silently ignore most mismatches (SUCCESS) */
@@ -753,7 +847,7 @@ ADVANCE_TO_APP_DATA:
         !(ssl->flags & SSL_FLAGS_AEAD_R))
     {
 #ifdef USE_TLS_1_1
-        if (ssl->flags & SSL_FLAGS_TLS_1_1)
+        if (ACTV_VER(ssl, v_tls_explicit_iv))
         {
             if (ssl->rec.len < (ssl->deMacSize + 1 + ssl->deBlockSize))
             {
@@ -876,8 +970,7 @@ ADVANCE_TO_APP_DATA:
             SSL3.0 requires the pad length to be less than blockSize
             TLS can have a pad length up to 255 for obfuscating the data len
  */
-            if (ssl->majVer == SSL3_MAJ_VER && ssl->minVer == SSL3_MIN_VER &&
-                padLen >= ssl->deBlockSize)
+            if (ACTV_VER(ssl, v_ssl_3_0) && padLen >= ssl->deBlockSize)
             {
                 macError = 1;
             }
@@ -885,7 +978,7 @@ ADVANCE_TO_APP_DATA:
             The minimum record length is the size of the mac, plus pad bytes
             plus one length byte, plus explicit IV if TLS 1.1 or above
  */
-            if (ssl->flags & SSL_FLAGS_TLS_1_1)
+            if (ACTV_VER(ssl, v_tls_explicit_iv))
             {
                 if (ssl->rec.len < ssl->deMacSize + padLen + 1 + ssl->deBlockSize)
                 {
@@ -924,8 +1017,7 @@ ADVANCE_TO_APP_DATA:
             (We're just overloading the 'mac' ptr here, this has nothing to
             do with real MAC.)
  */
-            if (!macError && ssl->majVer == TLS_MAJ_VER &&
-                ssl->minVer >= TLS_MIN_VER)
+            if (!macError && !ACTV_VER(ssl, v_ssl_3_0))
             {
                 for (mac = p - padLen - 1; mac < p; mac++)
                 {
@@ -994,7 +1086,7 @@ ADVANCE_TO_APP_DATA:
         Clear the mac in the callers buffer if we're successful
  */
 #ifdef USE_TLS_1_1
-        if ((ssl->flags & SSL_FLAGS_TLS_1_1) && (ssl->deBlockSize > 1))
+        if (ACTV_VER(ssl, v_tls_explicit_iv) && (ssl->deBlockSize > 1))
         {
             decryptedStart += ssl->deBlockSize; /* skip explicit IV */
         }
@@ -1277,7 +1369,7 @@ ADVANCE_TO_APP_DATA:
         }
 
 #ifdef USE_DTLS
-        if (ssl->flags & SSL_FLAGS_DTLS)
+        if (ACTV_VER(ssl, v_dtls_any))
         {
             if (ssl->hsState != SSL_HS_FINISHED)
             {
@@ -1918,7 +2010,7 @@ static int32 addCompressCount(ssl_t *ssl, int32 padLen)
     len = ssl->rec.len;
 
 # ifdef USE_TLS_1_1
-    if (ssl->flags & SSL_FLAGS_TLS_1_1)
+    if (ACTV_VER(ssl, v_tls_explicit_iv))
     {
         len -= ssl->deBlockSize; /* skip explicit IV */
     }
@@ -2017,7 +2109,7 @@ static int32 parseSSLHandshake(ssl_t *ssl, char *inbuf, uint32 len)
 #ifdef USE_DTLS
     msn = 0;
     /* This is the non-DTLS fragmentation handler */
-    if (!(ssl->flags & SSL_FLAGS_DTLS))
+    if (!(ACTV_VER(ssl, v_dtls_any)))
     {
 #endif
     if (ssl->fragMessage != NULL)
@@ -2098,7 +2190,7 @@ parseHandshake:
     are the ones that may bypass us to the wrong handshake type.  Duplicates
     are handled below.
  */
-    if (ssl->flags & SSL_FLAGS_DTLS)
+    if (ACTV_VER(ssl, v_dtls_any))
     {
         if (end - c < 5)
         {
@@ -2183,7 +2275,7 @@ parseHandshake:
             hsLen += *c << 8; c++;
             hsLen += *c; c++;
 #ifdef USE_DTLS
-            if (ssl->flags & SSL_FLAGS_DTLS)
+            if (ACTV_VER(ssl, v_dtls_any))
             {
                 if (end - c < 8)
                 {
@@ -2293,7 +2385,7 @@ parseHandshake:
 /*
         DTLS inserts an optional VERIFY_REQUEST back to clients
  */
-        if (ssl->flags & SSL_FLAGS_DTLS)
+        if (ACTV_VER(ssl, v_dtls_any))
         {
 # ifdef USE_CLIENT_SIDE_SSL
             if ((hsType == SSL_HS_HELLO_VERIFY_REQUEST) &&
@@ -2407,7 +2499,7 @@ hsStateDetermined:
         hsLen += *c << 8; c++;
         hsLen += *c; c++;
 #ifdef USE_DTLS
-        if (ssl->flags & SSL_FLAGS_DTLS)
+        if (ACTV_VER(ssl, v_dtls_any))
         {
             if (end - c < 8)
             {
@@ -2554,7 +2646,7 @@ hsStateDetermined:
             }
         }
 #ifdef USE_DTLS
-        if (ssl->flags & SSL_FLAGS_DTLS)
+        if (ACTV_VER(ssl, v_dtls_any))
         {
             if (ssl->fragTotal > 0)
             {
@@ -3009,7 +3101,7 @@ SKIP_HSHEADER_PARSE:
     }
 
 #ifdef USE_DTLS
-    if (ssl->flags & SSL_FLAGS_DTLS)
+    if (ACTV_VER(ssl, v_dtls_any))
     {
         ssl->lastMsn = msn; /* MSN of last message sucessfully parsed */
     }

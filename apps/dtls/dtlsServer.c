@@ -868,6 +868,10 @@ int main(int argc, char **argv)
             {
                 Memset(&options, 0x0, sizeof(sslSessOpts_t));
                 options.versionFlag = SSL_FLAGS_DTLS;
+                if (COMPILED_IN_VER(v_dtls_1_2))
+                {
+                    options.versionFlag |= SSL_FLAGS_TLS_1_2;
+                }
                 options.truncHmac = -1;
 
                 if (matrixSslNewServerSession(&ssl, keys,

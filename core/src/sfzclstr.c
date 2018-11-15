@@ -118,6 +118,8 @@ sfzcl_str_realloc(SfzclStr str, size_t new_length)
                 L_DEBUG(LF_TOTAL_PROGRESS,
                     "Failed to convert charset %u (%u bit chars).",
                     str->charset, str->bits);
+                SPAL_Memory_Free(newp);
+                newp = NULL;
                 break;
             }
         }

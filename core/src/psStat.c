@@ -143,12 +143,18 @@ psStatCompByteSeqResult_t psStatCompByteSeq(const unsigned char *a,
     res.lcss_freq = num_longest_match_runs;
 
     res.num_match_runs = num_match_runs;
-    res.avg_match_run_len = (int)((double)sum_match_runs /
-            (double)num_match_runs);
+    if (num_match_runs > 0)
+        res.avg_match_run_len = (int)((double)sum_match_runs /
+                (double)num_match_runs);
+    else
+        res.avg_match_run_len = 0;
 
     res.num_diff_runs = num_diff_runs;
-    res.avg_diff_run_len = (int)((double)sum_diff_runs /
-            (double)num_diff_runs);
+    if (num_diff_runs > 0)
+        res.avg_diff_run_len = (int)((double)sum_diff_runs /
+                (double)num_diff_runs);
+    else
+        res.avg_diff_run_len = 0;
 
     res.filled = 1;
 

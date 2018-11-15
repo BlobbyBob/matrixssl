@@ -40,7 +40,7 @@ int sign_verify_test1(psEccKey_t *privKey,
     if (psEccDsaVerify(pool, pubKey,
                        in, sizeof(in),
                        buffer + 2, *buffer_size_result_p - 2,
-                       &validateStatus, NULL) < 0 || validateStatus != 1)
+                       &validateStatus, NULL) < 0)
     {
         printf("Operation failed: Ecc Verify\n");
         return 2;

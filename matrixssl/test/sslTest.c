@@ -670,6 +670,10 @@ const static __THREAD testCipherSpec_t ciphers[] = {
     CS(TLS_DHE_RSA_WITH_AES_256_CBC_SHA256),
 # endif
 
+# ifdef USE_TLS_DHE_RSA_WITH_AES_256_GCM_SHA384
+    CS(TLS_DHE_RSA_WITH_AES_256_GCM_SHA384),
+# endif
+
 # ifdef USE_SSL_DHE_RSA_WITH_3DES_EDE_CBC_SHA
     CS(SSL_DHE_RSA_WITH_3DES_EDE_CBC_SHA),
 # endif
@@ -849,7 +853,7 @@ void *sslTestPt(void *mustBeNull)
 
 int main(int argc, char **argv)
 {
-    int rc, num_threads;
+    int rc, num_threads = 0;
 #   ifdef USE_MULTITHREADING
     int i;
     pthread_t thread[FLPS_SSL_TEST_MAX_THREADS];
@@ -1445,7 +1449,7 @@ L_NEXT_DH:
 
 # if defined(SSL_REHANDSHAKES_ENABLED) && !defined(USE_ZLIB_COMPRESSION)
 #   ifdef DISABLE_DTLS_CLIENT_CHANGE_CIPHER_FROM_GCM_TO_GCM
-            if (clnConn->ssl->flags & SSL_FLAGS_DTLS &&
+        if (NGTD_VER(clnConn->ssl, v_dtls_any) &&
                 clnConn->ssl->cipher->flags & CRYPTO_FLAGS_GCM &&
                 spec->flags & CRYPTO_FLAGS_GCM)
             {
@@ -1573,7 +1577,7 @@ skip_client_initiated_rehandshake:
  */
             testTrace(" Resumed Re-handshake test (client initiated)\n");
 #   ifdef DISABLE_DTLS_CLIENT_CHANGE_CIPHER_FROM_GCM_TO_GCM
-            if (clnConn->ssl->flags & SSL_FLAGS_DTLS &&
+            if (NGTD_VER(clnConn->ssl, v_dtls_any) &&
                 clnConn->ssl->cipher->flags & CRYPTO_FLAGS_GCM &&
                 spec->flags & CRYPTO_FLAGS_GCM)
             {
@@ -1667,7 +1671,7 @@ skip_client_initiated_resumed_rehandshake:
             /* Re-handshaking with "upgraded" parameters */
             testTrace(" Change cert callback Re-handshake test\n");
 #   ifdef DISABLE_DTLS_CLIENT_CHANGE_CIPHER_FROM_GCM_TO_GCM
-            if (clnConn->ssl->flags & SSL_FLAGS_DTLS &&
+            if (NGTD_VER(clnConn->ssl, v_dtls_any) &&
                 clnConn->ssl->cipher->flags & CRYPTO_FLAGS_GCM &&
                 spec->flags & CRYPTO_FLAGS_GCM)
             {
@@ -1740,7 +1744,7 @@ skip_client_upgrade_parameters_rehandshake:
             {
                 testTrace("     Change cipher suite Re-handshake test\n");
 #   ifdef DISABLE_DTLS_CLIENT_CHANGE_CIPHER_FROM_GCM_TO_GCM
-                if (clnConn->ssl->flags & SSL_FLAGS_DTLS &&
+                if (NGTD_VER(clnConn->ssl, v_dtls_any) &&
                     clnConn->ssl->cipher->flags & CRYPTO_FLAGS_GCM &&
                     spec->flags & CRYPTO_FLAGS_GCM)
                 {
@@ -2096,7 +2100,7 @@ static int32 initializeResumedHandshake(sslConn_t *clnConn, sslConn_t *svrConn,
 {
     sslSessionId_t *sessionId;
     sslSessOpts_t options;
-
+    int32_t rc;
 #  ifdef ENABLE_PERF_TIMING
     psTime_t start, end;
 #  endif /* ENABLE_PERF_TIMING */
@@ -2105,6 +2109,7 @@ static int32 initializeResumedHandshake(sslConn_t *clnConn, sslConn_t *svrConn,
 
     Memset(&options, 0x0, sizeof(sslSessOpts_t));
     options.versionFlag = g_versionFlag;
+
 #  ifdef USE_ECC_CIPHER_SUITE
     options.ecFlags = clnConn->ssl->ecInfo.ecFlags;
 #  endif
@@ -2121,10 +2126,17 @@ static int32 initializeResumedHandshake(sslConn_t *clnConn, sslConn_t *svrConn,
 #  ifdef USE_EXT_CERTIFICATE_VERIFY_SIGNING
     options.useExtCvSigOp = 1;
 #  endif /* USE_EXT_CERTIFICATE_VERIFY_SIGNING */
-    if (matrixSslNewClientSession(&clnConn->ssl, clnConn->keys, sessionId,
-            &cipherSuite, 1, clnCertChecker, "localhost", NULL, NULL,
-            &options)
-        < 0)
+    rc = matrixSslNewClientSession(&clnConn->ssl,
+            clnConn->keys,
+            sessionId,
+            &cipherSuite,
+            1,
+            clnCertChecker,
+            "localhost",
+            NULL,
+            NULL,
+            &options);
+    if (rc < 0)
     {
         return PS_FAILURE;
     }
@@ -2140,8 +2152,11 @@ static int32 initializeResumedHandshake(sslConn_t *clnConn, sslConn_t *svrConn,
     psGetTime(&start, NULL);
 #  endif /* ENABLE_PERF_TIMING */
 #  ifdef USE_SERVER_SIDE_SSL
-    if (matrixSslNewServerSession(&svrConn->ssl, svrConn->keys, NULL,
-            &options) < 0)
+    rc = matrixSslNewServerSession(&svrConn->ssl,
+            svrConn->keys,
+            NULL,
+            &options);
+    if (rc < 0)
     {
         return PS_FAILURE;
     }
@@ -2276,7 +2291,7 @@ static int32 performHandshake(sslConn_t *sendingSide, sslConn_t *receivingSide)
     psGetTime(&start, NULL);
 # endif /* ENABLE_PERF_TIMING */
 # ifdef USE_DTLS
-    if (sendingSide->ssl->flags & SSL_FLAGS_DTLS)
+    if (NGTD_VER(sendingSide->ssl, v_dtls_any))
     {
         outbufLen = matrixDtlsGetOutdata(sendingSide->ssl, &outbuf);
     }
@@ -2321,7 +2336,7 @@ static int32 performHandshake(sslConn_t *sendingSide, sslConn_t *receivingSide)
     psGetTime(&start, NULL);
 # endif /* ENABLE_PERF_TIMING */
 # ifdef USE_DTLS
-    if (sendingSide->ssl->flags & SSL_FLAGS_DTLS)
+    if (NGTD_VER(sendingSide->ssl, v_dtls_any))
     {
         matrixDtlsSentData(sendingSide->ssl, dataSent);
     }
@@ -2502,7 +2517,7 @@ static int32_t throughputTest(sslConn_t *s, sslConn_t *r, uint16_t nrec, psSize_
 #  endif
 
 #  ifdef USE_DTLS
-    if (s->ssl->flags & SSL_FLAGS_DTLS)
+    if (NGTD_VER(s->ssl, v_dtls_any))
     {
         return PS_SUCCESS;
     }
@@ -2709,7 +2724,7 @@ static int32 exchangeAppData(sslConn_t *sendingSide,
 
 SEND_MORE:
 # ifdef USE_DTLS
-    if (sendingSide->ssl->flags & SSL_FLAGS_DTLS)
+    if (NGTD_VER(sendingSide->ssl, v_dtls_any))
     {
         writeBufLen = matrixDtlsGetOutdata(sendingSide->ssl, &writeBuf);
     }
@@ -2741,7 +2756,7 @@ SEND_MORE:
 
     /* Now update the sending side that data has been "sent" */
 # ifdef USE_DTLS
-    if (sendingSide->ssl->flags & SSL_FLAGS_DTLS)
+    if (NGTD_VER(sendingSide->ssl, v_dtls_any))
     {
         sentRc = matrixDtlsSentData(sendingSide->ssl, dataSent);
     }

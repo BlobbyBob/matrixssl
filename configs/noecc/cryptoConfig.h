@@ -44,7 +44,7 @@
 /* #define USE_CRYPTO_TRACE */
 
 #  ifdef DEBUG
-/* #define CRYPTO_ASSERT	 *//**< Extra sanity asserts */
+/* #define CRYPTO_ASSERT     *//**< Extra sanity asserts */
 #  endif
 
 /******************************************************************************/
@@ -179,7 +179,7 @@
     SHA1 using TLS 1.2 and SHA2 based ciphersuites, and interacting
     only with newer certificates.
  */
-/* #define USE_SHA224	 *//**< @note Used only for cert signature */
+/* #define USE_SHA224         *//**< @note Used only for cert signature */
 #  define USE_SHA256/**< @note Required for TLS 1.2 and above */
 #  define USE_HMAC_SHA256
 #  define USE_SHA384/**< @pre USE_SHA512 */
@@ -274,7 +274,7 @@
 #  ifdef USE_OCSP
 #    define USE_OCSP_RESPONSE
 #    define USE_OCSP_REQUEST
-#  elif defined(USE_X509) && defined(USE_SHA1)
+#  elif defined(USE_X509) && defined(USE_SHA1) && defined(USE_CERT_PARSE)
 /**
    Enable parsing and writing of OCSP responses. This is enough
    to support OCSP stapling.
@@ -298,4 +298,3 @@
 #endif    /* _h_PS_CRYPTOCONFIG */
 
 /******************************************************************************/
-

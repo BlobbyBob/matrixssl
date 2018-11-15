@@ -10,8 +10,10 @@ ifeq '$(CCARCH)' ''
 # some versions of GCC)
 CCARCH:=$(shell $(CLEAN_ENV) $(CC) -dumpmachine)
 
+ARM_ARCH ?= armv7-a
+
 ifeq '$(CCARCH)' ''
-$(error Unable to determine compiler architecture.
+$(error Unable to determine compiler architecture.)
 $(CC) $(CFLAGS_ARCHITECTURE_VARIANT) $(FLAGS_ARCHITECTURE_VARIANT) -print-multiarch or $(CC) -v or $(CC) -dumpmachine does not work. Please, provide CCARCH manually via an environment variable.)
 endif
 endif

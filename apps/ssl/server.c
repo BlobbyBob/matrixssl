@@ -116,8 +116,8 @@ static int g_require_client_auth;
 static DLListEntry g_conns;
 static int32 g_exitFlag;
 static int g_port;
-static int g_min_version;
-static int g_max_version;
+static psProtocolVersion_t g_min_version;
+static psProtocolVersion_t g_max_version;
 static int g_use_default_versions;
 static int g_disabledCiphers;
 static uint16_t g_disabledCipher[SSL_MAX_DISABLED_CIPHERS];
@@ -274,9 +274,10 @@ void SNIcallback(void *ssl, char *hostname, int32 hostnameLen,
 int32 setProtocolVersions(sslSessOpts_t *options)
 {
     psList_t *supportedVersion;
-    int32_t supportedVersions[TLS_MAX_SUPPORTED_VERSIONS] = {0};
+    psProtocolVersion_t supportedVersions[TLS_MAX_SUPPORTED_VERSIONS] = {0};
     psSize_t i;
     int32 rc;
+
     if (g_supportedVersionsList)
     {
         supportedVersion = g_supportedVersionsList;
@@ -284,6 +285,7 @@ int32 setProtocolVersions(sslSessOpts_t *options)
         while (supportedVersion)
         {
             supportedVersions[i] = atoi((char* )supportedVersion->item);
+            supportedVersions[i] = DIGIT_TO_VER(supportedVersions[i]);
             supportedVersion = supportedVersion->next;
             i++;
         }
@@ -481,6 +483,7 @@ static int32 selectLoop(sslKeys_t *keys, SOCKET lfd)
                 if (rc < 0)
                 {
                     Printf("matrixSslSessOptsSetKeyExGroups failed\n");
+                    close(fd);
                     return rc;
                 }
             }
@@ -500,6 +503,7 @@ static int32 selectLoop(sslKeys_t *keys, SOCKET lfd)
                 if (rc < 0)
                 {
                     Printf("matrixSslSessOptsSetSigAlgsCert failed\n");
+                    close(fd);
                     return rc;
                 }
             }
@@ -514,6 +518,7 @@ static int32 selectLoop(sslKeys_t *keys, SOCKET lfd)
                     if (sigAlgs[i] == 0)
                     {
                         Printf("Invalid signature algorithm parameter\n");
+                        close(fd);
                         return PS_ARG_FAIL;
                     }
                     sigAlg = sigAlg->next;
@@ -525,6 +530,7 @@ static int32 selectLoop(sslKeys_t *keys, SOCKET lfd)
                 if (rc < 0)
                 {
                     Printf("matrixSslSessOptsSetSigAlgs failed\n");
+                    close(fd);
                     return rc;
                 }
             }
@@ -1149,9 +1155,10 @@ static int32_t parse_cipher_list(char *cipherListString,
    encountered OR a request for help is seen (i.e. '-h' option). */
 static int32 process_cmd_options(int32 argc, char **argv)
 {
-    int optionChar, str_len, version, numCiphers;
+    int optionChar, str_len, numCiphers;
     char *cipherListString;
     psList_t *versionRangeList;
+    psProtocolVersion_t version;
 
     /* Start with all options zeroized. */
     Memset(g_keyfilePath, 0, MAX_KEYFILE_PATH);
@@ -1163,7 +1170,7 @@ static int32 process_cmd_options(int32 argc, char **argv)
     Memset(g_password, 0, MAX_PASSWORD_LEN);
 
     g_port = HTTPS_PORT;
-    g_min_version = g_max_version = 3;
+    g_min_version = g_max_version = v_tls_1_2;
     g_disabledCiphers = 0;
 
     opterr = 0;
@@ -1330,7 +1337,7 @@ static int32 process_cmd_options(int32 argc, char **argv)
 
         case 'v':
             /* Single version. */
-            version = atoi(optarg);
+            version = DIGIT_TO_VER(atoi(optarg));
             if (!matrixSslTlsVersionRangeSupported(version,
                             version))
             {
@@ -1346,10 +1353,11 @@ static int32 process_cmd_options(int32 argc, char **argv)
             {
                 Printf("Invalid version range string: %s\n",
                         optarg);
+                psFreeList(versionRangeList, NULL);
                 return -1;
             }
-            g_min_version = atoi((char *)versionRangeList->item);
-            g_max_version = atoi((char *)versionRangeList->next->item);
+            g_min_version = DIGIT_TO_VER(atoi((char *)versionRangeList->item));
+            g_max_version = DIGIT_TO_VER(atoi((char *)versionRangeList->next->item));
             psFreeList(versionRangeList, NULL);
             if (!matrixSslTlsVersionRangeSupported(g_min_version,
                             g_max_version))
@@ -1447,6 +1455,7 @@ int32 main(int32 argc, char **argv)
 
     if (0 != process_cmd_options(argc, argv))
     {
+        matrixSslDeleteKeys(keys);
         usage();
         return 0;
     }
@@ -1467,6 +1476,7 @@ int32 main(int32 argc, char **argv)
         || psGetPrngLocked(sessTicketName, sizeof(sessTicketName), NULL) < 0)
     {
         psTrace("Error generating session ticket encryption key\n");
+        matrixSslDeleteKeys(keys);
         return EXIT_FAILURE;
     }
     if (matrixSslLoadSessionTicketKeys(keys, sessTicketName,

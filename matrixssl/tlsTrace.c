@@ -139,10 +139,12 @@ void tlsTraceErrorIndent(psSize_t indentLevel,
     /* srcFile:srcLine as a suffix (if errorMsg does not contain newline)
        or on a separate line (otherwise) has the benefit that then the actual
        errorMsg lines up nicely with previous messages that have the same
-       indentLevel. */
+       indentLevel.
+       Add 1 space before and after parenthesis to allow file:line to be
+       easily copied from terminal window. */
     tlsTraceIndent(indentLevel, errorMsg);
-    tlsTraceStr(" (%s:", srcFile);
-    tlsTraceInt("%d)\n", srcLine);
+    tlsTraceStr(" ( %s:", srcFile);
+    tlsTraceInt("%d )\n", srcLine);
 # else
     tlsTraceIndent(indentLevel, srcFile);
     tlsTraceInt(":%d ", srcLine);
@@ -355,7 +357,7 @@ void psPrintHsMessageCreate(ssl_t *ssl, unsigned char hsMsgType)
     {
         tlsTrace("<<< Client creating ");
     }
-    if (NEGOTIATED_TLS_1_3(ssl))
+    if (NGTD_VER(ssl, v_tls_1_3_any))
     {
         tlsTrace("TLS 1.3 ");
     }
@@ -370,7 +372,7 @@ psBool_t isTls13ClientHello(ssl_t *ssl, unsigned char hsMsgType)
     {
         return PS_FALSE;
     }
-    if (NEGOTIATED_TLS_1_3(ssl))
+    if (NGTD_VER(ssl, v_tls_1_3_any))
     {
         return PS_TRUE;
     }
@@ -395,7 +397,7 @@ void psPrintHsMessageParse(ssl_t *ssl, unsigned char hsMsgType)
     {
         tlsTrace(">>> Client parsing ");
     }
-    if (NEGOTIATED_TLS_1_3(ssl) ||
+    if (NGTD_VER(ssl, v_tls_1_3_any) ||
             isTls13ClientHello(ssl, hsMsgType))
     {
         tlsTrace("TLS 1.3 ");
@@ -449,7 +451,7 @@ void psPrintExtensionParse(ssl_t *ssl, uint16_t extType)
     {
         tlsTrace(">>>  Client parsing ");
     }
-    if (NEGOTIATED_TLS_1_3(ssl))
+    if (NGTD_VER(ssl, v_tls_1_3_any))
     {
         tlsTrace("TLS 1.3 ");
     }
@@ -662,10 +664,14 @@ void psPrintTls13SigAlgList(psSize_t indentLevel,
     tlsTrace("\n");
 }
 
-void psPrintProtocolVersion(psSize_t indentLevel,
+void psPrintVer(psProtocolVersion_t ver)
+{
+    tlsTrace(VER_TO_STR(VER_GET_RAW(ver)));
+}
+
+void psPrintProtocolVersionNew(psSize_t indentLevel,
         const char *where,
-        unsigned char majVer,
-        unsigned char minVer,
+        psProtocolVersion_t ver,
         psBool_t addNewline)
 {
     tlsTraceIndent(indentLevel, NULL);
@@ -675,58 +681,60 @@ void psPrintProtocolVersion(psSize_t indentLevel,
         tlsTraceStr("%s: ", where);
     }
 
-    if (majVer == TLS_MAJ_VER)
+    psPrintVer(ver);
+
+    if (addNewline)
     {
-        if (minVer == TLS_1_3_MIN_VER)
-        {
-           tlsTrace("TLS 1.3");
-        }
-        else if (minVer == TLS_1_2_MIN_VER)
-        {
-           tlsTrace("TLS 1.2");
-        }
-        else if (minVer == TLS_1_1_MIN_VER)
-        {
-           tlsTrace("TLS 1.1");
-        }
-        else if (minVer == TLS_1_0_MIN_VER)
-        {
-           tlsTrace("TLS 1.0");
-        }
-        else if (minVer == SSL3_MIN_VER)
-        {
-           tlsTrace("SSL 3.0");
-        }
-        else
-        {
-            tlsTraceInt("Unsupported TLS minor version: %d", minVer);
-        }
+        tlsTrace("\n");
     }
-    else if (majVer == TLS_1_3_DRAFT_MAJ_VER)
+}
+
+void psPrintProtocolVersionNewWithAttribs(psSize_t indentLevel,
+        const char *where,
+        psProtocolVersion_t ver,
+        psBool_t addNewline)
+{
+    const char *str;
+
+    tlsTraceIndent(indentLevel, NULL);
+
+    if (where)
     {
-        tlsTraceInt("TLS 1.3 draft %d", minVer);
+        tlsTraceStr("%s: ", where);
     }
-# ifdef USE_DTLS
-    else if (majVer == DTLS_MAJ_VER)
+
+    str = VER_TO_STR(VER_GET_RAW(ver));
+    tlsTrace(str);
+
+    if (ver & v_tls_negotiated)
     {
-        if (minVer == DTLS_1_2_MIN_VER)
-        {
-           tlsTrace("DTLS 1.2");
-        }
-        else if (minVer == DTLS_MIN_VER)
-        {
-           tlsTrace("DTLS 1.0");
-        }
-        else
-        {
-            tlsTraceInt("Unsupported DTLS minor version: %d", minVer);
-        }
+        tlsTrace(" (negotiated)");
     }
-# endif /* USE_DTLS */
-    else
+    if (addNewline)
     {
-        tlsTraceInt("Unsupported major version: %d", majVer);
+        tlsTrace("\n");
     }
+}
+
+void psPrintProtocolVersion(psSize_t indentLevel,
+        const char *where,
+        unsigned char majVer,
+        unsigned char minVer,
+        psBool_t addNewline)
+{
+    uint32_t ver;
+    const char *str;
+
+    tlsTraceIndent(indentLevel, NULL);
+
+    if (where)
+    {
+        tlsTraceStr("%s: ", where);
+    }
+
+    ver = (majVer << 8) | minVer;
+    str = ENCODED_VER_TO_STR(ver);
+    tlsTrace(str);
 
     if (addNewline)
     {
@@ -741,38 +749,27 @@ void psPrintNegotiatedProtocolVersion(psSize_t indentLevel,
         ssl_t *ssl,
         psBool_t addNewline)
 {
-    uint8_t selectedMajVer, selectedMinVer;
+    psProtocolVersion_t ver;
 
-    selectedMajVer = ssl->majVer;
-    selectedMinVer = ssl->minVer;
-
-# ifdef USE_TLS_1_3
-    if (USING_TLS_1_3(ssl))
+    ver = GET_ACTV_VER(ssl);
+    if (!NGTD(ssl))
     {
-        selectedMajVer = TLS_MAJ_VER;
-        if (ssl->tls13NegotiatedMinorVer > TLS_1_3_MIN_VER)
-        {
-            selectedMajVer = TLS_1_3_DRAFT_MAJ_VER;
-        }
-        selectedMinVer = ssl->tls13NegotiatedMinorVer;
+        ver = v_undefined;
     }
-# endif
 
-    psTracePrintProtocolVersion(indentLevel,
+    psTracePrintProtocolVersionNew(indentLevel,
             where,
-            selectedMajVer,
-            selectedMinVer,
+            ver,
             PS_TRUE);
 }
 
 void psPrintVersionsList(psSize_t indentLevel,
         const char *where,
-        uint16_t *list,
+        psProtocolVersion_t *list,
         psSize_t listLen,
         psBool_t addNewline)
 {
     psSize_t i;
-    unsigned char min, maj;
 
     tlsTraceIndent(indentLevel, NULL);
 
@@ -784,18 +781,17 @@ void psPrintVersionsList(psSize_t indentLevel,
 
     for (i = 0; i < listLen; i++)
     {
-        maj = list[i] >> 8;
-        min = list[i] & 0xff;
-
-        if (maj == 0 && min == 0)
+        if (list[i] == 0)
         {
             /* Array is 0-terminated. */
             break;
         }
         else
         {
-            psPrintProtocolVersion(indentLevel,
-                    NULL, maj, min, PS_TRUE);
+            psPrintProtocolVersionNew(indentLevel,
+                    NULL,
+                    list[i],
+                    PS_TRUE);
         }
     }
 
@@ -814,10 +810,10 @@ void psPrintSupportedVersionsList(psSize_t indentLevel,
     if (peer)
     {
 # ifdef USE_TLS_1_3
-        return psPrintVersionsList(indentLevel,
+        psPrintVersionsList(indentLevel,
                 where,
-                ssl->tls13PeerSupportedVersions,
-                ssl->tls13PeerSupportedVersionsLen,
+                ssl->peerSupportedVersionsPriority,
+                ssl->peerSupportedVersionsPriorityLen,
                 addNewline);
 # else
         tlsTrace("psPrintSupportedVersionsList error: " \
@@ -827,44 +823,11 @@ void psPrintSupportedVersionsList(psSize_t indentLevel,
     }
     else
     {
-        return psPrintVersionsList(indentLevel,
+        psPrintVersionsList(indentLevel,
                 where,
-                ssl->supportedVersions,
-                ssl->supportedVersionsLen,
+                ssl->supportedVersionsPriority,
+                ssl->supportedVersionsPriorityLen,
                 addNewline);
-    }
-}
-
-void psPrintVersionsList32(psSize_t indentLevel,
-        const char *where,
-        int32_t *list,
-        psSize_t listLen,
-        psBool_t addNewline)
-{
-    psSize_t i;
-    uint16_t ver;
-
-    tlsTraceIndent(indentLevel, NULL);
-
-    if (where)
-    {
-        tlsTraceStr("%s :\n", where);
-        indentLevel++;
-    }
-
-    for (i = 0; i < listLen; i++)
-    {
-        ver = tlsMinVerToOfficialVer(list[i]);
-        psPrintProtocolVersion(indentLevel,
-                NULL,
-                (ver >> 8) & 0xff,
-                ver & 0xff,
-                PS_TRUE);
-    }
-
-    if (addNewline)
-    {
-        tlsTrace("\n");
     }
 }
 
@@ -1584,6 +1547,9 @@ void psPrintCiphersuiteName(psSize_t indentLevel,
     case TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384:
         tlsTrace("TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384");
         break;
+    case TLS_DHE_RSA_WITH_AES_256_GCM_SHA384:
+        tlsTrace("TLS_DHE_RSA_WITH_AES_256_GCM_SHA384");
+        break;
     case TLS_ECDH_RSA_WITH_AES_128_CBC_SHA:
         tlsTrace("TLS_ECDH_RSA_WITH_AES_128_CBC_SHA");
         break;
@@ -1767,34 +1733,62 @@ void psPrintPubKeyTypeAndSize(ssl_t *ssl,
         tlsTrace("Ed25519\n");
         break;
     default:
-        tlsTrace("Unknown/unsupported key type\n");
+        tlsTraceInt("Unknown/unsupported key type: %hhu\n", authKey->type);
     }
+}
+
+static
+void psPrintPubKeyTypeAndSizeRaw(ssl_t *ssl,
+        uint8_t keyType,
+        psSize_t keyNBits,
+        psBool_t eccIsEcdh)
+{
+    switch(keyType)
+    {
+    case PS_RSA:
+        tlsTrace("RSA");
+        break;
+    case PS_ECC:
+        if (eccIsEcdh)
+        {
+            tlsTrace("ECDHE");
+        }
+        else
+        {
+            tlsTrace("ECDSA");
+        }
+        if (keyNBits == 528)
+        {
+            keyNBits = 521; /* Kludge. */
+        }
+        break;
+    case PS_DH:
+        tlsTrace("DHE");
+        break;
+    case PS_DSA:
+        tlsTrace("DSA\n");
+        break;
+    case PS_X25519:
+        tlsTrace("X25519\n");
+        break;
+    case PS_ED25519:
+        tlsTrace("Ed25519\n");
+        break;
+    default:
+        tlsTraceInt("Unknown/unsupported key type: %hhu", keyType);
+    }
+
+    tlsTraceInt(" (%hu-bit)\n", keyNBits);
 }
 
 /* Print out information about a completed handshake. */
 void matrixSslPrintHSDetails(ssl_t *ssl)
 {
-    uint16_t majVer, minVer;
-
     if (ssl->hsState == SSL_HS_DONE)
     {
-        majVer = ssl->majVer;
-        minVer = ssl->minVer;
-
         tlsTrace("\n");
-# ifdef USE_TLS_1_3
-        if (ssl->flags & SSL_FLAGS_TLS_1_3_NEGOTIATED)
-        {
-            majVer = TLS_MAJ_VER;
-            minVer = ssl->tls13NegotiatedMinorVer;
-            if (minVer > TLS_1_3_MIN_VER)
-            {
-                majVer = TLS_1_3_DRAFT_MAJ_VER;
-            }
-        }
-# endif /* USE_TLS_1_3 */
-        psTracePrintProtocolVersion(INDENT_CONN_ESTABLISHED,
-                NULL, majVer, minVer, 0);
+        psTracePrintProtocolVersionNew(INDENT_CONN_ESTABLISHED,
+                NULL, GET_ACTV_VER(ssl), PS_FALSE);
         tlsTrace(" connection established: ");
         psTracePrintCiphersuiteName(INDENT_CONN_ESTABLISHED,
                 NULL, ssl->cipher->ident, PS_TRUE);
@@ -1815,9 +1809,8 @@ void matrixSslPrintHSDetails(ssl_t *ssl)
         {
             tlsTrace("  New session\n");
         }
-
 # ifdef USE_TLS_1_3
-        if (ssl->flags & SSL_FLAGS_TLS_1_3_NEGOTIATED)
+        if (NGTD_VER(ssl, v_tls_1_3_any))
         {
 
             if (ssl->sec.tls13UsingPsk)
@@ -1847,6 +1840,7 @@ void matrixSslPrintHSDetails(ssl_t *ssl)
             }
             if (!ssl->sec.tls13UsingPsk)
             {
+#  ifndef USE_ONLY_PSK_CIPHER_SUITE
                 if (ssl->sec.tls13CvSigAlg != 0)
                 {
                     if (IS_SERVER(ssl))
@@ -1886,6 +1880,7 @@ void matrixSslPrintHSDetails(ssl_t *ssl)
                             NULL,
                             ssl->sec.tls13PeerCvSigAlg,
                             PS_TRUE);
+#   ifdef USE_CERT_PARSE
                     if (IS_SERVER(ssl))
                     {
                         tlsTrace("  Client key: ");
@@ -1896,6 +1891,7 @@ void matrixSslPrintHSDetails(ssl_t *ssl)
                     }
                     psTracePrintPubKeyTypeAndSize(ssl,
                             &ssl->sec.cert->publicKey);
+#   endif /* USE_CERT_PARSE */
                 }
                 else
                 {
@@ -1903,6 +1899,72 @@ void matrixSslPrintHSDetails(ssl_t *ssl)
                     {
                         tlsTrace("  No client authentication\n");
                     }
+                }
+#  endif /* USE_ONLY_PSK_CIPHER_SUITE */
+            }
+        } /* endif(TLS 1.3) */
+# endif
+# ifndef USE_ONLY_PSK_CIPHERSUITE
+        if (!NGTD_VER(ssl, v_tls_1_3_any))
+        {
+            if (ssl->flags & SSL_FLAGS_CLIENT_AUTH)
+            {
+                tlsTrace("  Client authenticated\n");
+            }
+            else
+            {
+                tlsTrace("  No client authentication\n");
+            }
+            if (IS_SERVER(ssl))
+            {
+                if (ssl->keys && ssl->chosenIdentity)
+                {
+                    tlsTrace("  Server key: ");
+                    psTracePrintPubKeyTypeAndSize(ssl,
+                            &ssl->chosenIdentity->privKey);
+                }
+                if (ssl->flags & SSL_FLAGS_CLIENT_AUTH)
+                {
+                    tlsTrace("  Client key: ");
+                    psPrintPubKeyTypeAndSizeRaw(ssl,
+                            ssl->peerAuthKeyType,
+                            ssl->peerAuthKeyNBits,
+                            PS_FALSE);
+                }
+            }
+            else /* We are client. */
+            {
+                if ((ssl->flags & SSL_FLAGS_CLIENT_AUTH) && ssl->chosenIdentity)
+                {
+                    tlsTrace("  Client key: ");
+                    psTracePrintPubKeyTypeAndSize(ssl,
+                            &ssl->chosenIdentity->privKey);
+                }
+                tlsTrace("  Server key: ");
+                psPrintPubKeyTypeAndSizeRaw(ssl,
+                        ssl->peerAuthKeyType,
+                        ssl->peerAuthKeyNBits,
+                        PS_FALSE);
+            }
+            tlsTrace("  Key exchange: ");
+            if (ssl->flags & SSL_FLAGS_PSK_CIPHER)
+            {
+                tlsTrace("PSK\n");
+            }
+            else
+            {
+                /* We are not using PSK and we only filled
+                   ssl->peerKeyExKeyType if we used (EC)DH. */
+                if (ssl->peerKeyExKeyType == 0)
+                {
+                    tlsTrace("RSA key transport\n");
+                }
+                else
+                {
+                    psPrintPubKeyTypeAndSizeRaw(ssl,
+                            ssl->peerKeyExKeyType,
+                            ssl->peerKeyExKeyNBits,
+                            PS_TRUE);
                 }
             }
         }

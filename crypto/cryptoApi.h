@@ -625,6 +625,57 @@ PSPUBLIC void psHmacSha384Final(psHmacSha384_t * ctx,
                                 unsigned char hash[SHA384_HASHLEN]);
 # endif
 
+#  ifdef USE_PEM_DECODE
+typedef enum {
+    PEM_TYPE_ANY = 0,
+    PEM_TYPE_KEY,
+    PEM_TYPE_PRIVATE_KEY,
+    PEM_TYPE_PUBLIC_KEY,
+    PEM_TYPE_CERTIFICATE
+} psPemType_t;
+
+
+PSPUBLIC int32_t
+psPemFileToDer(psPool_t *pool,
+        const char *fileName,
+        const char *password,
+        psPemType_t expectedPemType,
+        unsigned char **derOut,
+        psSizeL_t *derOutLen);
+
+PSPUBLIC psBool_t
+psPemCheckOk(const unsigned char *pemBuf,
+        psSizeL_t pemBufLen,
+        psPemType_t pemType,
+        char **startp,
+        char **endp,
+        psSizeL_t *pemlen);
+
+PSPUBLIC int32_t
+psPemDecode(psPool_t *pool,
+        const unsigned char *pemBufIn,
+        psSizeL_t pemBufLen,
+        const char *password,
+        unsigned char **out,
+        psSizeL_t *outlen);
+
+PSPUBLIC psRes_t
+psPemCertBufToList(psPool_t *pool,
+        const unsigned char *buf,
+        psSizeL_t len,
+        psList_t **x509certList);
+
+PSPUBLIC int32_t
+psPemTryDecode(psPool_t *pool,
+        const unsigned char *in,
+        psSizeL_t inLen,
+        psPemType_t pemType,
+        const char *password,
+        unsigned char **out,
+        psSizeL_t *outlen);
+
+#  endif /* USE_PEM_DECODE */
+
 /******************************************************************************/
 /*
     Private Key Parsing
@@ -675,58 +726,8 @@ PSPUBLIC void psPkcs5Pbkdf2(unsigned char *password, uint32 pLen,
 /*
     Public Key Cryptography
  */
-# if defined(USE_RSA) || defined(USE_ECC) || defined(USE_DH)
 
-typedef enum {
-    PEM_TYPE_ANY = 0,
-    PEM_TYPE_KEY,
-    PEM_TYPE_PRIVATE_KEY,
-    PEM_TYPE_PUBLIC_KEY,
-    PEM_TYPE_CERTIFICATE
-} psPemType_t;
-
-#  ifdef USE_PEM_DECODE
-
-PSPUBLIC int32_t
-psPemFileToDer(psPool_t *pool,
-        const char *fileName,
-        const char *password,
-        psPemType_t expectedPemType,
-        unsigned char **derOut,
-        psSizeL_t *derOutLen);
-
-PSPUBLIC psBool_t
-psPemCheckOk(const unsigned char *pemBuf,
-        psSizeL_t pemBufLen,
-        psPemType_t pemType,
-        char **startp,
-        char **endp,
-        psSizeL_t *pemlen);
-
-PSPUBLIC int32_t
-psPemDecode(psPool_t *pool,
-        const unsigned char *pemBufIn,
-        psSizeL_t pemBufLen,
-        const char *password,
-        unsigned char **out,
-        psSizeL_t *outlen);
-
-PSPUBLIC psRes_t
-psPemCertBufToList(psPool_t *pool,
-        const unsigned char *buf,
-        psSizeL_t len,
-        psList_t **x509certList);
-#  endif /* USE_PEM_DECODE */
-
-PSPUBLIC int32_t
-psPemTryDecode(psPool_t *pool,
-        const unsigned char *in,
-        psSizeL_t inLen,
-        psPemType_t pemType,
-        const char *password,
-        unsigned char **out,
-        psSizeL_t *outlen);
-
+# if defined(USE_RSA) || defined(USE_ECC) || defined(USE_DH) || defined(USE_X25519) || defined(USE_ED25519)
 PSPUBLIC int32_t psInitPubKey(psPool_t *pool, psPubKey_t *key, uint8_t type);
 PSPUBLIC void psClearPubKey(psPubKey_t *key);
 PSPUBLIC int32_t psNewPubKey(psPool_t *pool, uint8_t type, psPubKey_t **key);
@@ -1190,6 +1191,17 @@ PSPUBLIC psBool_t psIsEcdheGroup(uint16_t namedGroup);
 PSPUBLIC uint16_t psGetNamedGroupId(const char *name);
 /** Map TLS specification's signature_algorithm name to algorithm id. */
 PSPUBLIC uint16_t psGetNamedSigAlgId(const char *name);
+
+PSPUBLIC psBool_t psIsValidHashLenSigAlgCombination(psSize_t hashLen,
+        int32_t sigAlg);
+
+# ifdef USE_RSA
+/* Return the correct reference DigestInfo prefix for sigAlg,
+   when len bytes were RSA-decrypted. */
+PSPUBLIC const unsigned char *psGetDigestInfoPrefix(int32_t len,
+        int32_t sigAlg);
+# endif /* USE_RSA */
+
 # ifdef USE_MD2
 /******************************************************************************/
 static inline void psMd2PreInit(psMd2_t *md2)

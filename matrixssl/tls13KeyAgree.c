@@ -90,19 +90,19 @@ int32_t tls13LoadDhParams(ssl_t *ssl,
 }
 #  endif /* USE_DH */
 
+# ifndef USE_ONLY_PSK_CIPHER_SUITE
 int32_t tls13ImportPublicValue(ssl_t *ssl,
         const unsigned char *keyExchangeData,
         psSize_t keyExchangeDataLen,
         uint16_t namedGroup)
 {
     int32_t rc;
-    const psEccCurve_t *curve;
 
     if (psIsEcdheGroup(namedGroup))
     {
-# ifdef USE_X25519
         if (namedGroup == namedgroup_x25519)
         {
+#   ifdef USE_X25519
             if (keyExchangeDataLen != PS_DH_X25519_PUBLIC_KEY_BYTES)
             {
                 ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
@@ -118,49 +118,58 @@ int32_t tls13ImportPublicValue(ssl_t *ssl,
                     keyExchangeData,
                     PS_DH_X25519_PUBLIC_KEY_BYTES);
             return PS_SUCCESS;
-        }
-# endif
-
-        rc = getEccParamById(namedGroup, &curve);
-        if (rc < 0)
-        {
+#   else
             goto out_internal_error;
+#   endif
         }
-
-        if (ssl->sec.eccKeyPub != NULL)
+        else
         {
-            psEccClearKey(ssl->sec.eccKeyPub);
-        }
+#   ifdef USE_ECC
+            const psEccCurve_t *curve;
+            rc = getEccParamById(namedGroup, &curve);
+            if (rc < 0)
+            {
+                goto out_internal_error;
+            }
 
-        rc = psEccNewKey(ssl->hsPool, &ssl->sec.eccKeyPub,
-                curve);
-        if (rc < 0)
-        {
-            psTraceErrr("Unable to create new EC key\n");
+            if (ssl->sec.eccKeyPub != NULL)
+            {
+                psEccClearKey(ssl->sec.eccKeyPub);
+            }
+
+            rc = psEccNewKey(ssl->hsPool, &ssl->sec.eccKeyPub, curve);
+            if (rc < 0)
+            {
+                psTraceErrr("Unable to create new EC key\n");
+                goto out_internal_error;
+            }
+
+            rc = psEccX963ImportKey(
+                    ssl->hsPool,
+                    keyExchangeData,
+                    keyExchangeDataLen,
+                    ssl->sec.eccKeyPub,
+                    curve);
+            if (rc < 0)
+            {
+                psTraceErrr("Could not import peer ECDHE public value\n");
+                goto out_handshake_failure;
+            }
+#    ifdef DEBUG_TLS_1_3_KEY_AGREE
+            psTraceIntInfo("Imported ECDHE pub val of length %d\n",
+                           keyExchangeDataLen);
+#    endif
+#   else
             goto out_internal_error;
+#   endif /* USE_ECC */
         }
-
-        rc = psEccX963ImportKey(ssl->hsPool,
-                keyExchangeData,
-                keyExchangeDataLen,
-                ssl->sec.eccKeyPub,
-                curve);
-        if (rc < 0)
-        {
-            psTraceErrr("Could not import peer ECDHE public value\n");
-            goto out_handshake_failure;
-        }
-# ifdef DEBUG_TLS_1_3_KEY_AGREE
-        psTraceIntInfo("Imported ECDHE pub val of length %d\n",
-                keyExchangeDataLen);
-# endif
     }
     else
     {
-# ifndef USE_DH
+#   ifndef USE_DH
         psTraceInfo("Need USE_DH to be able to import DHE public values\n");
         goto out_internal_error;
-# else
+#   else
         ssl->sec.dhKeyPub = psMalloc(ssl->hsPool,
                 sizeof(psDhKey_t));
         if (ssl->sec.dhKeyPub == NULL)
@@ -176,11 +185,11 @@ int32_t tls13ImportPublicValue(ssl_t *ssl,
             psTraceErrr("Could not import peer DHE public value\n");
             goto out_handshake_failure;
         }
-# ifdef DEBUG_TLS_1_3_KEY_AGREE
+#    ifdef DEBUG_TLS_1_3_KEY_AGREE
         psTraceIntInfo("Imported DHE pub val of length %d\n",
                 keyExchangeDataLen);
-# endif
-# endif /* USE_DH */
+#    endif
+#   endif /* USE_DH */
     }
 
     return MATRIXSSL_SUCCESS;
@@ -207,7 +216,7 @@ int32_t tls13ExportPublicValue(ssl_t *ssl,
     {
         if (namedGroup == namedgroup_x25519)
         {
-# ifdef USE_X25519
+#   ifdef USE_X25519
             pubVal = psMalloc(ssl->hsPool,
                     PS_DH_X25519_PUBLIC_KEY_BYTES);
             if (pubVal == NULL)
@@ -218,12 +227,13 @@ int32_t tls13ExportPublicValue(ssl_t *ssl,
                     key->key.x25519.pub,
                     PS_DH_X25519_PUBLIC_KEY_BYTES);
             pubValLen = PS_DH_X25519_PUBLIC_KEY_BYTES;
-# else
+#   else
             goto out_internal_error;
-# endif
+#   endif /* USE_X25519 */
         }
         else
         {
+#   ifdef USE_ECC
             pubValLen = key->key.ecc.curve->size*2 + 1;
             pubVal = psMalloc(ssl->hsPool, pubValLen);
             if (pubVal == NULL)
@@ -232,26 +242,29 @@ int32_t tls13ExportPublicValue(ssl_t *ssl,
             }
 
             rc = psEccX963ExportKey(ssl->hsPool,
-                                    &key->key.ecc,
-                                    pubVal,
-                                    &pubValLen);
+                    &key->key.ecc,
+                    pubVal,
+                    &pubValLen);
             if (rc < 0)
             {
                 psFree(pubVal, ssl->hsPool);
                 goto out_internal_error;
             }
-# ifdef DEBUG_TLS_1_3_KEY_AGREE
+#     ifdef DEBUG_TLS_1_3_KEY_AGREE
             psTraceIntInfo("Exported ECDHE pub val of length %d\n",
                            pubValLen);
-# endif
+#     endif
+#   else
+            goto out_internal_error;
+#   endif /* USE_ECC */
         }
     }
     else
     {
-# ifndef USE_DH
+#   ifndef USE_DH
         psTraceInfo("Need USE_DH to export DHE pub values\n");
         goto out_internal_error;
-# else
+#   else
         pubValLen = key->key.dh.size;
         pubVal = psMalloc(ssl->hsPool, pubValLen);
         if (pubVal == NULL)
@@ -268,7 +281,7 @@ int32_t tls13ExportPublicValue(ssl_t *ssl,
             psFree(pubVal, ssl->hsPool);
             goto out_internal_error;
         }
-# endif /* USE_DH */
+#   endif /* USE_DH */
     }
     *out = pubVal;
     *outLen = pubValLen;
@@ -280,6 +293,8 @@ out_internal_error:
     return MATRIXSSL_ERROR;
 }
 
+
+#  ifdef USE_ECC
 /** Generate an ECDHE private key given the curve NamedGroup id. */
 int32_t tls13GenerateEcdheKey(ssl_t *ssl,
         psEccKey_t *key,
@@ -305,7 +320,9 @@ int32_t tls13GenerateEcdheKey(ssl_t *ssl,
     }
 
     rc = matrixSslGenEphemeralEcKey(ssl->keys,
-            key, curve, pkiData);
+            key,
+            curve,
+            pkiData);
     if (rc < 0)
     {
         return rc;
@@ -316,12 +333,11 @@ int32_t tls13GenerateEcdheKey(ssl_t *ssl,
 
     return PS_SUCCESS;
 }
+#  endif /* USE_ECC */
 
 static
 int32_t tls13GenerateKeyForGroup(ssl_t *ssl, uint16_t namedGroup)
 {
-    psPubKey_t *key;
-    uint8_t keyType;
     psSize_t i;
     int32_t rc;
 
@@ -330,7 +346,8 @@ int32_t tls13GenerateKeyForGroup(ssl_t *ssl, uint16_t namedGroup)
 # ifdef DEBUG_TLS_1_3_KEY_AGREE
     psTracePrintTls13NamedGroup(0,
             "Generating key for group",
-            namedGroup, PS_TRUE);
+            namedGroup,
+            PS_TRUE);
 # endif
 
     /* Find the correct spot. */
@@ -361,6 +378,10 @@ int32_t tls13GenerateKeyForGroup(ssl_t *ssl, uint16_t namedGroup)
     /* Generate the ephemeral key pair. */
     if (psIsEcdheGroup(namedGroup))
     {
+# if defined(USE_ECC) || defined(USE_X25519)
+        psPubKey_t *key;
+        uint8_t keyType;
+
         if (namedGroup == namedgroup_x25519)
         {
             keyType = PS_X25519;
@@ -379,7 +400,7 @@ int32_t tls13GenerateKeyForGroup(ssl_t *ssl, uint16_t namedGroup)
         }
         key = ssl->sec.tls13KeyAgreeKeys[i];
 
-# ifdef USE_X25519
+#  ifdef USE_X25519
         if (namedGroup == namedgroup_x25519)
         {
             psRes_t res;
@@ -392,7 +413,7 @@ int32_t tls13GenerateKeyForGroup(ssl_t *ssl, uint16_t namedGroup)
             }
             return PS_SUCCESS;
         }
-# endif /* USE_X25519 */
+#  endif /* USE_X25519 */
 
         rc = tls13GenerateEcdheKey(ssl,
                 &key->key.ecc,
@@ -401,6 +422,9 @@ int32_t tls13GenerateKeyForGroup(ssl_t *ssl, uint16_t namedGroup)
         {
             goto out_internal_error;
         }
+# else
+            goto out_internal_error;
+# endif
     }
     else
     {
@@ -447,6 +471,7 @@ out_internal_error:
     ssl->err = SSL_ALERT_INTERNAL_ERROR;
     return MATRIXSSL_ERROR;
 }
+#endif /* USE_ONLY_PSK_CIPHER_SUITE */
 
 /** Return the element with the lowest sum of indexes from the
     intersection of two priority-ordered arrays a and b, such that
@@ -458,16 +483,16 @@ out_internal_error:
     Precondition: The input arrays must be arranged in priority
     order such that the highest-priority item is at index 0.
 */
-int32_t tls13IntersectionPrioritySelect(const uint16_t *a,
+int32_t tls13IntersectionPrioritySelect(const uint32_t *a,
         psSize_t aLen,
-        const uint16_t *b,
+        const uint32_t *b,
         psSize_t bLen,
-        const uint16_t *f,
+        const uint32_t *f,
         psSize_t fLen,
-        uint16_t *selectedElement)
+        uint32_t *selectedElement)
 {
-    uint16_t sum, minSum;
-    uint16_t best;
+    psSize_t sum, minSum;
+    uint32_t best;
     psSize_t i, k, l;
     psBool_t foundCommon = PS_FALSE;
     psBool_t forbidden;
@@ -478,6 +503,7 @@ int32_t tls13IntersectionPrioritySelect(const uint16_t *a,
         return PS_ARG_FAIL;
     }
 
+    best = a[0];
     minSum = aLen + bLen - 2;
 
     for (i = 0; i < aLen; i++)
@@ -527,6 +553,71 @@ int32_t tls13IntersectionPrioritySelect(const uint16_t *a,
     }
 }
 
+/* An uint16_t wrapper for tls13IntersectionPrioritySelect.*/
+int32_t tls13IntersectionPrioritySelectU16(const uint16_t *a,
+        psSize_t aLen,
+        const uint16_t *b,
+        psSize_t bLen,
+        const uint16_t *f,
+        psSize_t fLen,
+        uint16_t *selectedElement)
+{
+    uint32_t selectedElement32 = *selectedElement;
+    uint32_t *a32 = NULL;
+    uint32_t *b32 = NULL;
+    uint32_t *f32 = NULL;
+    int32_t rc = PS_ARG_FAIL;
+    psSize_t i;
+
+    a32 = psMalloc(ssl->hsPool, aLen * sizeof(uint32_t));
+    if (a32 == NULL)
+    {
+        psTraceInfo("Out of mem in tls13NegotiateGroup\n");
+        goto out;
+    }
+    b32 = psMalloc(ssl->hsPool, bLen * sizeof(uint32_t));
+    if (b32 == NULL)
+    {
+        psTraceInfo("Out of mem in tls13NegotiateGroup\n");
+        goto out;
+    }
+    f32 = psMalloc(ssl->hsPool, bLen * sizeof(uint32_t));
+    if (f32 == NULL)
+    {
+        psTraceInfo("Out of mem in tls13NegotiateGroup\n");
+        goto out;
+    }
+    for (i = 0; i < aLen; i++)
+    {
+        a32[i] = a[i];
+    }
+    for (i = 0; i < bLen; i++)
+    {
+        b32[i] = b[i];
+    }
+    for (i = 0; i < fLen; i++)
+    {
+        f32[i] = f[i];
+    }
+
+    rc = tls13IntersectionPrioritySelect(a32,
+            aLen,
+            b32,
+            bLen,
+            f32,
+            fLen,
+            &selectedElement32);
+
+    *selectedElement = selectedElement32;
+
+out:
+    psFree(a32, ssl->hsPool);
+    psFree(b32, ssl->hsPool);
+    psFree(f32, ssl->hsPool);
+
+    return rc;
+}
+
 /** Given our and the peer's list of supported groups, negotiate
     the group to use, taking into account our and the peer's
     priorities. */
@@ -539,7 +630,10 @@ uint16_t tls13NegotiateGroup(ssl_t *ssl,
 
     psAssert(ssl->tls13SupportedGroups[0] != 0);
 
-    rc = tls13IntersectionPrioritySelect(ssl->tls13SupportedGroups,
+    /* Default. If anything goes wrong, use this. */
+    negotiatedGroup = ssl->tls13SupportedGroups[0];
+
+    rc = tls13IntersectionPrioritySelectU16(ssl->tls13SupportedGroups,
             ssl->tls13SupportedGroupsLen,
             peerList,
             peerListLen,
@@ -548,7 +642,7 @@ uint16_t tls13NegotiateGroup(ssl_t *ssl,
             &negotiatedGroup);
     if (rc == PS_ARG_FAIL)
     {
-        return ssl->tls13SupportedGroups[0];
+        psTraceInfo("tls13IntersectionPrioritySelect failed\n");
     }
 
     return negotiatedGroup;
@@ -583,6 +677,7 @@ int32_t tls13ServerChooseHelloRetryRequestGroup(ssl_t *ssl,
     return PS_SUCCESS;
 }
 
+# ifndef USE_ONLY_PSK_CIPHER_SUITE
 int32_t tls13GenerateEphemeralKeys(ssl_t *ssl)
 {
     psSize_t i;
@@ -634,8 +729,10 @@ int32_t tls13GenerateEphemeralKeys(ssl_t *ssl)
 
     return PS_SUCCESS;
 }
+# endif
 
 
+# ifdef USE_ECC
 static inline
 int32_t tls13GenSharedSecretNist(ssl_t *ssl,
         psPubKey_t *privKey,
@@ -689,6 +786,7 @@ out_internal_error:
     return MATRIXSSL_ERROR;
 }
 
+# endif /* USE_ECC */
 # ifdef USE_X25519
 static inline
 int32_t tls13GenSharedSecretX25519(ssl_t *ssl,
@@ -844,43 +942,36 @@ int32_t tls13GenSharedSecret(ssl_t *ssl,
 
     switch (privKey->type)
     {
+# ifdef USE_ECC
     case PS_ECC:
         rc = tls13GenSharedSecretNist(ssl, privKey, &secret, &secretLen);
-        if (rc < 0)
-        {
-            return rc;
-        }
         break;
-    case PS_X25519:
+#endif
 # ifdef USE_X25519
+    case PS_X25519:
         rc = tls13GenSharedSecretX25519(ssl, privKey, &secret, &secretLen);
-        if (rc < 0)
-        {
-            return rc;
-        }
         break;
 # endif
 # ifdef USE_DH
     case PS_DH:
         rc = tls13GenSharedSecretDh(ssl, privKey, &secret, &secretLen);
-        if (rc < 0)
-        {
-            return rc;
-        }
         break;
 # endif
     default:
-        return PS_UNSUPPORTED_FAIL;
+        rc = PS_UNSUPPORTED_FAIL;
+        break;
     }
 
+    if (rc == PS_SUCCESS)
+    {
 # ifdef DEBUG_TLS_1_3_KEY_AGREE
-    psTraceBytes("(EC)DHE shared secret", secret, secretLen);
+        psTraceBytes("(EC)DHE shared secret", secret, secretLen);
 # endif
 
-    *out = secret;
-    *outLen = secretLen;
-
-    return PS_SUCCESS;
+        *out = secret;
+        *outLen = secretLen;
+    }
+    return rc;
 }
 
 /** Return the key corresponding to a NamedGroup.

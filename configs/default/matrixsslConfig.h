@@ -108,6 +108,7 @@ extern "C" {
 /* TLS 1.2 ciphers */
 /* #define USE_TLS_DHE_RSA_WITH_AES_128_CBC_SHA256 */
 /* #define USE_TLS_DHE_RSA_WITH_AES_256_CBC_SHA256 */
+/* #define USE_TLS_DHE_RSA_WITH_AES_256_GCM_SHA384 */
 
 /** Non-Ephemeral RSA keys/certificates */
 #   define USE_TLS_RSA_WITH_AES_128_CBC_SHA/**< @security NIST_SHALL */
@@ -181,7 +182,7 @@ extern "C" {
      Note: The RC4 cipher suites below need to disabled according to RFC 7465.
 */
 /* #define USE_SSL_RSA_WITH_RC4_128_SHA  *//**< @security NIST_SHALL_NOT */
-    
+
 /******************************************************************************/
 /**
     Ephemeral key cache support.
@@ -420,7 +421,7 @@ extern "C" {
 #    define SSL_DEFAULT_IN_BUF_SIZE     DTLS_PMTU /* See PMTU comments above */
 #    define SSL_DEFAULT_OUT_BUF_SIZE    DTLS_PMTU /* See PMTU comments above */
 
-/* #define DTLS_SEND_RECORDS_INDIVIDUALLY  *//* Max one record per datagram */
+/* #define DTLS_SEND_RECORDS_INDIVIDUALLY     *//* Max one record per datagram */
 #   endif
 
 #  ifdef __cplusplus
@@ -429,4 +430,3 @@ extern "C" {
 
 #endif  /* _h_MATRIXCONFIG */
 /******************************************************************************/
-

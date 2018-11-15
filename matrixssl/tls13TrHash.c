@@ -62,7 +62,7 @@ int32_t tls13TranscriptHashInit(ssl_t *ssl)
 {
     int32_t alg;
 
-    if (ssl->cipher->ident == SSL_NULL_WITH_NULL_NULL)
+    if (ssl->cipher == NULL || ssl->cipher->ident == SSL_NULL_WITH_NULL_NULL)
     {
         /* When parsing ClientHello, the ciphersuite has not been negotiated
            yet, which means that do not know which hash we will end up using.
@@ -174,12 +174,12 @@ int32_t tls13TranscriptHashUpdate(ssl_t *ssl,
        In case of server we originally parse ClientHello in the 1.2 side
        and later move to 1.3. That's why the hash functions call each other
        both ways */
-    if (!NEGOTIATED_TLS_1_3(ssl) && !(ssl->flags & SSL_FLAGS_SERVER))
+    if (!NGTD_VER(ssl, v_tls_1_3_any) && !IS_SERVER(ssl))
     {
         sslUpdateHSHash(ssl, in, len);
     }
 
-    if (ssl->cipher->ident == SSL_NULL_WITH_NULL_NULL)
+    if (ssl->cipher == NULL || ssl->cipher->ident == SSL_NULL_WITH_NULL_NULL)
     {
         /* When parsing ClientHello, the ciphersuite has not been negotiated
            yet, which means that do not know which hash we will end up using.

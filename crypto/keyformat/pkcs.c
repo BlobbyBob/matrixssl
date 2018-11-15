@@ -111,14 +111,21 @@ int32_t pkcs1Pad(const unsigned char *in, psSize_t inlen,
         00 <decryptType> <random data (min 8 bytes)> 00 <value to be encrypted>
 
     We don't worry about v2 rollback issues because we don't support v2
+
+    If verifyUnpaddedLen is false, leave it up to the caller to check that
+    the unpadded lenght matches the expected length.
  */
-int32_t pkcs1Unpad(const unsigned char *in, psSize_t inlen,
-    unsigned char *out, psSize_t outlen,
-    uint8_t decryptType)
+int32_t pkcs1UnpadExt(const unsigned char *in,
+        psSize_t inlen,
+        unsigned char *out,
+        psSize_t outlen,
+        uint8_t decryptType,
+        psBool_t verifyUnpaddedLen,
+        psSize_t *unpaddedLen)
 {
     const unsigned char *c, *end;
 
-    if (inlen < outlen + 10)
+    if (verifyUnpaddedLen && inlen < outlen + 10)
     {
         psTraceCrypto("pkcs1Unpad failure\n");
         return PS_ARG_FAIL;
@@ -148,15 +155,32 @@ int32_t pkcs1Unpad(const unsigned char *in, psSize_t inlen,
         c++;
     }
     c++;
-/*
-    The length of the remaining data should be equal to what was expected
-    Combined with the initial length check, there must be >= 8 bytes of pad
-    ftp://ftp.rsa.com/pub/pdfs/bulletn7.pdf
- */
-    if ((uint32) (end - c) != outlen)
+
+    /*
+      The length of the remaining data should be equal to what was expected
+      Combined with the initial length check, there must be >= 8 bytes of pad
+      ftp://ftp.rsa.com/pub/pdfs/bulletn7.pdf
+    */
+    if (verifyUnpaddedLen)
     {
-        psTraceCrypto("pkcs1Unpad verification failure\n");
-        return PS_LIMIT_FAIL;
+        if ((uint32) (end - c) != outlen)
+        {
+            psTraceCrypto("pkcs1Unpad verification failure\n");
+            return PS_LIMIT_FAIL;
+        }
+    }
+    else
+    {
+        if ((uint32) (end - c) > outlen)
+        {
+            psTraceCrypto("pkcs1Unpad output buffer to small\n");
+            return PS_OUTPUT_LENGTH;
+        }
+    }
+
+    if (unpaddedLen)
+    {
+        *unpaddedLen = (psSize_t)(end - c);
     }
 
     /* Copy the value bytes to the out buffer */
@@ -165,7 +189,23 @@ int32_t pkcs1Unpad(const unsigned char *in, psSize_t inlen,
         *out = *c;
         out++; c++;
     }
+
     return PS_SUCCESS;
+}
+
+int32_t pkcs1Unpad(const unsigned char *in,
+        psSize_t inlen,
+        unsigned char *out,
+        psSize_t outlen,
+        uint8_t decryptType)
+{
+    return pkcs1UnpadExt(in,
+            inlen,
+            out,
+            outlen,
+            decryptType,
+            PS_TRUE,
+            NULL);
 }
 
 #ifdef USE_PRIVATE_KEY_PARSING

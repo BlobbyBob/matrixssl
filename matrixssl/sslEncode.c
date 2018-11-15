@@ -276,7 +276,7 @@ int32 matrixSslGetEncodedSize(ssl_t *ssl, uint32 len)
         that extra length here.
  */
         if ((ssl->flags & SSL_FLAGS_WRITE_SECURE) &&
-            (ssl->flags & SSL_FLAGS_TLS_1_1) && (ssl->enBlockSize > 1))
+                ACTV_VER(ssl, v_tls_explicit_iv) && (ssl->enBlockSize > 1))
         {
             len += ssl->enBlockSize;
         }
@@ -286,7 +286,7 @@ int32 matrixSslGetEncodedSize(ssl_t *ssl, uint32 len)
             len += AEAD_TAG_LEN(ssl);
 
 #  ifdef USE_TLS_1_3
-            if (USING_TLS_1_3(ssl))
+            if (ACTV_VER(ssl, v_tls_1_3_any))
             {
                 /* TLS 1.3 does not send any part of the nonce over the
                    wire, but requires one additional byte and possibly
@@ -374,8 +374,12 @@ static int32 addCertFragOverhead(ssl_t *ssl, int32 totalCertLen)
     be negative when creating the empty buffer spot where the signature
     will be written.  If this guess isn't correct, this function is called
     to correct the buffer size */
-static int accountForEcdsaSizeChange(ssl_t *ssl, pkaAfter_t *pka, int real,
-    unsigned char *sig, psBuf_t *out, int hsMsg)
+int accountForEcdsaSizeChange(ssl_t *ssl,
+        pkaAfter_t *pka,
+        int real,
+        unsigned char *sig,
+        psBuf_t *out,
+        int hsMsg)
 {
     flightEncode_t *flightMsg;
     unsigned char *whereToMoveFrom, *whereToMoveTo, *msgLenLoc;
@@ -397,7 +401,7 @@ static int accountForEcdsaSizeChange(ssl_t *ssl, pkaAfter_t *pka, int real,
         sigSizeChange = pka->user - real;
     }
 #    ifdef USE_DTLS
-    if (ssl->flags & SSL_FLAGS_DTLS)
+    if (ACTV_VER(ssl, v_dtls_any))
     {
         /* Needed somewhere to store the size change for DTLS retransmits */
         ssl->ecdsaSizeChange = real - pka->user;
@@ -509,7 +513,7 @@ static int accountForEcdsaSizeChange(ssl_t *ssl, pkaAfter_t *pka, int real,
 #    ifdef USE_TLS_1_1
     /* Account for explicit IV in TLS_1_1 and above. */
     if ((ssl->flags & SSL_FLAGS_WRITE_SECURE) &&
-        (ssl->flags & SSL_FLAGS_TLS_1_1) && (ssl->enBlockSize > 1))
+            ACTV_VER(ssl, v_tls_explicit_iv) && (ssl->enBlockSize > 1))
     {
         msgLen -= ssl->enBlockSize;
         msgLenLoc += ssl->enBlockSize;
@@ -517,7 +521,7 @@ static int accountForEcdsaSizeChange(ssl_t *ssl, pkaAfter_t *pka, int real,
 #    endif
 
 #    ifdef USE_DTLS
-    if (ssl->flags & SSL_FLAGS_DTLS)
+    if (ACTV_VER(ssl, v_dtls_any))
     {
         /* Will also be a fragment length to update in handshake header.
             Only supporting     if there is no fragmentation here.  The magic
@@ -536,7 +540,7 @@ static int accountForEcdsaSizeChange(ssl_t *ssl, pkaAfter_t *pka, int real,
     msgLenLoc[2] = msgLen;
 
 #    ifdef USE_DTLS
-    if (ssl->flags & SSL_FLAGS_DTLS)
+    if (ACTV_VER(ssl, v_dtls_any))
     {
         /* Update the fragLen as well.  Sanity test was performed above */
         msgLenLoc[8] = msgLen >> 16;
@@ -594,13 +598,8 @@ static int32 nowDoSkePka(ssl_t *ssl, psBuf_t *out)
 
 #  ifndef USE_ONLY_PSK_CIPHER_SUITE
     pkaAfter_t *pka;
-    sslIdentity_t *chosen = ssl->chosenIdentity;
-#   if defined(USE_ECC_CIPHER_SUITE) || defined(USE_RSA_CIPHER_SUITE)
-    psPool_t *pkiPool = NULL;
-#   endif  /* USE_ECC_CIPHER_SUITE || USE_RSA_CIPHER_SUITE */
-
 #   ifdef USE_DTLS
-    if (ssl->flags & SSL_FLAGS_DTLS)
+    if (ACTV_VER(ssl, v_dtls_any))
     {
         if (ssl->retransmit)
         {
@@ -614,171 +613,9 @@ static int32 nowDoSkePka(ssl_t *ssl, psBuf_t *out)
 
     /* Always first one.  clearPkaAfter will move 1 to 0 if needed */
     pka = &ssl->pkaAfter[0];
+    rc = tlsMakeSkeSignature(ssl, pka, out);
+#  endif /* USE_ONLY_PSK_CIPHER_SUITE */
 
-#   ifdef USE_RSA_CIPHER_SUITE
-    if (pka->type == PKA_AFTER_RSA_SIG_GEN_ELEMENT ||
-        pka->type == PKA_AFTER_RSA_SIG_GEN)
-    {
-
-#    ifdef USE_TLS_1_2
-        if (ssl->flags & SSL_FLAGS_TLS_1_2)
-        {
-            if ((rc = privRsaEncryptSignedElement(pkiPool,
-                     &chosen->privKey.key.rsa,
-                     pka->inbuf, pka->inlen, pka->outbuf,
-                     chosen->privKey.keysize, pka->data)) < 0)
-            {
-                if (rc != PS_PENDING)
-                {
-                    psTraceIntInfo("Unable to sign SKE digital element %d\n",
-                        rc);
-                    return MATRIXSSL_ERROR;
-                }
-                /* If the result is going directly inline to the output
-                    buffer we unflag 'type' so this function isn't called
-                    again on the way back around. Also, we can safely
-                    free inbuf because it has been copied out */
-                psFree(pka->inbuf, ssl->hsPool); pka->inbuf = NULL;
-                pka->type = 0;
-                return PS_PENDING;
-            }
-        }
-        else
-        {
-            if ((rc = psRsaEncryptPriv(pkiPool, &chosen->privKey.key.rsa, pka->inbuf,
-                     pka->inlen, pka->outbuf, chosen->privKey.keysize,
-                     pka->data)) < 0)
-            {
-                if (rc != PS_PENDING)
-                {
-                    psTraceInfo("Unable to sign SERVER_KEY_EXCHANGE message\n");
-                    return MATRIXSSL_ERROR;
-                }
-                /* If the result is going directly inline to the output
-                    buffer we unflag 'type' so this function isn't called
-                    again on the way back around. Also, we can safely free
-                    inbuf becuase it has been copied out */
-                psFree(pka->inbuf, ssl->hsPool); pka->inbuf = NULL;
-                pka->type = 0;
-                return PS_PENDING;
-            }
-        }
-#    else /* !USE_TLS_1_2 */
-        if ((rc = psRsaEncryptPriv(pkiPool, &chosen->privKey.key.rsa, pka->inbuf,
-                 pka->inlen, pka->outbuf, chosen->privKey.keysize,
-                 pka->data)) < 0)
-        {
-            if (rc != PS_PENDING)
-            {
-                psTraceInfo("Unable to sign SERVER_KEY_EXCHANGE message\n");
-                return MATRIXSSL_ERROR;
-            }
-            /* If the result is going directly inline to the output
-                buffer we unflag 'type' so this function isn't called
-                again on the way back around */
-            psFree(pka->inbuf, ssl->hsPool); pka->inbuf = NULL;
-            pka->type = 0;
-            return PS_PENDING;
-        }
-#    endif /* USE_TLS_1_2 */
-
-
-#    ifdef USE_DTLS
-        if ((ssl->flags & SSL_FLAGS_DTLS) && (ssl->retransmit == 0))
-        {
-            /* Using existing ckeMsg and ckeSize that clients are using but
-                this should be totally fine on the server side because it is
-                freed at FINISHED parse */
-            ssl->ckeSize = chosen->privKey.keysize;
-            if ((ssl->ckeMsg = psMalloc(ssl->hsPool, ssl->ckeSize)) == NULL)
-            {
-                psTraceInfo("Memory allocation error ckeMsg\n");
-                return PS_MEM_FAIL;
-            }
-            Memcpy(ssl->ckeMsg, pka->outbuf, ssl->ckeSize);
-        }
-#    endif /* USE_DTLS */
-
-        clearPkaAfter(ssl); /* Blocking success case */
-    }
-#   endif /* USE_RSA_CIPHER_SUITE */
-
-#   ifdef USE_ECC_CIPHER_SUITE
-    if (pka->type == PKA_AFTER_ECDSA_SIG_GEN)
-    {
-
-        int32_t err;
-        psSize_t len;
-        /* New temp location for ECDSA sig which can be one len byte different
-            than what we originally calculated (pka->user is holding) */
-        unsigned char *tmpEcdsa;
-
-        /* Only need to allocate 1 larger because 1 has already been added
-            at creation */
-        if ((tmpEcdsa = psMalloc(ssl->hsPool, pka->user + 1)) == NULL)
-        {
-            return PS_MEM_FAIL;
-        }
-
-        len = pka->user + 1;
-
-#    ifdef USE_DTLS
-        ssl->ecdsaSizeChange = 0;
-#    endif
-        if ((err = psEccDsaSign(pkiPool, &chosen->privKey.key.ecc,
-                 pka->inbuf, pka->inlen, tmpEcdsa, &len, 1, pka->data)) != 0)
-        {
-            /* DO NOT close pool (unless failed).  It is kept around in
-                pkaCmdInfo for result until finished and is closed there */
-            if (err != PS_PENDING)
-            {
-                psFree(tmpEcdsa, ssl->hsPool);
-                return MATRIXSSL_ERROR;
-            }
-
-            /* ASYNC: tmpEcdsa is not saved as output location so correct to
-                free here */
-            psFree(tmpEcdsa, ssl->hsPool);
-            return PS_PENDING;
-        }
-        if (len != pka->user)
-        {
-            /* Confirmed ECDSA is not default size */
-            if (accountForEcdsaSizeChange(ssl, pka, len, tmpEcdsa, out,
-                    SSL_HS_SERVER_KEY_EXCHANGE) < 0)
-            {
-                clearPkaAfter(ssl);
-                psFree(tmpEcdsa, ssl->hsPool);
-                return MATRIXSSL_ERROR;
-            }
-        }
-        else
-        {
-            Memcpy(pka->outbuf, tmpEcdsa, pka->user);
-        }
-        psFree(tmpEcdsa, ssl->hsPool);
-
-#    ifdef USE_DTLS
-        if ((ssl->flags & SSL_FLAGS_DTLS) && (ssl->retransmit == 0))
-        {
-            /* ECC signatures have random bytes so need to save aside for
-                retransmit cases. Using existing ckeMsg and ckeSize that
-                clients are using but this should be totally fine on the
-                server side because it is freed at FINISHED parse */
-            ssl->ckeSize = len;
-            if ((ssl->ckeMsg = psMalloc(ssl->hsPool, ssl->ckeSize)) == NULL)
-            {
-                psTraceInfo("Memory allocation error ckeMsg\n");
-                return PS_MEM_FAIL;
-            }
-            Memcpy(ssl->ckeMsg, pka->outbuf, ssl->ckeSize);
-        }
-#    endif /* USE_DTLS */
-
-        clearPkaAfter(ssl);
-    }
-#   endif /* USE_ECC_CIPHER_SUITE */
-#  endif  /* !USE_ONLY_PSK_CIPHER_SUITE */
     return rc;
 }
 # endif /* USE_SERVER_SIDE_SSL */
@@ -792,7 +629,7 @@ psResSize_t calcCkeSize(ssl_t *ssl)
     if ((ssl->flags & SSL_FLAGS_DHE_KEY_EXCH) != 0)
     {
 #   ifdef USE_DTLS
-        if ((ssl->flags & SSL_FLAGS_DTLS) && ssl->retransmit == 1)
+        if ((ACTV_VER(ssl, v_dtls_any)) && ssl->retransmit == 1)
         {
             return ssl->ckeSize; /* Keys have been freed - use cached. */
         }
@@ -880,7 +717,7 @@ static int32 nowDoCkePka(ssl_t *ssl)
 #  endif
 
 #  ifdef USE_DTLS
-    if (ssl->flags & SSL_FLAGS_DTLS)
+    if (ACTV_VER(ssl, v_dtls_any))
     {
         if (ssl->retransmit)
         {
@@ -1080,7 +917,7 @@ static int32 nowDoCkePka(ssl_t *ssl)
 
 #   ifdef USE_DTLS
             /* Save aside for retransmits */
-            if (ssl->flags & SSL_FLAGS_DTLS)
+            if (ACTV_VER(ssl, v_dtls_any))
             {
                 ssl->ckeSize = pka->user + 1;     /* The size is wrote first */
                 ssl->ckeMsg = psMalloc(ssl->hsPool, ssl->ckeSize);
@@ -1194,7 +1031,7 @@ if (g_reusePreLen == 0)
 #   ifdef USE_DTLS
     /* This was first pass for DH ckex so set it aside */
 
-    if (ssl->flags & SSL_FLAGS_DTLS)
+    if (ACTV_VER(ssl, v_dtls_any))
     {
 
         ssl->ckeMsg = psMalloc(ssl->hsPool, pka->user);
@@ -1239,7 +1076,7 @@ if (g_reusePreLen == 0)
 
 #  ifdef USE_DTLS
     /* Can't free cert in DTLS in case of retransmit */
-    if (ssl->flags & SSL_FLAGS_DTLS)
+    if (ACTV_VER(ssl, v_dtls_any))
     {
         return rc;
     }
@@ -1360,7 +1197,7 @@ ok:
 # endif
 
 # ifdef USE_DTLS
-    if (ssl->flags & SSL_FLAGS_DTLS)
+    if (ACTV_VER(ssl, v_dtls_any))
     {
         /*      This function takes care of writing out entire flights so we know
             to capture the current MSN and Epoch as the resends so that a
@@ -1425,7 +1262,7 @@ ok:
             CAcert = ssl->keys->CAcerts;
             certCount = certReqLen = CAcertLen = 0;
 #    ifdef USE_TLS_1_2
-            if (ssl->flags & SSL_FLAGS_TLS_1_2)
+            if (NGTD_VER(ssl, v_tls_with_signature_algorithms))
             {
                 /* TLS 1.2 has a SigAndHashAlgorithm member in certRequest */
                 certReqLen += 2;
@@ -1463,7 +1300,7 @@ ok:
                     CAcert = CAcert->next;
                 }
 #    ifdef USE_DTLS
-                /* if (ssl->flags & SSL_FLAGS_DTLS) { */
+                /* if (ACTV_VER(ssl, v_dtls_any)) { */
                 /*      if (certReqLen + CAcertLen > ssl->pmtu) { */
                 /*              / * Decrease the CA count or contact support if a */
                 /*                      needed requirement * / */
@@ -1591,7 +1428,7 @@ ok:
                         srvKeyExLen += 2;
                     }
 #    ifdef USE_TLS_1_2
-                    if (ssl->flags & SSL_FLAGS_TLS_1_2)
+                    if (NGTD_VER(ssl, v_tls_with_signature_algorithms))
                     {
                         srvKeyExLen += 2;     /* hashSigAlg */
                     }
@@ -1616,7 +1453,7 @@ ok:
                     srvKeyExLen += (ssl->chosenIdentity->privKey.keysize + 2);
 #    endif
 #    ifdef USE_TLS_1_2
-                    if (ssl->flags & SSL_FLAGS_TLS_1_2)
+                    if (NGTD_VER(ssl, v_tls_with_signature_algorithms))
                     {
                         srvKeyExLen += 2;     /* hashSigAlg */
                     }
@@ -1749,7 +1586,7 @@ ok:
                 messageSize += certReqLen + CAcertLen;     /* certificate request */
                 messageSize += secureWriteAdditions(ssl, 1);
 #    ifdef USE_DTLS
-                if (ssl->flags & SSL_FLAGS_DTLS)
+                if (ACTV_VER(ssl, v_dtls_any))
                 {
                     /*      DTLS pmtu CERTIFICATE_REQUEST */
                     messageSize += (MAX_FRAGMENTS - 1) *
@@ -1768,7 +1605,7 @@ ok:
         } /* not DHE key exchange */
 
 #  ifdef USE_DTLS
-        if (ssl->flags & SSL_FLAGS_DTLS)
+        if (ACTV_VER(ssl, v_dtls_any))
         {
             /*
               If DTLS, make sure the max fragment overhead is accounted for on
@@ -2037,7 +1874,7 @@ ok:
         /*
           Account for the smaller finished message size for TLS.
         */
-        if (ssl->flags & SSL_FLAGS_TLS)
+        if (!NGTD_VER(ssl, v_ssl_3_0))
         {
             messageSize += TLS_HS_FINISHED_SIZE -
                 (MD5_HASH_SIZE + SHA1_HASH_SIZE);
@@ -2047,7 +1884,7 @@ ok:
         /*
           Adds explict IV overhead to the FINISHED message
         */
-        if (ssl->flags & SSL_FLAGS_TLS_1_1)
+        if (NGTD_VER(ssl, v_tls_explicit_iv))
         {
             if (ssl->flags & SSL_FLAGS_AEAD_W)
             {
@@ -2164,7 +2001,7 @@ ok:
               Account for the smaller finished message size for TLS.
               The MD5+SHA1 is SSLv3.  TLS is 12 bytes.
             */
-            if (ssl->flags & SSL_FLAGS_TLS)
+            if (!NGTD_VER(ssl, v_ssl_3_0))
             {
                 messageSize += TLS_HS_FINISHED_SIZE -
                                (MD5_HASH_SIZE + SHA1_HASH_SIZE);
@@ -2176,7 +2013,7 @@ ok:
               Adds explict IV overhead to the FINISHED message.
               Always added because FINISHED is never accounted for in
               secureWriteAdditions */
-            if (ssl->flags & SSL_FLAGS_TLS_1_1)
+            if (NGTD_VER(ssl, v_tls_explicit_iv))
             {
                 if (ssl->cipher->flags &
                     (CRYPTO_FLAGS_GCM | CRYPTO_FLAGS_CCM))
@@ -2293,7 +2130,7 @@ ok:
                     /*
                       SSLv3 sends a no_certificate warning alert for no match
                     */
-                    if (ssl->majVer == SSL3_MAJ_VER && ssl->minVer == SSL3_MIN_VER)
+                    if (NGTD_VER(ssl, v_ssl_3_0))
                     {
                         messageSize += 2 + ssl->recordHeadLen;
                     }
@@ -2328,7 +2165,7 @@ ok:
               message. Also, at this time we can account for the smaller
               finished message size for TLS.  The MD5+SHA1 is SSLv3.  TLS is
               12 bytes. */
-            if (ssl->flags & SSL_FLAGS_TLS)
+            if (!NGTD_VER(ssl, v_ssl_3_0))
             {
                 messageSize += 2 - MD5_HASH_SIZE - SHA1_HASH_SIZE +
                     TLS_HS_FINISHED_SIZE;
@@ -2346,7 +2183,7 @@ ok:
                 if (ssl->sec.certMatch > 0)
                 {
 #  ifdef USE_TLS_1_2
-                    if (ssl->flags & SSL_FLAGS_TLS_1_2)
+                    if (NGTD_VER(ssl, v_tls_with_signature_algorithms))
                     {
                         messageSize += 2; /* hashSigAlg in CertificateVerify */
                     }
@@ -2364,7 +2201,7 @@ ok:
             }
 
 #  ifdef USE_DTLS
-            if (ssl->flags & SSL_FLAGS_DTLS)
+            if (ACTV_VER(ssl, v_dtls_any))
             {
                 /*
                   If DTLS, make sure the max fragment overhead is accounted
@@ -2385,7 +2222,7 @@ ok:
               Adds explict IV overhead to the FINISHED message.  Always added
               because FINISHED is never accounted for in secureWriteAdditions
             */
-            if (ssl->flags & SSL_FLAGS_TLS_1_1)
+            if (NGTD_VER(ssl, v_tls_explicit_iv))
             {
                 if (ssl->cipher->flags &
                     (CRYPTO_FLAGS_GCM | CRYPTO_FLAGS_CCM))
@@ -2428,8 +2265,7 @@ ok:
                    message be sent if there is no certificate match.  SSLv3
                    tends to lean toward a NO_CERTIFIATE warning alert message
                 */
-                if (ssl->sec.certMatch == 0 &&
-                    ssl->majVer == SSL3_MAJ_VER && ssl->minVer == SSL3_MIN_VER)
+                if (ssl->sec.certMatch == 0 && NGTD_VER(ssl, v_ssl_3_0))
                 {
                     rc = writeAlert(ssl, SSL_ALERT_LEVEL_WARNING,
                                     SSL_ALERT_NO_CERTIFICATE, out, requiredLen);
@@ -2514,20 +2350,8 @@ flightEncode:
         }
         else
         {
-# ifdef USE_TLS_1_3
-            if (USING_TLS_1_3(ssl))
-            {
-                /* TLS 1.3 code path may want to send specific protocol alerts
-                   here. */
-                if (ssl->err == SSL_ALERT_NONE)
-                {
-                    ssl->err = SSL_ALERT_INTERNAL_ERROR;
-                }
-            }
-# else
-            ssl->err = SSL_ALERT_INTERNAL_ERROR;
-# endif
-
+            /* let tls13 set errors, others use internal error here. */
+            ssl->err = (USING_TLS_1_3(ssl) && ssl->err != SSL_ALERT_NONE) ? ssl->err : SSL_ALERT_INTERNAL_ERROR;
         }
         out->end = out->start;
         alertReqLen = out->size;
@@ -2624,7 +2448,7 @@ int32_t processFinished(ssl_t *ssl, flightEncode_t *msg)
     int32_t rc;
 
 # ifdef USE_DTLS
-    if (ssl->flags & SSL_FLAGS_DTLS)
+    if (ACTV_VER(ssl, v_dtls_any))
     {
         if (msg->hsMsg == SSL_HS_FINISHED)
         {
@@ -2672,7 +2496,8 @@ int32_t processFinished(ssl_t *ssl, flightEncode_t *msg)
                 ssl->flags & SSL_FLAGS_SERVER);
         if (rc <= 0)
         {
-            psTraceIntInfo("Error snapshotting HS hash flight %d\n", rc);
+            psTraceErrr("Error snapshotting HS hash flight\n");
+            psTraceIntInfo("sslSnapshotHSHash%d\n", rc);
             clearFlightList(ssl);
             return rc;
         }
@@ -2680,7 +2505,7 @@ int32_t processFinished(ssl_t *ssl, flightEncode_t *msg)
 # ifdef ENABLE_SECURE_REHANDSHAKES
         /* The rehandshake verify data is the previous handshake msg hash */
 #  ifdef USE_DTLS
-        if (ssl->flags & SSL_FLAGS_DTLS)
+        if (ACTV_VER(ssl, v_dtls_any))
         {
             if (ssl->myVerifyDataLen > 0)
             {
@@ -2752,7 +2577,7 @@ static int32 encryptFlight(ssl_t *ssl, unsigned char **end)
             out.start = out.buf = out.end = msg->start - ssl->recordHeadLen -
                                             TLS_EXPLICIT_NONCE_LEN;
 # ifdef USE_DTLS
-            if (ssl->flags & SSL_FLAGS_DTLS)
+            if (ACTV_VER(ssl, v_dtls_any))
             {
                 /* nonce */
                 *msg->seqDelay = ssl->epoch[0]; msg->seqDelay++;
@@ -2834,7 +2659,7 @@ static int32 encryptFlight(ssl_t *ssl, unsigned char **end)
 # endif  /* !PSK_ONLY */
 
 # ifdef USE_DTLS
-        if (ssl->flags & SSL_FLAGS_DTLS && msg->fragCount > 0)
+        if (ACTV_VER(ssl, v_dtls_any) && msg->fragCount > 0)
         {
 #  ifndef USE_ONLY_PSK_CIPHER_SUITE
 #   if defined(USE_SERVER_SIDE_SSL) || defined(USE_CLIENT_AUTH)
@@ -2994,7 +2819,7 @@ static int32 secureWriteAdditions(ssl_t *ssl, int32 numRecs)
 /*
          Checks here for TLS1.1 with block cipher for explict IV additions.
  */
-        if ((ssl->flags & SSL_FLAGS_TLS_1_1) && (ssl->enBlockSize > 1))
+        if (NGTD_VER(ssl, v_tls_explicit_iv) && (ssl->enBlockSize > 1))
         {
             add += (numRecs * ssl->enBlockSize); /* explicitIV */
         }
@@ -3067,7 +2892,7 @@ int32_t writeRecordHeader(ssl_t *ssl, uint8_t type, uint8_t hsType,
     of an explicit IV.  This is an extra random block of data
     prepended to the plaintext before encryption.  Account for
     that extra length here. */
-    if (hsType == SSL_HS_FINISHED && (ssl->flags & SSL_FLAGS_TLS_1_1))
+    if (hsType == SSL_HS_FINISHED && ACTV_VER(ssl, v_tls_explicit_iv))
     {
         if (ssl->cipher->blockSize > 1)
         {
@@ -3075,7 +2900,8 @@ int32_t writeRecordHeader(ssl_t *ssl, uint8_t type, uint8_t hsType,
         }
     }
     else if ((ssl->flags & SSL_FLAGS_WRITE_SECURE) &&
-             (ssl->flags & SSL_FLAGS_TLS_1_1) && (ssl->enBlockSize > 1))
+            ACTV_VER(ssl, v_tls_explicit_iv) &&
+            (ssl->enBlockSize > 1))
     {
         *messageSize += ssl->enBlockSize;
     }
@@ -3100,7 +2926,7 @@ int32_t writeRecordHeader(ssl_t *ssl, uint8_t type, uint8_t hsType,
 
         /* In TLS 1.2, part of the nonce is explicit and must be
            sent over-the-wire. In TLS 1.3, it is fully implicit. */
-        if (!(USING_TLS_1_3(ssl)))
+        if (ACTV_VER(ssl, v_tls_explicit_iv))
         {
             *messageSize += AEAD_NONCE_LEN(ssl);
         }
@@ -3152,7 +2978,7 @@ int32_t writeRecordHeader(ssl_t *ssl, uint8_t type, uint8_t hsType,
     This routine does not deal with DTLS fragmented messages, but it was
     necessary to call for all the length computations to happen in here.
  */
-    if (ssl->flags & SSL_FLAGS_DTLS)
+    if (ACTV_VER(ssl, v_dtls_any))
     {
         if (*messageSize > ssl->pmtu)
         {
@@ -3194,7 +3020,7 @@ int32_t writeRecordHeader(ssl_t *ssl, uint8_t type, uint8_t hsType,
 
     if (hsType == SSL_HS_FINISHED)
     {
-        if ((ssl->flags & SSL_FLAGS_TLS_1_1) && (ssl->cipher->blockSize > 1))
+        if (ACTV_VER(ssl, v_tls_explicit_iv) && (ssl->cipher->blockSize > 1))
         {
             if (psGetPrngLocked(*c, ssl->cipher->blockSize,
                     ssl->userPtr) < 0)
@@ -3205,7 +3031,7 @@ int32_t writeRecordHeader(ssl_t *ssl, uint8_t type, uint8_t hsType,
         }
     }
     else if ((ssl->flags & SSL_FLAGS_WRITE_SECURE) &&
-             (ssl->flags & SSL_FLAGS_TLS_1_1) &&
+             ACTV_VER(ssl, v_tls_explicit_iv) &&
              (ssl->enBlockSize > 1))
     {
         if (psGetPrngLocked(*c, ssl->enBlockSize, ssl->userPtr) < 0)
@@ -3222,7 +3048,7 @@ int32_t writeRecordHeader(ssl_t *ssl, uint8_t type, uint8_t hsType,
     if (type == SSL_RECORD_TYPE_HANDSHAKE)
     {
 # ifdef USE_DTLS
-        if (ssl->flags & SSL_FLAGS_DTLS)
+        if (ACTV_VER(ssl, v_dtls_any))
         {
 /*
             A message sequence number is unique for each handshake message. It
@@ -3263,7 +3089,7 @@ static int32 encryptCompressedRecord(ssl_t *ssl, int32 type, int32 messageSize,
     ptLen = *c - encryptStart;
 
 #  ifdef USE_TLS_1_1
-    if ((ssl->flags & SSL_FLAGS_TLS_1_1) && (ssl->enBlockSize > 1))
+    if (ACTV_VER(ssl, v_tls_explicit_iv) && (ssl->enBlockSize > 1))
     {
         /* Do not compress IV */
         if (type == SSL_RECORD_TYPE_APPLICATION_DATA)
@@ -3357,7 +3183,7 @@ static int32 encryptCompressedRecord(ssl_t *ssl, int32 type, int32 messageSize,
     ztmp = dataToMacAndEncryptLen + ssl->recordHeadLen + ssl->enMacSize + padLen;
 
 #  ifdef USE_TLS_1_1
-    if ((ssl->flags & SSL_FLAGS_TLS_1_1) && (ssl->enBlockSize > 1))
+    if (ACTV_VER(ssl, v_tls_explicit_iv) && (ssl->enBlockSize > 1))
     {
         ztmp += ssl->enBlockSize;
     }
@@ -3458,7 +3284,7 @@ static int32 encryptCompressedRecord(ssl_t *ssl, int32 type, int32 messageSize,
     Waited to increment record sequence number until completely finished
     with the encoding because the HMAC in DTLS uses the rsn of current record
  */
-    if (ssl->flags & SSL_FLAGS_DTLS)
+    if (ACTV_VER(ssl, v_dtls_any))
     {
         dtlsIncrRsn(ssl);
     }
@@ -3631,7 +3457,7 @@ int32 encryptRecord(ssl_t *ssl, int32 type, int32 hsMsgType,
 # ifdef USE_TLS
 #  ifdef USE_TLS_1_1
     if ((ssl->flags & SSL_FLAGS_WRITE_SECURE) &&
-        (ssl->flags & SSL_FLAGS_TLS_1_1) && (ssl->enBlockSize > 1))
+            ACTV_VER(ssl, v_tls_explicit_iv) && (ssl->enBlockSize > 1))
     {
 /*
         Don't add the random bytes into the hash of the message.  Makes
@@ -3731,9 +3557,11 @@ int32 encryptRecord(ssl_t *ssl, int32 type, int32 hsMsgType,
     if (pt == encryptStart)
     {
         /* In-situ encode */
-        if ((rc = ssl->encrypt(ssl, pt, encryptStart,
-                 (uint32) (*c - encryptStart))) < 0 ||
-            *c - out->end != messageSize)
+        rc = ssl->encrypt(ssl,
+                pt,
+                encryptStart,
+                (uint32) (*c - encryptStart));
+        if (rc < 0 || *c - out->end != messageSize)
         {
             psTraceIntInfo("Error encrypting 1: %d\n", rc);
             psTraceIntInfo("messageSize is %d\n", messageSize);
@@ -3800,7 +3628,7 @@ int32 encryptRecord(ssl_t *ssl, int32 type, int32 hsMsgType,
     Waited to increment record sequence number until completely finished
     with the encoding because the HMAC in DTLS uses the rsn of current record
  */
-    if (ssl->flags & SSL_FLAGS_DTLS)
+    if (ACTV_VER(ssl, v_dtls_any))
     {
         dtlsIncrRsn(ssl);
     }
@@ -3854,19 +3682,18 @@ int32 psGenerateServerRandom(ssl_t *ssl)
       The goal is to prevent active adversaries from downgrading the
       connection.
     */
-    if (tlsVersionSupported(ssl, TLS_1_3_MIN_VER)) /* RFC, not draft. */
+    if (SUPP_VER(ssl, v_tls_1_3)) /* RFC, not draft. */
     {
-        if (!NEGOTIATED_TLS_1_3(ssl))
+        if (!NGTD_VER(ssl, v_tls_1_3_any))
         {
             const char *suffix;
 
-            if (ssl->minVer == TLS_1_2_MIN_VER)
+            if (NGTD_VER(ssl, v_tls_1_2 | v_dtls_1_2))
             {
                 suffix = TLS13_DOWNGRADE_PROT_TLS12;
             }
             else
             {
-                psAssert(ssl->minVer <= TLS_1_1_MIN_VER);
                 suffix = TLS13_DOWNGRADE_PROT_TLS11_OR_BELOW;
             }
             Memcpy(ssl->sec.serverRandom + 24, suffix, 8);
@@ -3911,7 +3738,7 @@ static int32 writeServerHello(ssl_t *ssl, sslBuf_t *out)
     If peerVerifyData isn't available and we're doing a retransmit we know
     this is the problematic case so forget we have a myVerifyData
  */
-    if (ssl->flags & SSL_FLAGS_DTLS)
+    if (ACTV_VER(ssl, v_dtls_any))
     {
         if ((ssl->secureRenegotiationFlag == PS_TRUE) && (ssl->retransmit == 1)
             && (ssl->myVerifyDataLen > 0) && (ssl->peerVerifyDataLen == 0))
@@ -4025,7 +3852,7 @@ static int32 writeServerHello(ssl_t *ssl, sslBuf_t *out)
     messageSize += extLen;
     t = 1;
 #  ifdef USE_DTLS
-    if ((ssl->flags & SSL_FLAGS_DTLS) && (ssl->retransmit == 1))
+    if ((ACTV_VER(ssl, v_dtls_any)) && (ssl->retransmit == 1))
     {
 /*
         All retransmits must generate identical handshake messages as the
@@ -4067,8 +3894,8 @@ static int32 writeServerHello(ssl_t *ssl, sslBuf_t *out)
     First two fields in the ServerHello message are the major and minor
     SSL protocol versions we agree to talk with
  */
-    *c = ssl->majVer; c++;
-    *c = ssl->minVer; c++;
+    *c = psEncodeVersionMaj(GET_ACTV_VER(ssl)); c++;
+    *c = psEncodeVersionMin(GET_ACTV_VER(ssl)); c++;
 
     psTracePrintProtocolVersion(INDENT_HS_MSG,
             "server_version",
@@ -4461,17 +4288,14 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
     int32_t rc;
 
 #   ifndef USE_ONLY_PSK_CIPHER_SUITE
-    psSize_t hashSize;
-    unsigned char *hsMsgHash, *sigStart;
-    psDigestContext_t digestCtx;
-    pkaAfter_t *pkaAfter;
-    void *pkiData = ssl->userPtr;
+    unsigned char *tbsStart;
     sslIdentity_t *chosen = ssl->chosenIdentity;
+    int32_t skeSigAlg;
 #   endif
 
 #   if defined(USE_PSK_CIPHER_SUITE) && defined(USE_ANON_DH_CIPHER_SUITE)
-    unsigned char *hint;
-    uint8_t hintLen;
+    unsigned char *hint = NULL;
+    uint8_t hintLen = 0;
 #   endif /* USE_PSK_CIPHER_SUITE && USE_ANON_DH_CIPHER_SUITE */
 #   ifdef USE_ECC_CIPHER_SUITE
     psSize_t eccPubKeyLen = 0;
@@ -4491,7 +4315,7 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
         messageSize = ssl->recordHeadLen + ssl->hshakeHeadLen +
                       6 + pLen + gLen + ssl->sec.dhKeyPriv->size;
 #    ifdef USE_TLS_1_2
-        if (ssl->flags & SSL_FLAGS_TLS_1_2)
+        if (NGTD_VER(ssl, v_tls_with_signature_algorithms))
         {
             messageSize -= 2; /* hashSigAlg not going to be needed */
         }
@@ -4504,18 +4328,18 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
             {
                 return MATRIXSSL_ERROR;
             }
-/*
- *                      RFC4279: In the absence of an application profile specification
- *                      specifying otherwise, servers SHOULD NOT provide an identity hint
- *                      and clients MUST ignore the identity hint field.  Applications that
- *                      do use this field MUST specify its contents, how the value is
- *                      chosen by the TLS server, and what the TLS client is expected to do
- *                      with the value.
- *                      @note Unlike pure PSK cipher which will omit the ServerKeyExchange
- *                      message if the hint is NULL, the DHE_PSK exchange simply puts
- *                      two zero bytes in this case, since the message must still be sent
- *                      to exchange the DHE public key.
- */
+            /*
+              RFC4279: In the absence of an application profile specification
+              specifying otherwise, servers SHOULD NOT provide an identity hint
+              and clients MUST ignore the identity hint field.  Applications that
+              do use this field MUST specify its contents, how the value is
+              chosen by the TLS server, and what the TLS client is expected to do
+              with the value.
+              @note Unlike pure PSK cipher which will omit the ServerKeyExchange
+              message if the hint is NULL, the DHE_PSK exchange simply puts
+              two zero bytes in this case, since the message must still be sent
+              to exchange the DHE public key.
+            */
             messageSize += 2; /* length of hint (even if zero) */
             if (hintLen != 0 && hint != NULL)
             {
@@ -4569,7 +4393,7 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
                 messageSize++;     /* Extra byte for 'long' asn.1 encode */
             }
 #    ifdef USE_DTLS
-            if ((ssl->flags & SSL_FLAGS_DTLS) && (ssl->retransmit == 1))
+            if ((ACTV_VER(ssl, v_dtls_any)) && (ssl->retransmit == 1))
             {
                 /* We already know if this signature got resized */
                 messageSize += ssl->ecdsaSizeChange;
@@ -4602,7 +4426,7 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
         return MATRIXSSL_ERROR;
     }
 #   ifdef USE_TLS_1_2
-    if (ssl->flags & SSL_FLAGS_TLS_1_2)
+    if (NGTD_VER(ssl, v_tls_with_signature_algorithms))
     {
         messageSize += 2; /* hashSigAlg */
     }
@@ -4614,7 +4438,7 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
         return rc;
     }
 #   ifndef USE_ONLY_PSK_CIPHER_SUITE
-    sigStart = c;
+    tbsStart = c;
 #   endif
 
 #   if defined(USE_PSK_CIPHER_SUITE) && defined(USE_ANON_DH_CIPHER_SUITE)
@@ -4684,340 +4508,44 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
 }
 #   endif /* USE_ECC_CIPHER_SUITE */
 
-    /*  RFC 5246 - 7.4.3.  Server Key Exchange Message
-        In addition, the hash and signature algorithms MUST be compatible
-        with the key in the server's end-entity certificate.  RSA keys MAY be
-        used with any permitted hash algorithm, subject to restrictions in
-        the certificate, if any. */
-
-#   ifdef USE_RSA_CIPHER_SUITE
-/*
-    RSA authentication requires an additional signature portion to the message
- */
-    if (ssl->flags & SSL_FLAGS_DHE_WITH_RSA)
+# ifndef USE_ONLY_PSK_CIPHERSUITE
+    if (ssl->flags & (SSL_FLAGS_DHE_WITH_RSA | SSL_FLAGS_DHE_WITH_DSA))
     {
-        int32 skeSigAlg = 0; /* If this stays 0, we will use MD5-SHA-1. */
+        /* Message length been pre-computed, and we have written the public
+           value and/or the PSK hint. Next we shall choose the signature
+           algorithm, write the signature algorithm identifier (if (D)TLS 1.2)
+           and setup pkaAfter for later signature generation. */
 
-# ifdef USE_SSL_INFORMATIONAL_TRACE_VERBOSE
-        psTracePrintSigAlgs(ssl->hashSigAlg, "Peer ClientHello");
-# endif
-#    ifndef USE_ONLY_PSK_CIPHER_SUITE
-        /* Saved aside for pkaAfter_t */
-        if ((hsMsgHash = psMalloc(ssl->hsPool, SHA512_HASH_SIZE)) == NULL)
+        /* 1. Determine hash and signature algorithm to use. */
+        skeSigAlg = chooseSkeSigAlg(ssl, ssl->chosenIdentity);
+        if (skeSigAlg < 0)
         {
-            return PS_MEM_FAIL;
-        }
-#    endif
-#    ifdef USE_TLS_1_2
-        if (ssl->flags & SSL_FLAGS_TLS_1_2)
-        {
-            skeSigAlg = chooseSigAlg(chosen->cert, &chosen->privKey, ssl->hashSigAlg);
-            if (skeSigAlg == PS_UNSUPPORTED_FAIL)
-            {
-                psTraceInfo("Unavailable sigAlgorithm for SKE write\n");
-                psFree(hsMsgHash, ssl->hsPool);
-                return PS_UNSUPPORTED_FAIL;
-            }
-        }
-#    endif  /* USE_TLS_1_2 */
-
-        switch(skeSigAlg)
-        {
-#      ifdef USE_MD5SHA1
-        case 0:
-            hashSize = MD5SHA1_HASHLEN;
-            psMd5Sha1PreInit(&digestCtx.md5sha1);
-            psMd5Sha1Init(&digestCtx.md5sha1);
-            psMd5Sha1Update(&digestCtx.md5sha1, ssl->sec.clientRandom,
-                    SSL_HS_RANDOM_SIZE);
-            psMd5Sha1Update(&digestCtx.md5sha1, ssl->sec.serverRandom,
-                    SSL_HS_RANDOM_SIZE);
-            psMd5Sha1Update(&digestCtx.md5sha1, sigStart,
-                    (uint32) (c - sigStart));
-            psMd5Sha1Final(&digestCtx.md5sha1, hsMsgHash);
-            break;
-#      endif /* USE_MD5SHA1 */
-#      ifdef USE_SHA1
-        case OID_SHA1_RSA_SIG:
-            hashSize = SHA1_HASH_SIZE;
-            psSha1PreInit(&digestCtx.sha1);
-            psSha1Init(&digestCtx.sha1);
-            psSha1Update(&digestCtx.sha1, ssl->sec.clientRandom,
-                    SSL_HS_RANDOM_SIZE);
-            psSha1Update(&digestCtx.sha1, ssl->sec.serverRandom,
-                    SSL_HS_RANDOM_SIZE);
-            psSha1Update(&digestCtx.sha1, sigStart,
-                    (uint32) (c - sigStart));
-            psSha1Final(&digestCtx.sha1, hsMsgHash);
-            *c++ = 0x2;
-            *c++ = 0x1;
-            break;
-#      endif /* USE_SHA1 */
-#      ifdef USE_SHA256
-        case OID_SHA256_RSA_SIG:
-            hashSize = SHA256_HASH_SIZE;
-            psSha256PreInit(&digestCtx.sha256);
-            psSha256Init(&digestCtx.sha256);
-            psSha256Update(&digestCtx.sha256, ssl->sec.clientRandom,
-                    SSL_HS_RANDOM_SIZE);
-            psSha256Update(&digestCtx.sha256, ssl->sec.serverRandom,
-                    SSL_HS_RANDOM_SIZE);
-            psSha256Update(&digestCtx.sha256, sigStart,
-                    (uint32) (c - sigStart));
-            psSha256Final(&digestCtx.sha256, hsMsgHash);
-            *c++ = 0x4;
-            *c++ = 0x1;
-            break;
-#     endif /* USE_SHA256 */
-#     ifdef USE_SHA384
-        case OID_SHA384_RSA_SIG:
-            hashSize = SHA384_HASH_SIZE;
-            psSha384PreInit(&digestCtx.sha384);
-            psSha384Init(&digestCtx.sha384);
-            psSha384Update(&digestCtx.sha384, ssl->sec.clientRandom,
-                    SSL_HS_RANDOM_SIZE);
-            psSha384Update(&digestCtx.sha384, ssl->sec.serverRandom,
-                    SSL_HS_RANDOM_SIZE);
-            psSha384Update(&digestCtx.sha384, sigStart,
-                    (uint32) (c - sigStart));
-            psSha384Final(&digestCtx.sha384, hsMsgHash);
-            *c++ = 0x5;
-            *c++ = 0x1;
-            break;
-#     endif     /* USE_SHA384 */
-#     ifdef USE_SHA512
-        case OID_SHA512_RSA_SIG:
-            hashSize = SHA512_HASH_SIZE;
-            psSha512PreInit(&digestCtx.sha512);
-            psSha512Init(&digestCtx.sha512);
-            psSha512Update(&digestCtx.sha512, ssl->sec.clientRandom,
-                    SSL_HS_RANDOM_SIZE);
-            psSha512Update(&digestCtx.sha512, ssl->sec.serverRandom,
-                    SSL_HS_RANDOM_SIZE);
-            psSha512Update(&digestCtx.sha512, sigStart,
-                    (uint32) (c - sigStart));
-            psSha512Final(&digestCtx.sha512, hsMsgHash);
-            *c++ = 0x6;
-            *c++ = 0x1;
-            break;
-#     endif     /* USE_SHA512 */
-        default:
-            psTraceIntInfo("Unavailable sigAlgorithm for SKE write: %d\n",
-                    skeSigAlg);
-            psFree(hsMsgHash, ssl->hsPool);
-            return PS_UNSUPPORTED_FAIL;
+            return skeSigAlg;
         }
 
-        *c = (chosen->privKey.keysize & 0xFF00) >> 8; c++;
-        *c = chosen->privKey.keysize & 0xFF; c++;
-
-#    ifdef USE_DTLS
-        if ((ssl->flags & SSL_FLAGS_DTLS) && (ssl->retransmit == 1))
+        /* 2. Compute the hash. */
+        /* 3. Setup pkaAfter_t for delayed signing op. */
+        rc = tlsPrepareSkeSignature(ssl,
+                skeSigAlg,
+                tbsStart,
+                c);
+        if (rc < 0)
         {
-            /* It is not optimal to have run through the above digest updates
-                again on a retransmit just to free the hash here but the
-                saved message is ONLY the signature portion done in nowDoSke
-                so the few hashSigAlg bytes and keysize done above during the
-                hash are important to rewrite */
-            psFree(hsMsgHash, ssl->hsPool);
-            Memcpy(c, ssl->ckeMsg, ssl->ckeSize);
-            c += ssl->ckeSize;
+            return rc;
         }
-        else     /* closed below */
-        {
-#    endif /* USE_DTLS */
-        pkaAfter = getPkaAfter(ssl);
-#    ifdef USE_TLS_1_2
-        if (ssl->flags & SSL_FLAGS_TLS_1_2)
-        {
-            pkaAfter->type = PKA_AFTER_RSA_SIG_GEN_ELEMENT;
-        }
-        else
-        {
-            pkaAfter->type = PKA_AFTER_RSA_SIG_GEN;
-        }
-#    else /* !USE_TLS_1_2 */
-        pkaAfter->type = PKA_AFTER_RSA_SIG_GEN;
-#    endif /* USE_TLS_1_2 */
-
-        pkaAfter->inbuf = hsMsgHash;
-        pkaAfter->outbuf = c;
-        pkaAfter->data = pkiData;
-        pkaAfter->inlen = hashSize;
-        c += chosen->privKey.keysize;
-#    ifdef USE_DTLS
-    }
-#    endif /* USE_DTLS */
-    }
-#   endif  /* USE_RSA_CIPHER_SUITE */
-
-#   ifdef USE_ECC_CIPHER_SUITE
-    if (ssl->flags & SSL_FLAGS_DHE_WITH_DSA)
-    {
-        int32 skeSigAlg = OID_SHA1_ECDSA_SIG;
-#    ifndef USE_ONLY_PSK_CIPHER_SUITE
-        /* Saved aside for pkaAfter_t */
-        if ((hsMsgHash = psMalloc(ssl->hsPool, SHA512_HASH_SIZE)) == NULL)
-        {
-            return PS_MEM_FAIL;
-        }
-#    endif
-#    ifdef USE_TLS_1_2
-        if (ssl->flags & SSL_FLAGS_TLS_1_2)
-        {
-            skeSigAlg = chooseSigAlg(chosen->cert, &chosen->privKey, ssl->hashSigAlg);
-            if (skeSigAlg == PS_UNSUPPORTED_FAIL)
-            {
-                psTraceInfo("Unavailable sigAlgorithm for SKE write\n");
-                psFree(hsMsgHash, ssl->hsPool);
-                return PS_UNSUPPORTED_FAIL;
-            }
-        }
-        else
-        {
-            skeSigAlg = OID_SHA1_ECDSA_SIG;
-        }
-        if (skeSigAlg == OID_SHA256_ECDSA_SIG)
-        {
-            hashSize = SHA256_HASH_SIZE;
-            psSha256PreInit(&digestCtx.sha256);
-            psSha256Init(&digestCtx.sha256);
-            psSha256Update(&digestCtx.sha256, ssl->sec.clientRandom,
-                SSL_HS_RANDOM_SIZE);
-            psSha256Update(&digestCtx.sha256, ssl->sec.serverRandom,
-                SSL_HS_RANDOM_SIZE);
-            psSha256Update(&digestCtx.sha256, sigStart, (int32) (c - sigStart));
-            psSha256Final(&digestCtx.sha256, hsMsgHash);
-            *c++ = 0x4; /* SHA256 */
-            *c++ = 0x3; /* ECDSA */
-#     ifdef USE_SHA384
-        }
-        else if ((ssl->flags & SSL_FLAGS_TLS_1_2) &&
-                 (skeSigAlg == OID_SHA384_ECDSA_SIG))
-        {
-            hashSize = SHA384_HASH_SIZE;
-            psSha384PreInit(&digestCtx.sha384);
-            psSha384Init(&digestCtx.sha384);
-            psSha384Update(&digestCtx.sha384, ssl->sec.clientRandom,
-                SSL_HS_RANDOM_SIZE);
-            psSha384Update(&digestCtx.sha384, ssl->sec.serverRandom,
-                SSL_HS_RANDOM_SIZE);
-            psSha384Update(&digestCtx.sha384, sigStart, (int32) (c - sigStart));
-            psSha384Final(&digestCtx.sha384, hsMsgHash);
-            *c++ = 0x5; /* SHA384 */
-            *c++ = 0x3; /* ECDSA */
-#     endif
-#     ifdef USE_SHA512
-        }
-        else if ((ssl->flags & SSL_FLAGS_TLS_1_2) &&
-                 (skeSigAlg == OID_SHA512_ECDSA_SIG))
-        {
-            hashSize = SHA512_HASH_SIZE;
-            psSha512PreInit(&digestCtx.sha512);
-            psSha512Init(&digestCtx.sha512);
-            psSha512Update(&digestCtx.sha512, ssl->sec.clientRandom,
-                SSL_HS_RANDOM_SIZE);
-            psSha512Update(&digestCtx.sha512, ssl->sec.serverRandom,
-                SSL_HS_RANDOM_SIZE);
-            psSha512Update(&digestCtx.sha512, sigStart, (int32) (c - sigStart));
-            psSha512Final(&digestCtx.sha512, hsMsgHash);
-            *c++ = 0x6; /* SHA512 */
-            *c++ = 0x3; /* ECDSA */
-#     endif
-#     ifdef USE_SHA1
-        }
-        else if (ssl->minVer < TLS_1_2_MIN_VER ||
-#      ifdef USE_DTLS
-                 /* DTLS 1.0 is same at TLS 1.1 */
-                 ssl->minVer == DTLS_MIN_VER ||
-#      endif
-                 ((ssl->flags & SSL_FLAGS_TLS_1_2) &&
-                  (skeSigAlg == OID_SHA1_ECDSA_SIG)))
-        {
-            hashSize = SHA1_HASH_SIZE;
-            psSha1PreInit(&digestCtx.sha1);
-            psSha1Init(&digestCtx.sha1);
-            psSha1Update(&digestCtx.sha1, ssl->sec.clientRandom,
-                SSL_HS_RANDOM_SIZE);
-            psSha1Update(&digestCtx.sha1, ssl->sec.serverRandom,
-                SSL_HS_RANDOM_SIZE);
-            psSha1Update(&digestCtx.sha1, sigStart, (int32) (c - sigStart));
-            psSha1Final(&digestCtx.sha1, hsMsgHash);
-            if (ssl->flags & SSL_FLAGS_TLS_1_2)
-            {
-                *c++ = 0x2; /* SHA1 */
-                *c++ = 0x3; /* ECDSA */
-            }
-#     endif
-        }
-        else
-        {
-            psFree(hsMsgHash, ssl->hsPool);
-            return PS_UNSUPPORTED_FAIL;
-        }
-#    else
-        hashSize = SHA1_HASH_SIZE;
-        psSha1PreInit(&digestCtx.sha1);
-        psSha1Init(&digestCtx.sha1);
-        psSha1Update(&digestCtx.sha1, ssl->sec.clientRandom,
-            SSL_HS_RANDOM_SIZE);
-        psSha1Update(&digestCtx.sha1, ssl->sec.serverRandom,
-            SSL_HS_RANDOM_SIZE);
-        psSha1Update(&digestCtx.sha1, sigStart, (int32) (c - sigStart));
-        psSha1Final(&digestCtx.sha1, hsMsgHash);
-#    endif
-
-#    ifdef USE_DTLS
-        if ((ssl->flags & SSL_FLAGS_DTLS) && (ssl->retransmit == 1))
-        {
-            /* It is not optimal to have run through the above digest updates
-                again on a retransmit just to free the hash here but the
-                saved message is ONLY the signature portion done in nowDoSke
-                so the few hashSigAlg bytes and keysize done above during the
-                hash are important to rewrite */
-            psFree(hsMsgHash, ssl->hsPool);
-            Memcpy(c, ssl->ckeMsg, ssl->ckeSize);
-            c += ssl->ckeSize;
-        }
-        else     /* closed below */
-        {
-#    endif /* USE_DTLS */
-
-        if ((pkaAfter = getPkaAfter(ssl)) == NULL)
-        {
-            psTraceInfo("getPkaAfter error\n");
-            return PS_PLATFORM_FAIL;
-        }
-        pkaAfter->inbuf = hsMsgHash;
-        pkaAfter->outbuf = c;
-        pkaAfter->data = pkiData;
-        pkaAfter->inlen = hashSize;
-        pkaAfter->type = PKA_AFTER_ECDSA_SIG_GEN;
-        rc = chosen->privKey.keysize + 8;
-        /* NEGATIVE ECDSA - Adding spot for ONE 0x0 byte in ECDSA so we'll
-            be right 50% of the time... 521 curve doesn't need */
-        if (chosen->privKey.keysize != 132)
-        {
-            rc += 1;
-        }
-        /* Above we added in the 8 bytes of overhead (2 sigLen, 1 SEQ,
-            1 len (possibly 2!), 1 INT, 1 rLen, 1 INT, 1 sLen) and now
-            subtract the first 3 bytes to see if the 1 len needs to be 2 */
-        if (rc - 3 >= 128)
-        {
-            rc++;
-        }
-        pkaAfter->user = rc; /* outlen for later */
         c += rc;
-#    ifdef USE_DTLS
     }
-#    endif /* USE_DTLS */
-    }
-#   endif  /* USE_ECC_CIPHER_SUITE */
+# endif /* USE_ONLY_PSK_CIPHERSUITE */
 
-    if ((rc = postponeEncryptRecord(ssl, SSL_RECORD_TYPE_HANDSHAKE,
-             SSL_HS_SERVER_KEY_EXCHANGE, messageSize, padLen, encryptStart, out,
-             &c)) < 0)
+    rc = postponeEncryptRecord(ssl,
+            SSL_RECORD_TYPE_HANDSHAKE,
+            SSL_HS_SERVER_KEY_EXCHANGE,
+            messageSize,
+            padLen,
+            encryptStart,
+            out,
+            &c);
+    if (rc < 0)
     {
         return rc;
     }
@@ -5498,7 +5026,7 @@ static int32 writeCertificate(ssl_t *ssl, sslBuf_t *out, int32 notEmpty)
                  end, &c)) < 0)
         {
 #  ifdef USE_DTLS
-            if (ssl->flags & SSL_FLAGS_DTLS)
+            if (ACTV_VER(ssl, v_dtls_any))
             {
 /*
                 Is this the fragment case?
@@ -5603,7 +5131,7 @@ static int32 postponeSnapshotHSHash(ssl_t *ssl, unsigned char *c, int32 sender)
 {
     ssl->delayHsHash = c;
 # ifdef USE_TLS
-    if (ssl->flags & SSL_FLAGS_TLS)
+    if (!ACTV_VER(ssl, v_ssl_3_0))
     {
         return TLS_HS_FINISHED_SIZE;
     }
@@ -5637,15 +5165,22 @@ static int32 writeFinished(ssl_t *ssl, sslBuf_t *out)
 
     verifyLen = MD5_HASH_SIZE + SHA1_HASH_SIZE;
 # ifdef USE_TLS
-    if (ssl->flags & SSL_FLAGS_TLS)
+    if (!ACTV_VER(ssl, v_ssl_3_0))
     {
         verifyLen = TLS_HS_FINISHED_SIZE;
     }
 # endif /* USE_TLS */
     messageSize = ssl->recordHeadLen + ssl->hshakeHeadLen + verifyLen;
 
-    if ((rc = writeRecordHeader(ssl, SSL_RECORD_TYPE_HANDSHAKE, SSL_HS_FINISHED,
-             &messageSize, &padLen, &encryptStart, end, &c)) < 0)
+    rc = writeRecordHeader(ssl,
+            SSL_RECORD_TYPE_HANDSHAKE,
+            SSL_HS_FINISHED,
+            &messageSize,
+            &padLen,
+            &encryptStart,
+            end,
+            &c);
+    if (rc < 0)
     {
         return rc;
     }
@@ -5654,8 +5189,15 @@ static int32 writeFinished(ssl_t *ssl, sslBuf_t *out)
  */
     c += postponeSnapshotHSHash(ssl, c, ssl->flags & SSL_FLAGS_SERVER);
 
-    if ((rc = postponeEncryptRecord(ssl, SSL_RECORD_TYPE_HANDSHAKE,
-             SSL_HS_FINISHED, messageSize, padLen, encryptStart, out, &c)) < 0)
+    rc = postponeEncryptRecord(ssl,
+            SSL_RECORD_TYPE_HANDSHAKE,
+            SSL_HS_FINISHED,
+            messageSize,
+            padLen,
+            encryptStart,
+            out,
+            &c);
+    if (rc < 0)
     {
         return rc;
     }
@@ -5663,7 +5205,7 @@ static int32 writeFinished(ssl_t *ssl, sslBuf_t *out)
 
 
 # ifdef USE_DTLS
-    if (ssl->flags & SSL_FLAGS_DTLS)
+    if (ACTV_VER(ssl, v_dtls_any))
     {
 /*
         Can't free the sec.cert buffer or close the handshake pool if
@@ -5874,7 +5416,7 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
 
     cookieLen = 0;
 #  ifdef USE_DTLS
-    if (ssl->flags & SSL_FLAGS_DTLS)
+    if (ACTV_VER(ssl, v_dtls_any))
     {
         /* TODO DTLS make sure a block cipher suite is being used */
         if (ssl->haveCookie)
@@ -5883,7 +5425,7 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
         }
         else
         {
-            cookieLen = 1;                  /* Always send the length (0) even if no cookie */
+            cookieLen = 1; /* Always send the length (0) even if no cookie */
         }
         /* save for next time called for VERIFY_REQUEST response */
         ssl->cipherSpecLen = min(8, cipherSpecLen); /* 8 is arbitrary limit */
@@ -5919,8 +5461,10 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
             cipherDetails = sslGetCipherSpec(ssl, cipherSpecs[i]);
             if (cipherDetails == NULL)
             {
-                psTraceIntInfo("Cipher suite not supported: %d\n",
-                    cipherSpecs[i]);
+                psTracePrintCiphersuiteName(0,
+                        "Ciphersuite not supported",
+                        cipherSpecs[i],
+                        PS_TRUE);
                 return PS_UNSUPPORTED_FAIL;
             }
             cipherLen += 2;
@@ -5938,7 +5482,7 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
 #  endif
     if (options->fallbackScsv)
     {
-        if (ssl->minVer == TLS_HIGHEST_MINOR)
+        if (ACTV_VER(ssl, psVerGetHighestTls(v_compiled_in)))
         {
             /** If a client sets ClientHello.client_version to its highest
                supported protocol version, it MUST NOT include TLS_FALLBACK_SCSV.
@@ -5970,7 +5514,7 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
            version but the server did not support it. In that case, the fallbackScsv
            option should have been specified to mitigate version rollback attacks.
          */
-        if (ssl->minVer < TLS_HIGHEST_MINOR)
+        if (!ACTV_VER(ssl, psVerGetHighestTls(v_compiled_in)))
         {
             psTraceInfo("Warning, if this is a fallback connection, set fallbackScsv?\n");
         }
@@ -5989,7 +5533,7 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
 
     /* Max Fragment extension request */
     ssl->maxPtFrag = SSL_MAX_PLAINTEXT_LEN;
-    if (ssl->minVer > 0 && (options->maxFragLen > 0) &&
+    if (!ACTV_VER(ssl, v_ssl_3_0) && (options->maxFragLen > 0) &&
         (options->maxFragLen < SSL_MAX_PLAINTEXT_LEN))
     {
         if (options->maxFragLen == 0x200 ||
@@ -6055,11 +5599,20 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
     curveListLen = 0;
     if (eccSuitesSupported(ssl, cipherSpecs, cipherSpecLen))
     {
-        /*      Getting the curve list from crypto directly */
+        uint32_t ecFlags = options->ecFlags;
+
+        /* Getting the curve list from crypto directly */
         curveListLen = sizeof(eccCurveList);
-        if (options->ecFlags)
+# ifdef USE_SEC_CONFIG
+        /* Allow security profile to override the ECC curve list. */
+        if (ssl->ecFlagsOverride != 0)
         {
-            userSuppliedEccList(eccCurveList, &curveListLen, options->ecFlags);
+            ecFlags = ssl->ecFlagsOverride;
+        }
+# endif
+        if (ecFlags)
+        {
+            userSuppliedEccList(eccCurveList, &curveListLen, ecFlags);
         }
         else
         {
@@ -6177,7 +5730,7 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
     }
 
 #  ifdef USE_DTLS
-    if ((ssl->flags & SSL_FLAGS_DTLS) && (ssl->helloExtLen > 0))
+    if ((ACTV_VER(ssl, v_dtls_any)) && (ssl->helloExtLen > 0))
     {
         /* Override all the extension calculations and just grab what was
             sent the first time.  Can't rebuild because there is no good line
@@ -6191,9 +5744,15 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
     c = out->end;
     end = out->buf + out->size;
 
-    if ((rc = writeRecordHeader(ssl, SSL_RECORD_TYPE_HANDSHAKE,
-             SSL_HS_CLIENT_HELLO, &messageSize, &padLen, &encryptStart,
-             end, &c)) < 0)
+    rc = writeRecordHeader(ssl,
+            SSL_RECORD_TYPE_HANDSHAKE,
+            SSL_HS_CLIENT_HELLO,
+            &messageSize,
+            &padLen,
+            &encryptStart,
+            end,
+            &c);
+    if (rc < 0)
     {
         *requiredLen = messageSize;
         return rc;
@@ -6216,12 +5775,12 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
         CompressionMethod compression_methods<1..2^8-1>;
       } ClientHello;
  */
-    if ((ssl->flags & SSL_FLAGS_DTLS) && (ssl->haveCookie))
+    if ((ACTV_VER(ssl, v_dtls_any)) && (ssl->haveCookie))
     {
         t = 0;
     }
     /* Also test for retransmit */
-    if ((ssl->flags & SSL_FLAGS_DTLS) && (ssl->retransmit == 1))
+    if ((ACTV_VER(ssl, v_dtls_any)) && (ssl->retransmit == 1))
     {
         t = 0;
     }
@@ -6259,12 +5818,16 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
     First two fields in the ClientHello message are the maximum major
     and minor SSL protocol versions we support.
  */
-    *c = ssl->majVer; c++;
-    *c = ssl->minVer; c++;
-
-    psTracePrintProtocolVersion(INDENT_HS_MSG,
+    *c = psEncodeVersionMaj(GET_ACTV_VER(ssl)); c++;
+    *c = psEncodeVersionMin(GET_ACTV_VER(ssl)); c++;
+    psTracePrintProtocolVersionNew(INDENT_HS_MSG,
             "client_version",
-            ssl->majVer, ssl->minVer, 1);
+            GET_ACTV_VER(ssl),
+            PS_TRUE);
+    /* Active version may get overridden by the result of the version
+       negotiation, so save it. ClientHello.client_version is needed
+       for RSA premaster calculation in TLS 1.2 and below. */
+    ssl->ourHelloVersion = GET_ACTV_VER(ssl);
 
 /*
     The next 32 bytes are the server's random value, to be combined with
@@ -6300,7 +5863,7 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
             PS_TRUE);
 
 #  ifdef USE_DTLS
-    if (ssl->flags & SSL_FLAGS_DTLS)
+    if (ACTV_VER(ssl, v_dtls_any))
     {
         if (ssl->haveCookie)
         {
@@ -6389,7 +5952,7 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
 #  endif
 
 #  ifdef USE_DTLS
-    if (ssl->flags & SSL_FLAGS_DTLS)
+    if (ACTV_VER(ssl, v_dtls_any))
     {
         /* Need to save aside (or recall) extensions because the resend
             path doesn't go     back to the user to rebuild them. */
@@ -6621,7 +6184,7 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
     }
 
 #  ifdef USE_DTLS
-    if ((ssl->flags & SSL_FLAGS_DTLS) && (extLen > 0) && extStart)
+    if ((ACTV_VER(ssl, v_dtls_any)) && (extLen > 0) && extStart)
     {
         if (ssl->helloExtLen == 0)
         {
@@ -6723,7 +6286,7 @@ static int32 writeClientKeyExchange(ssl_t *ssl, sslBuf_t *out)
         }
 #   ifdef USE_DTLS
         /* Need to save for retransmit? */
-        if (!(ssl->flags & SSL_FLAGS_DTLS))
+        if (!(ACTV_VER(ssl, v_dtls_any)))
         {
             psFree(ssl->sec.hint, ssl->hsPool); ssl->sec.hint = NULL;
         }
@@ -6741,7 +6304,7 @@ static int32 writeClientKeyExchange(ssl_t *ssl, sslBuf_t *out)
     if (ssl->flags & SSL_FLAGS_DHE_KEY_EXCH)
     {
 #   ifdef USE_DTLS
-        if (ssl->flags & SSL_FLAGS_DTLS && ssl->retransmit == 1)
+        if (ACTV_VER(ssl, v_dtls_any) && ssl->retransmit == 1)
         {
             keyLen = ssl->ckeSize;
         }
@@ -6817,7 +6380,7 @@ static int32 writeClientKeyExchange(ssl_t *ssl, sslBuf_t *out)
     explicitLen = 0;
 #  ifdef USE_TLS
     /*  Must always add the key size length to the message */
-    if (ssl->flags & SSL_FLAGS_TLS)
+    if (!NGTD_VER(ssl, v_ssl_3_0))
     {
         messageSize += 2;
         explicitLen = 1;
@@ -6899,7 +6462,7 @@ static int32 writeClientKeyExchange(ssl_t *ssl, sslBuf_t *out)
     }
 
 #  ifdef USE_DTLS
-    if ((ssl->flags & SSL_FLAGS_DTLS) && (ssl->retransmit == 1))
+    if ((ACTV_VER(ssl, v_dtls_any)) && (ssl->retransmit == 1))
     {
 /*
          Retransmit case.  Must use the cached encrypted msg from
@@ -6931,7 +6494,7 @@ static int32 writeClientKeyExchange(ssl_t *ssl, sslBuf_t *out)
             }
             psAssert(keyLen == (uint32) * (c - 1));
 #    ifdef USE_DTLS
-            if (ssl->flags & SSL_FLAGS_DTLS)
+            if (ACTV_VER(ssl, v_dtls_any))
             {
                 /* Set aside retransmit for this case here since there is
                     nothing happening in nowDoCke related to the handshake
@@ -6978,7 +6541,7 @@ static int32 writeClientKeyExchange(ssl_t *ssl, sslBuf_t *out)
             psAssert(dhLen == keyLen);
         }
 #    ifdef USE_DTLS
-        if (ssl->flags & SSL_FLAGS_DTLS)
+        if (ACTV_VER(ssl, v_dtls_any))
         {
             /* Set aside retransmit for this case here since there is
                 nothing happening in nowDoCke related to the handshake
@@ -7123,8 +6686,10 @@ static int32 writeClientKeyExchange(ssl_t *ssl, sslBuf_t *out)
         return SSL_MEM_ERROR;
     }
 
-    ssl->sec.premaster[0] = ssl->reqMajVer;
-    ssl->sec.premaster[1] = ssl->reqMinVer;
+    /* The version MUST be the same as the one we encoded in
+       ClientHello.client_version. */
+    ssl->sec.premaster[0] = psEncodeVersionMaj(ssl->ourHelloVersion);
+    ssl->sec.premaster[1] = psEncodeVersionMin(ssl->ourHelloVersion);
     if (psGetPrngLocked(ssl->sec.premaster + 2,
             SSL_HS_RSA_PREMASTER_SIZE - 2, ssl->userPtr) < 0)
     {
@@ -7167,6 +6732,11 @@ static int32 writeClientKeyExchange(ssl_t *ssl, sslBuf_t *out)
     }
 
     out->end = c;
+# ifdef DEBUG_TLS_PREMASTER
+    psTraceBytes("client premaster_secret",
+            ssl->sec.premaster,
+            SSL_HS_RSA_PREMASTER_SIZE);
+# endif
     return MATRIXSSL_SUCCESS;
 }
 
@@ -7205,7 +6775,8 @@ static int32_t handleAsyncCvSigOp(ssl_t *ssl, pkaAfter_t *pka, unsigned char *ha
             ssl->extCvSigAlg = PS_ECC;
         }
 
-        if (ssl->flags & SSL_FLAGS_TLS_1_2 || ssl->extCvSigAlg == PS_RSA)
+        if (NGTD_VER(ssl, v_tls_with_signature_algorithmts)
+                || ssl->extCvSigAlg == PS_RSA)
         {
             hash_tbs = hash;
             hash_tbs_len = pka->inlen;
@@ -7286,7 +6857,7 @@ static int32 getSnapshotHSHash(ssl_t *ssl,
     }
 #    ifdef USE_TLS_1_2
     /* Tweak if needed */
-    if (ssl->flags & SSL_FLAGS_TLS_1_2)
+    if (NGTD_VER(ssl, v_tls_with_signature_algorithms))
     {
         switch (pka->inlen)
         {
@@ -7365,7 +6936,7 @@ static int nowDoCvPkaInnerECDSA(ssl_t *ssl, pkaAfter_t *pka,
     }
 
 #     ifdef USE_TLS_1_2
-    if (ssl->flags & SSL_FLAGS_TLS_1_2)
+    if (NGTD_VER(ssl, v_tls_with_signature_algorithms))
     {
         /*
            TLS 1.2 defined and used.
@@ -7473,7 +7044,7 @@ static int nowDoCvPkaInnerECDSA(ssl_t *ssl, pkaAfter_t *pka,
     } /* endif (len == pka->user) */
 
 #     ifdef USE_DTLS
-    if (ssl->flags & SSL_FLAGS_DTLS)
+    if (ACTV_VER(ssl, v_dtls_any))
     {
         int32_t saveSize;
 
@@ -7546,28 +7117,28 @@ static int nowDoCvPkaInnerRSA(ssl_t *ssl, pkaAfter_t *pka,
 #     endif /* USE_EXT_CERTIFICATE_VERIFY_SIGNING */
 
 #     ifdef USE_TLS_1_2
-    if (ssl->flags & SSL_FLAGS_TLS_1_2)
-    {
-        /*      RFC:  "The hash and signature algorithms used in the
-            signature MUST be one of those present in the
-            supported_signature_algorithms field of the
-            CertificateRequest message.  In addition, the hash and
-            signature algorithms MUST be compatible with the key in the
-            client's end-entity certificate.
+        if (NGTD_VER(ssl, v_tls_with_signature_algorithms))
+        {
+            /*      RFC:  "The hash and signature algorithms used in the
+                    signature MUST be one of those present in the
+                    supported_signature_algorithms field of the
+                    CertificateRequest message.  In addition, the hash and
+                    signature algorithms MUST be compatible with the key in the
+                    client's end-entity certificate.
 
-            We've done the above tests in the parse of the
-            CertificateRequest message and wouldn't be here if our
-            certs didn't match the sigAlgs.  However, we do have
-            to test for both sig algorithm types here to find the
-            hash strength because the sig alg might not match the
-            pubkey alg.  This was also already confirmed in
-            CertRequest parse so wouldn't be here if not allowed */
-        using_tls_1_2 = 1;     /* TLS 1.2 defined and used. */
-    }
-    else
-    {
-        using_tls_1_2 = 0;     /* TLS 1.2 defined but not used. */
-    }
+                    We've done the above tests in the parse of the
+                    CertificateRequest message and wouldn't be here if our
+                    certs didn't match the sigAlgs.  However, we do have
+                    to test for both sig algorithm types here to find the
+                    hash strength because the sig alg might not match the
+                    pubkey alg.  This was also already confirmed in
+                    CertRequest parse so wouldn't be here if not allowed */
+            using_tls_1_2 = 1;     /* TLS 1.2 defined and used. */
+        }
+        else
+        {
+            using_tls_1_2 = 0;     /* TLS 1.2 defined but not used. */
+        }
 #     else /* ! USE_TLS_1_2 */
     using_tls_1_2 = 0;     /* TLS 1.2 not defined and thus not used. */
 #     endif /* USE_TLS_1_2 */
@@ -7606,7 +7177,7 @@ static int nowDoCvPkaInnerRSA(ssl_t *ssl, pkaAfter_t *pka,
 #     endif /* USE_EXT_CERTIFICATE_VERIFY_SIGNING */
 
 #     ifdef USE_DTLS
-    if (ssl->flags & SSL_FLAGS_DTLS)
+    if (ACTV_VER(ssl, v_dtls_any))
     {
         int32_t saveSize;
 
@@ -7644,7 +7215,7 @@ static int32 nowDoCvPka(ssl_t *ssl, psBuf_t *out)
     pka = &ssl->pkaAfter[0];
 
 #    ifdef USE_DTLS
-    if (ssl->flags & SSL_FLAGS_DTLS)
+    if (ACTV_VER(ssl, v_dtls_any))
     {
         if (ssl->retransmit)
         {
@@ -7713,7 +7284,7 @@ static int32 writeCertificateVerify(ssl_t *ssl, sslBuf_t *out)
     int32_t rc;
     pkaAfter_t *pkaAfter;
     void *pkiData = ssl->userPtr;
-    int32_t sigAlg;
+    int32_t sigAlg = 0;
     sslIdentity_t *chosen = ssl->chosenIdentity;
 
     if (chosen == NULL)
@@ -7763,7 +7334,7 @@ static int32 writeCertificateVerify(ssl_t *ssl, sslBuf_t *out)
             messageSize++; /* Extra byte for 'long' asn.1 encode */
         }
 #     ifdef USE_DTLS
-        if ((ssl->flags & SSL_FLAGS_DTLS) && (ssl->retransmit == 1))
+        if ((ACTV_VER(ssl, v_dtls_any)) && (ssl->retransmit == 1))
         {
             /* We already know if this signature got resized */
             messageSize += ssl->ecdsaSizeChange;
@@ -7787,7 +7358,7 @@ static int32 writeCertificateVerify(ssl_t *ssl, sslBuf_t *out)
     running total.  Not a huge deal for the updating but
     the current snapshot framework didn't support this so there
     are one-off algorithm specific snapshots where needed. */
-    if (ssl->flags & SSL_FLAGS_TLS_1_2)
+    if (NGTD_VER(ssl, v_tls_with_signature_algorithms))
     {
         messageSize += 2; /* hashSigAlg */
     }
@@ -7804,7 +7375,7 @@ static int32 writeCertificateVerify(ssl_t *ssl, sslBuf_t *out)
     one associated with the private key.
  */
 #   ifdef USE_TLS_1_2
-    if (ssl->flags & SSL_FLAGS_TLS_1_2)
+    if (NGTD_VER(ssl, v_tls_with_signature_algorithms))
     {
         /*
           Pick the hash algorithm to use with the public key.
@@ -7832,7 +7403,7 @@ static int32 writeCertificateVerify(ssl_t *ssl, sslBuf_t *out)
     if (chosen->cert->pubKeyAlgorithm == OID_ECDSA_KEY_ALG)
     {
 #     ifdef USE_TLS_1_2
-        if (ssl->flags & SSL_FLAGS_TLS_1_2)
+        if (NGTD_VER(ssl, v_tls_with_signature_algorithms))
         {
             unsigned char b1, b2;
 
@@ -7848,7 +7419,7 @@ static int32 writeCertificateVerify(ssl_t *ssl, sslBuf_t *out)
 
 
 #     ifdef USE_DTLS
-        if (ssl->flags & SSL_FLAGS_DTLS && ssl->retransmit)
+        if (ACTV_VER(ssl, v_dtls_any) && ssl->retransmit)
         {
             Memcpy(c, ssl->certVerifyMsg, ssl->certVerifyMsgLen);
             c += ssl->certVerifyMsgLen;
@@ -7887,7 +7458,7 @@ static int32 writeCertificateVerify(ssl_t *ssl, sslBuf_t *out)
 
 #    ifdef USE_RSA
 #     ifdef USE_TLS_1_2
-    if (ssl->flags & SSL_FLAGS_TLS_1_2)
+    if (NGTD_VER(ssl, v_tls_with_signature_algorithms))
     {
         unsigned char b1, b2;
 
@@ -7960,7 +7531,7 @@ static int32 writeCertificateVerify(ssl_t *ssl, sslBuf_t *out)
     *c = (chosen->privKey.keysize & 0xFF); c++;
 
 #     ifdef USE_DTLS
-    if (ssl->flags & SSL_FLAGS_DTLS && ssl->retransmit)
+    if (ACTV_VER(ssl, v_dtls_any) && ssl->retransmit)
     {
         pkaAfter->type = 0;     /* reset so AFTER logic doesn't trigger */
         Memcpy(c, ssl->certVerifyMsg, ssl->certVerifyMsgLen);
@@ -8042,7 +7613,7 @@ static int32 writeCertificateRequest(ssl_t *ssl, sslBuf_t *out, int32 certLen,
 #   endif /* USE_ECC */
 
 #   ifdef USE_TLS_1_2
-    if (ssl->flags & SSL_FLAGS_TLS_1_2)
+    if (NGTD_VER(ssl, v_tls_with_signature_algorithms))
     {
         /* TLS 1.2 has a SignatureAndHashAlgorithm type after CertType */
         sigHashLen = 2;
@@ -8075,7 +7646,7 @@ static int32 writeCertificateRequest(ssl_t *ssl, sslBuf_t *out, int32 certLen,
              &encryptStart, end, &c)) < 0)
     {
 #   ifdef USE_DTLS
-        if (ssl->flags & SSL_FLAGS_DTLS)
+        if (ACTV_VER(ssl, v_dtls_any))
         {
 /*
                 Is this the fragment case?
@@ -8107,7 +7678,7 @@ static int32 writeCertificateRequest(ssl_t *ssl, sslBuf_t *out, int32 certLen,
 #   endif
     *c++ = RSA_SIGN;
 #   ifdef USE_TLS_1_2
-    if (ssl->flags & SSL_FLAGS_TLS_1_2)
+    if (NGTD_VER(ssl, v_tls_with_signature_algorithms))
     {
         /* RFC: "The interaction of the certificate_types and
            supported_signature_algorithms fields is somewhat complicated.
@@ -8244,7 +7815,7 @@ static int32 writeMultiRecordCertRequest(ssl_t *ssl, sslBuf_t *out,
             *c++ = RSA_SIGN;
             countDown--;
 #   ifdef USE_TLS_1_2
-            if (ssl->flags & SSL_FLAGS_TLS_1_2)
+            if (NGTD_VER(ssl, v_tls_with_signature_algorithms))
             {
                 *c++ = 0x0;
                 *c++ = sigHashLen - 2;
@@ -8499,11 +8070,16 @@ static int32 writeHelloVerifyRequest(ssl_t *ssl, sslBuf_t *out)
         return rc;
     }
 
-/*
-    Message content is version, cookie length, and cookie itself
- */
-    *c++ = ssl->rec.majVer;
-    *c++ = ssl->rec.minVer;
+    /*
+      Message content is version, cookie length, and cookie itself.
+
+      RFC 6347, section 4.2.1 is contradictory regarding which version
+      we should encode as server_version in HelloRetryRequest (see errata
+      4103). We could either use DTLS 1.0 here or the negotiated version.
+      We choose the former.
+    */
+    *c++ = DTLS_MAJ_VER;
+    *c++ = DTLS_1_0_MIN_VER;
     *c++ = DTLS_COOKIE_SIZE;
     Memcpy(c, ssl->srvCookie, DTLS_COOKIE_SIZE);
     c += DTLS_COOKIE_SIZE;
@@ -8540,10 +8116,10 @@ int32 psWriteRecordInfo(ssl_t *ssl, unsigned char type, int32 len,
         type = SSL_RECORD_TYPE_HANDSHAKE;
     }
     *c = type; c++;
-    *c = ssl->majVer; c++;
-    *c = ssl->minVer; c++;
+    *c = psEncodeVersionMaj(GET_ACTV_VER(ssl)); c++;
+    *c = psEncodeVersionMin(GET_ACTV_VER(ssl)); c++;
 # ifdef USE_DTLS
-    if (ssl->flags & SSL_FLAGS_DTLS)
+    if (ACTV_VER(ssl, v_dtls_any))
     {
         ssl->seqDelay = c;
         *c = ssl->epoch[0]; c++;
@@ -8573,7 +8149,7 @@ int32 psWriteRecordInfo(ssl_t *ssl, unsigned char type, int32 len,
     if (explicitNonce)
     {
 # ifdef USE_DTLS
-        if (ssl->flags & SSL_FLAGS_DTLS)
+        if (ACTV_VER(ssl, v_dtls_any))
         {
             c++;
             *c = ssl->epoch[0]; c++;
@@ -8623,7 +8199,7 @@ int32 psWriteHandshakeHeader(ssl_t *ssl, unsigned char type, int32 len,
     *c = (unsigned char) ((len & 0xFF0000) >> 16); c++;
     *c = (len & 0xFF00) >> 8; c++;
 # ifdef USE_DTLS
-    if (ssl->flags & SSL_FLAGS_DTLS)
+    if (ACTV_VER(ssl, v_dtls_any))
     {
         *c = (len & 0xFF); c++;
         *c = (seq & 0xFF00) >> 8; c++;

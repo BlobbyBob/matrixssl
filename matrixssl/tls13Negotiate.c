@@ -35,7 +35,7 @@
 #include "matrixsslImpl.h"
 
 #ifdef USE_TLS_1_3
-
+# ifdef USE_IDENTITY_CERTIFICATES
 /** This function is called to validate our private key and cert chain
     against against the peer's signature_algorithms,
     signature_algorithms_cert and supported_groups extensions. */
@@ -66,24 +66,30 @@ int32_t tls13TryNegotiateParams(ssl_t *ssl,
         {
             continue;
         }
+#  ifdef USE_RSA
         if (givenKey->privKey.type == PS_RSA &&
                 tls13IsRsaSigAlg(ssl->sec.keySelect.peerSigAlgs[i]))
         {
             peerCanVerifyCvSig = PS_TRUE;
             break;
         }
+#  endif
+#  ifdef USE_ECC
         if (givenKey->privKey.type == PS_ECC &&
                 tls13IsEcdsaSigAlg(ssl->sec.keySelect.peerSigAlgs[i]))
         {
             peerCanVerifyCvSig = PS_TRUE;
             break;
         }
+#  endif
+#  ifdef USE_ED25519
         if (givenKey->privKey.type == PS_ED25519 &&
                 ssl->sec.keySelect.peerSigAlgs[i] == sigalg_ed25519)
         {
             peerCanVerifyCvSig = PS_TRUE;
             break;
         }
+#  endif
     }
 
     if (!peerCanVerifyCvSig)
@@ -103,6 +109,7 @@ int32_t tls13TryNegotiateParams(ssl_t *ssl,
 
         for (i = 0; i < ssl->sec.keySelect.peerSigAlgsLen; i++)
         {
+#  ifdef USE_CERT_PARSE
             if (!Memcmp(cert->subject.hash,
                             cert->issuer.hash,
                             SHA1_HASH_SIZE))
@@ -110,14 +117,23 @@ int32_t tls13TryNegotiateParams(ssl_t *ssl,
                 /* Root cert. Peer doesn't need to verify. */
                 peerCanVerifyCert = PS_TRUE;
             }
+#  else
+            if (0)
+            {
+            }
+#  endif
+#  ifdef USE_RSA
             else if (cert->sigAlgorithm == OID_SHA256_RSA_SIG ||
                     cert->sigAlgorithm == OID_SHA384_RSA_SIG)
             {
                 if (tls13IsRsaSigAlg(ssl->sec.keySelect.peerSigAlgs[i]))
                 {
                     peerCanVerifyCert = PS_TRUE;
+
                 }
             }
+#  endif
+#  ifdef USE_ECC
             else if (cert->sigAlgorithm == OID_SHA256_ECDSA_SIG ||
                     cert->sigAlgorithm == OID_SHA384_ECDSA_SIG)
             {
@@ -126,11 +142,14 @@ int32_t tls13TryNegotiateParams(ssl_t *ssl,
                     peerCanVerifyCert = PS_TRUE;
                 }
             }
+#  endif
+#  ifdef USE_ED25519
             else if (cert->sigAlgorithm == OID_ED25519_KEY_ALG &&
                 ssl->sec.keySelect.peerSigAlgs[i] == sigalg_ed25519)
             {
                 peerCanVerifyCert = PS_TRUE;
             }
+#  endif
             else
             {
                 if (cert->sigAlgorithm == OID_ED25519_KEY_ALG)
@@ -161,5 +180,5 @@ int32_t tls13TryNegotiateParams(ssl_t *ssl,
         return PS_UNSUPPORTED_FAIL;
     }
 }
-
+# endif
 #endif /* USE_TLS_1_3 */

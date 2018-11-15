@@ -47,7 +47,7 @@ int32_t psHkdfExpand(psCipherType_e hmacAlg,
         unsigned char *okm,
         psSize_t okmLen)
 {
-    psSize_t hashLen;
+    int32_t hashLen;
     unsigned char buf[MAX_HASH_SIZE + HKDF_MAX_INFO_LEN + 1] = {0};
     unsigned char T[MAX_HASH_SIZE] = {0};
     psSizeL_t i, L, stillNeeded;
@@ -218,11 +218,11 @@ int32_t psHkdfExpandLabel(psPool_t *pool,
     rc = psDynBufAppendTlsVector(&hkdfLabelBuf,
             7, 255,
             vector_data, vector_data_len);
+    psFree(vector_data, pool);
     if (rc < 0)
     {
         return rc;
     }
-    psFree(vector_data, pool);
     psDynBufUninit(&labelBuf);
 
     /* opaque context<0..255> = Context; */
@@ -236,11 +236,11 @@ int32_t psHkdfExpandLabel(psPool_t *pool,
     rc = psDynBufAppendTlsVector(&hkdfLabelBuf,
             0, 255,
             vector_data, vector_data_len);
+    psFree(vector_data, pool);
     if (rc < 0)
     {
         return rc;
     }
-    psFree(vector_data, pool);
     psDynBufUninit(&contextBuf);
 
     /* Fetch the final HdkfLabel */
@@ -262,6 +262,7 @@ int32_t psHkdfExpandLabel(psPool_t *pool,
             length);
     if (rc < 0)
     {
+        psFree(hkdf_label, pool);
         return rc;
     }
 

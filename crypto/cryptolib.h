@@ -234,6 +234,17 @@ extern int32_t psGetPrngLocked(unsigned char *bytes, psSize_t size,
 # define OID_SHA512_ECDSA_SIG             526
 # define OID_SHA512_ECDSA_SIG_HEX         "\x06\x08\x2A\x86\x48\xCE\x3D\x04\x03\x04"
 
+/* The SSL 3.0, TLS 1.0/1.1 MD5-SHA1 based signature scheme for RSA.
+   Not based on an OID (because there isn't one).
+   This is a MatrixSSL internal ID. */
+# define OID_RSA_TLS_SIG_ALG              666
+/* Generic ID for PKCS #1.5 RSA signatures.
+   Hash algoritm to use must be specified in some other way. */
+# define OID_RSA_PKCS15_SIG_ALG           (667 + OID_COLLISION)
+/* Generic ID for ECDSA signatures in TLS.
+   Hash algoritm to use must be specified in some other way. */
+# define OID_ECDSA_TLS_SIG_ALG            (668 + OID_COLLISION)
+
 /* Public key algorithms */
 # define OID_RSA_KEY_ALG_STR              "1.2.840.113549.1.1.1"
 # define OID_RSA_KEY_ALG                  645

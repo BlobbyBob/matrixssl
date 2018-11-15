@@ -972,7 +972,7 @@ int32 matrixSslGetWritebuf(ssl_t *ssl, unsigned char **buf, uint32 requestedLen)
     {
         /* Not a problem at all beginning in TLS 1.1 (version 3.2) and never
             a problem on stream ciphers */
-        if ((ssl->majVer == SSL3_MAJ_VER) && (ssl->minVer <= TLS_MIN_VER)
+        if (NGTD_VER(ssl, v_tls_need_beast_workaround)
             && (ssl->enBlockSize > 1) && (requestedLen > 1) &&
             !(ssl->bFlags & BFLAG_STOP_BEAST))
         {
@@ -1008,7 +1008,7 @@ int32 matrixSslGetWritebuf(ssl_t *ssl, unsigned char **buf, uint32 requestedLen)
     overhead = requiredLen - requestedLen;
 
 # ifdef USE_DTLS
-    if (ssl->flags & SSL_FLAGS_DTLS)
+    if (ACTV_VER(ssl, v_dtls_any))
     {
         pmtu = matrixDtlsGetPmtu();
         if (requiredLen > (uint32) pmtu)
@@ -1074,9 +1074,10 @@ int32 matrixSslGetWritebuf(ssl_t *ssl, unsigned char **buf, uint32 requestedLen)
     that extra length here.
  */
     if ((ssl->flags & SSL_FLAGS_WRITE_SECURE) &&
-        (ssl->flags & SSL_FLAGS_TLS_1_1) && (ssl->enBlockSize > 1))
+        NGTD_VER(ssl, v_tls_explicit_iv) && (ssl->enBlockSize > 1))
     {
-        *buf = ssl->outbuf + ssl->outlen + ssl->recordHeadLen + ssl->enBlockSize;
+        *buf = ssl->outbuf + ssl->outlen + ssl->recordHeadLen;
+        *buf += ssl->enBlockSize;
         return requestedLen; /* may not be what was passed in */
     }
     /* GCM mode will need to save room for the nonce */
@@ -1185,7 +1186,7 @@ int32 matrixSslEncodeWritebuf(ssl_t *ssl, uint32 len)
     that extra length here.
  */
     if ((ssl->flags & SSL_FLAGS_WRITE_SECURE) &&
-        (ssl->flags & SSL_FLAGS_TLS_1_1) && (ssl->enBlockSize > 1))
+        ACTV_VER(ssl, v_tls_explicit_iv) && (ssl->enBlockSize > 1))
     {
         reserved += ssl->enBlockSize;
     }
@@ -1237,7 +1238,7 @@ int32 matrixSslEncodeToOutdata(ssl_t *ssl, unsigned char *ptBuf, uint32 len)
     }
 
 # ifdef USE_DTLS
-    if (ssl->flags & SSL_FLAGS_DTLS)
+    if (ACTV_VER(ssl, v_dtls_any))
     {
         rc = matrixSslGetEncodedSize(ssl, len);
         if (rc > matrixDtlsGetPmtu())
@@ -1301,7 +1302,7 @@ static void revertToDefaultBufsize(ssl_t *ssl, uint16 inOrOut)
     if (inOrOut == SSL_INBUF)
     {
 #ifdef USE_DTLS
-        if (ssl->flags & SSL_FLAGS_DTLS)
+        if (ACTV_VER(ssl, v_dtls_any))
         {
             defaultSize = matrixDtlsGetPmtu();
         }
@@ -1326,7 +1327,7 @@ static void revertToDefaultBufsize(ssl_t *ssl, uint16 inOrOut)
     else
     {
 #ifdef USE_DTLS
-        if (ssl->flags & SSL_FLAGS_DTLS)
+        if (ACTV_VER(ssl, v_dtls_any))
         {
             defaultSize = matrixDtlsGetPmtu();
         }
@@ -1597,7 +1598,7 @@ DECODE_MORE:
 # ifdef USE_TLS_1_1
         /* Been ignoring the explicit IV up to this final return point. */
         if ((ssl->flags & SSL_FLAGS_READ_SECURE) &&
-            (ssl->flags & SSL_FLAGS_TLS_1_1) && (ssl->enBlockSize > 1))
+            ACTV_VER(ssl, v_tls_explicit_iv) && (ssl->enBlockSize > 1))
         {
             prevBuf += ssl->enBlockSize;
         }
@@ -1693,7 +1694,7 @@ DECODE_MORE:
             Changed and added an assert to see if these ever don't match */
         psAssert(ssl->enBlockSize == ssl->deBlockSize);
         if ((ssl->flags & SSL_FLAGS_READ_SECURE) &&
-            (ssl->flags & SSL_FLAGS_TLS_1_1) && (ssl->deBlockSize > 1))
+            ACTV_VER(ssl, v_tls_explicit_iv) && (ssl->deBlockSize > 1))
         {
             len -= ssl->deBlockSize;
             prevBuf += ssl->deBlockSize;
@@ -1710,7 +1711,7 @@ DECODE_MORE:
         know for certain we are out of the hs states. Testing HandshakeComplete
         is not enough because you never know if the other side got FINISHED.
  */
-        if (ssl->flags & SSL_FLAGS_DTLS)
+        if (ACTV_VER(ssl, v_dtls_any))
         {
             ssl->appDataExch = 1;
         }
@@ -1985,7 +1986,7 @@ int32_t matrixSslEncodeRehandshake(ssl_t *ssl, sslKeys_t *keys,
         }
     }
 #  ifdef USE_DTLS
-    if (ssl->flags & SSL_FLAGS_DTLS)
+    if (ACTV_VER(ssl, v_dtls_any))
     {
         /* Resend epoch should be brought up-to-date with new epoch */
         ssl->resendEpoch[0] = ssl->epoch[0];

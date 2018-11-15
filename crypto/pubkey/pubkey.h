@@ -203,7 +203,7 @@ typedef struct psX25519Key
  */
 typedef struct
 {
-# if defined(USE_RSA) || defined(USE_ECC)
+# if defined(USE_RSA) || defined(USE_ECC) || defined(USE_DH) || defined(USE_X25519) || defined(USE_ED25519)
     union
     {
 #  ifdef USE_RSA
@@ -228,19 +228,35 @@ typedef struct
     uint8_t type;               /* PS_RSA, PS_ECC, PS_DH */
 } psPubKey_t;
 
+# define PS_SIGN_OPTS_ECDSA_INCLUDE_SIZE      (1ULL << 0)
+# define PS_SIGN_OPTS_USE_PREALLOCATED_OUTBUF (1ULL << 1)
+
 typedef struct {
     uint32_t flags;
     int32_t rsaPssHashAlg;
     unsigned char *rsaPssSalt;
     psSize_t rsaPssSaltLen;
+    void *userData;
 } psSignOpts_t;
 
-extern int32_t pkcs1Pad(const unsigned char *in, psSize_t inlen,
-                        unsigned char *out, psSize_t outlen,
-                        uint8_t cryptType, void *userPtr);
-extern int32_t pkcs1Unpad(const unsigned char *in, psSize_t inlen,
-                          unsigned char *out, psSize_t outlen,
-                          uint8_t decryptType);
+extern int32_t pkcs1Pad(const unsigned char *in,
+        psSize_t inlen,
+        unsigned char *out,
+        psSize_t outlen,
+        uint8_t cryptType,
+        void *userPtr);
+extern int32_t pkcs1Unpad(const unsigned char *in,
+        psSize_t inlen,
+        unsigned char *out,
+        psSize_t outlen,
+        uint8_t decryptType);
+extern int32_t pkcs1UnpadExt(const unsigned char *in,
+        psSize_t inlen,
+        unsigned char *out,
+        psSize_t outlen,
+        uint8_t decryptType,
+        psBool_t verifyUnpaddedLen,
+        psSize_t *unpaddedLen);
 
 # if defined(USE_RSA) || defined(USE_ECC)
 
@@ -251,7 +267,7 @@ int32_t psHashLenToSigAlg(psSize_t hash_len,
     purposes.
 
     Compute a digest that is to be signed or whose signature is
-    to be verified.
+    to be verified. Supports only single-part operation.
 */
 psRes_t psComputeHashForSig(const unsigned char *dataBegin,
         psSizeL_t dataLen,
@@ -260,6 +276,27 @@ psRes_t psComputeHashForSig(const unsigned char *dataBegin,
         psSize_t * hashOutLen);
 
 /** Algorithm-independent function for signing hashes.
+
+    The the signature algorithm is standard RSA (not PSS), the function
+    first wraps the input hash into a DigestInfo, unless the TLS 1.1 and
+    below signature algorithm (sigAlg == OID_RSA_TLS_SIG_ALG)
+    is used.
+
+    The supported values for sigAlg are:
+    OID_RSA_TLS_SIG_ALG  (TLS 1.1 and below custom algorithm)
+    OID_SHA1_RSA_SIG     (PKCS #1.5)
+    OID_SHA256_RSA_SIG   (PKCS #1.5)
+    OID_SHA384_RSA_SIG   (PKCS #1.5)
+    OID_RSASSA_PSS       (RSASSA-PSS)
+    OID_SHA256_ECDSA_SIG (ECDSA)
+    OID_SHA384_ECDSA_SIG (ECDSA)
+    OID_SHA512_ECDSA_SIG (ECDSA)
+
+    It is also possible to use a more generic sigAlg ID.
+    In this case, psSign will deduce the hash algorithm to use
+    from inLen (e.g. inLen == 32 would imply SHA-256):
+    OID_RSA_PKCS15_SIG_ALG
+    OID_ECDSA_TLS_SIG_ALG
 */
 int32_t psSignHash(psPool_t *pool,
         psPubKey_t *privKey,
@@ -273,8 +310,9 @@ int32_t psSignHash(psPool_t *pool,
 /** Algorithm-independent function for signing arbitrary
     data.
 
-    The data is first hashed if the signature algorithm
-    is only able to sign hashes. TODO: not really. Fix.
+    This function is similar to psSignHash, expect that it also supports
+    signing arbitrary (non-hash) data with Ed25519, when sigAlg is
+    OID_ED25519_KEY_ALG.
 */
 int32_t psSign(psPool_t *pool,
         psPubKey_t *privKey,

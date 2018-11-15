@@ -201,10 +201,6 @@ int32_t psEccDsaSignCommon(psPool_t *pool, const psEccKey_t *privKey,
                     goto error; /* s = br (b == 1). */
                 }
             }
-            if (err != PS_SUCCESS)
-            {
-                goto error;
-            }
 
             if (blinding)
             {

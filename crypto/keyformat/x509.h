@@ -657,6 +657,7 @@ typedef struct psCert
     int32 revokedStatus;
 #   endif
     unsigned char sigHash[MAX_HASH_SIZE];
+    psSize_t sigHashLen;
 #  endif /* USE_CERT_PARSE */
 #  if defined(USE_OCSP_RESPONSE) || defined(USE_OCSP_REQUEST)
     unsigned char sha1KeyHash[SHA1_HASH_SIZE];

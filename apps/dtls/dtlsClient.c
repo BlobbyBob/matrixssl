@@ -157,7 +157,7 @@ static int32 dtlsClientConnection(sslKeys_t *keys, sslSessionId_t *sid)
 # endif /* DTLS_TEST_LOST_CIPHERSPEC_CHANGE_REHANDSHAKE */
 
     Memset(&options, 0x0, sizeof(sslSessOpts_t));
-    options.versionFlag = SSL_FLAGS_DTLS;
+    options.versionFlag = SSL_FLAGS_DTLS | SSL_FLAGS_TLS_1_2;
     options.trustedCAindication = 1;
 
 

@@ -53,6 +53,7 @@ extern "C" {
 #  endif
 #  define DTLS_MAJ_VER        0xFE
 #  define DTLS_MIN_VER        0xFF
+#  define DTLS_1_0_MIN_VER    DTLS_MIN_VER
 #  define DTLS_1_2_MIN_VER    0xFD/* DTLS 1.2 */
 # endif /* USE_DTLS */
 
@@ -74,41 +75,18 @@ extern "C" {
 #  error "USE_RSA with USE_TLS_1_3 requires USE_PKCS1_PSS"
 # endif
 
-/*
-  Convenience macros for finding out minimum and maximum enabled TLS version.
-*/
-# if defined(USE_TLS_1_3) && !defined(DISABLE_TLS_1_3)
-#  define MAX_ENABLED_TLS_VER TLS_1_3_MIN_VER
-#  define MIN_ENABLED_TLS_1_3_DRAFT_VERSION 22
-#  define MAX_ENABLED_TLS_1_3_DRAFT_VERSION 28
-# elif defined(USE_TLS_1_2) && !defined(DISABLE_TLS_1_2)
-#  define MAX_ENABLED_TLS_VER TLS_1_2_MIN_VER
-# elif defined(USE_TLS_1_1) && !defined(DISABLE_TLS_1_1)
-#  define MAX_ENABLED_TLS_VER TLS_1_1_MIN_VER
-# elif defined(USE_TLS) && !defined(DISABLE_TLS_1_0)
-#  define MAX_ENABLED_TLS_VER TLS_MIN_VER
-# elif !defined(DISABLE_SSLV3)
-#  define MAX_ENABLED_TLS_VER SSL3_MIN_VER
-# endif
-
-# if !defined(DISABLE_SSLV3)
-#  define MIN_ENABLED_TLS_VER SSL3_MIN_VER
-# elif defined(USE_TLS) && !defined(DISABLE_TLS_1_0)
-#  define MIN_ENABLED_TLS_VER TLS_MIN_VER
-# elif defined(USE_TLS_1_1) && !defined(DISABLE_TLS_1_1)
-#  define MIN_ENABLED_TLS_VER TLS_1_1_MIN_VER
-# elif defined(USE_TLS_1_2) && !defined(DISABLE_TLS_1_2)
-#  define MIN_ENABLED_TLS_VER TLS_1_2_MIN_VER
-# elif defined(USE_TLS_1_3) && !defined(DISABLE_TLS_1_3)
-#  define MIN_ENABLED_TLS_VER TLS_1_3_LOWEST_DRAFT_MIN_VER
-# endif
-
 # ifdef USE_SHARED_SESSION_CACHE
 #  ifndef POSIX
 #   error "USE_SHARED_SESSION_CACHE only implemented for POSIX platforms."
 #  endif
 #  ifndef USE_MULTITHREADING
 #   error "USE_MULTITHREADING required for USE_SHARED_SESSION_CACHE."
+#  endif
+# endif
+
+# if defined(USE_ED25519)
+#  ifndef USE_CERT_PARSE
+#   error "USE_ED25519 requires USE_CERT_PARSE"
 #  endif
 # endif
 
@@ -174,6 +152,7 @@ extern "C" {
 #   error "Must enable USE_AES for USE_STATELESS_SESSION_TICKETS"
 #  endif
 # endif
+
 
 /******************************************************************************/
 /*
@@ -259,6 +238,7 @@ extern "C" {
 #  define USE_RSA_CIPHER_SUITE
 # endif
 
+
 /******************************************************************************/
 /*
     Notes on DHE-related defines
@@ -289,13 +269,19 @@ extern "C" {
 
 # if defined(USE_TLS_AES_256_GCM_SHA384) || defined(USE_TLS_AES_128_GCM_SHA256)
 #   define USE_DHE_CIPHER_SUITE
-#   define USE_ECDSA_CIPHER_SUITE
-#   define USE_ECC_CIPHER_SUITE
+#   ifdef USE_RSA
+#    define USE_RSA_CIPHER_SUITE
+#   endif
+#   ifdef USE_ECC
+#    define USE_ECDSA_CIPHER_SUITE
+#    define USE_ECC_CIPHER_SUITE
+#   endif
 #   define USE_AES_CIPHER_SUITE
 #   define USE_TLS_1_3_CIPHER_SUITE
 # endif
 
-# ifdef USE_TLS_CHACHA20_POLY1305_SHA256
+
+# ifdef USE_/* TLS_CHACHA20_POLY1305_SHA256 */
 #   define USE_DHE_CIPHER_SUITE
 #   define USE_ECDSA_CIPHER_SUITE
 #   define USE_ECC_CIPHER_SUITE
@@ -419,6 +405,7 @@ extern "C" {
 #   define USE_AES_CIPHER_SUITE
 #   define USE_RSA_CIPHER_SUITE
 #  endif
+
 
 #  if defined(USE_TLS_DHE_RSA_WITH_AES_256_CBC_SHA256) || defined(USE_TLS_DHE_RSA_WITH_AES_256_GCM_SHA256)
 #   ifndef USE_RSA
@@ -589,6 +576,7 @@ extern "C" {
 #   define USE_RSA_CIPHER_SUITE
 #   define USE_AES_CIPHER_SUITE
 #  endif
+
 
 #  ifdef USE_TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
 #   ifndef USE_AES_GCM
@@ -761,6 +749,7 @@ extern "C" {
 #  endif
 # endif /* ! TLS_1_2 */
 
+
 /** @note This cipher is deprecated from matrixsslConfig.h */
 # ifdef USE_SSL_DH_anon_WITH_3DES_EDE_CBC_SHA
 #  ifndef USE_3DES
@@ -860,6 +849,7 @@ extern "C" {
 #  define USE_PSK_CIPHER_SUITE
 #  define USE_DHE_PSK_CIPHER_SUITE
 # endif
+
 
 # ifdef USE_TLS_DHE_PSK_WITH_AES_256_CBC_SHA
 #  ifndef USE_AES
@@ -1138,8 +1128,7 @@ extern "C" {
     user can disable USE_X509, USE_RSA, USE_ECC, and USE_PRIVATE_KEY_PARSING in
     cryptoConfig.h.
  */
-# if !defined(USE_RSA_CIPHER_SUITE) && !defined(USE_DHE_CIPHER_SUITE) && \
-    !defined(USE_DH_CIPHER_SUITE)
+# if !defined(USE_RSA_CIPHER_SUITE) && !defined(USE_ECC_CIPHER_SUITE) && !defined(USE_DH_CIPHER_SUITE) && !defined(USE_DHE_PSK_CIPHER_SUITE)
 #  ifndef USE_ONLY_PSK_CIPHER_SUITE
 #   define USE_ONLY_PSK_CIPHER_SUITE
 #  endif
@@ -1186,6 +1175,7 @@ typedef int32 psX509Cert_t;
 #  endif
 # endif
 
+
 # ifdef USE_TLS_1_3_CIPHER_SUITE
 #  ifndef USE_TLS_1_3
 #   error "Need USE_TLS_1_3 for TLS 1.3 suites"
@@ -1199,8 +1189,15 @@ typedef int32 psX509Cert_t;
 #  ifndef USE_HKDF
 #   error "Need USE_HKDF for TLS 1.3"
 #  endif
-#  define USE_ECC_CIPHER_SUITE
-#  define USE_DHE_CIPHER_SUITE
+#  ifdef USE_ECC
+#   define USE_ECC_CIPHER_SUITE
+#  endif
+#  ifdef USE_DH
+#   define USE_DHE_CIPHER_SUITE
+#  endif
+#  ifdef USE_RSA
+#   define USE_RSA_CIPHER_SUITE
+#  endif
 #  define USE_PSK_CIPHER_SUITE
 #  ifdef USE_DH
 #   define REQUIRE_DH_PARAMS
@@ -1219,6 +1216,8 @@ typedef int32 psX509Cert_t;
 #  endif
 # endif
 
+#ifdef USE_RSA_CIPHER_SUITE
+#endif
 /* USE_IDENTITY_CERTIFICATES maps high level "features" requiring
    certificate/public key authentication into a single concrete CPP definition
    used to guard code line needed to implement the features.
@@ -1243,17 +1242,6 @@ typedef int32 psX509Cert_t;
 # endif
 #endif
 
-#if defined(USE_RSA_CIPHER_SUITE) && !defined(USE_RSA)
-# define USE_RSA 1
-#endif
-
-#if defined(USE_ECC_CIPHER_SUITE) && !defined(USE_ECC)
-# define USE_ECC 1
-#endif
-
-#if defined(USE_ECDSA_CIPHER_SUITE) && !defined(USE_ECC)
-# define USE_ECC 1
-#endif
 
 # ifdef __cplusplus
 }

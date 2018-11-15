@@ -34,364 +34,350 @@
 
 #include "matrixsslImpl.h"
 
-int32_t checkClientHelloVersion(ssl_t *ssl,
-                                unsigned char *serverHighestMinor)
+uint16_t psEncodeVersion(uint32_t ver)
 {
-    unsigned char compareMin, compareMaj;
+    ver = VER_GET_RAW(ver);
 
-# ifndef USE_SSL_PROTOCOL_VERSIONS_OTHER_THAN_3
-    /* RFC 5246 Suggests to accept all RSA minor versions, but only
-       major version 0x03 (SSLv3, TLS 1.0, TLS 1.1, TLS 1.2, TLS 1.3 etc) */
-    if (ssl->reqMajVer != 0x03
-#  ifdef USE_DTLS
-        && ssl->reqMajVer != DTLS_MAJ_VER
-#  endif /* USE_DTLS */
-        )
+    switch (ver)
     {
-        /* Consider invalid major version protocol version error. */
-        ssl->err = SSL_ALERT_PROTOCOL_VERSION;
-        psTraceErrr("Won't support client's SSL major version\n");
-        return MATRIXSSL_ERROR;
+    case v_ssl_3_0:
+        return v_ssl_3_0_enc;
+    case v_tls_1_0:
+        return v_tls_1_0_enc;
+    case v_dtls_1_0:
+        return v_dtls_1_0_enc;
+    case v_tls_1_1:
+        return v_tls_1_1_enc;
+    case v_tls_1_2:
+        return v_tls_1_2_enc;
+    case v_dtls_1_2:
+        return v_dtls_1_2_enc;
+    case v_tls_1_3_draft_22:
+        return v_tls_1_3_draft_22_enc;
+    case v_tls_1_3_draft_23:
+        return v_tls_1_3_draft_23_enc;
+    case v_tls_1_3_draft_24:
+        return v_tls_1_3_draft_24_enc;
+    case v_tls_1_3_draft_26:
+        return v_tls_1_3_draft_26_enc;
+    case v_tls_1_3_draft_28:
+        return v_tls_1_3_draft_28_enc;
+    case v_tls_1_3:
+        return v_tls_1_3_enc;
+    default:
+        psTraceIntInfo("Tried to encode an unsupported version: %u\n", ver);
+        return 0;
     }
-# endif /* USE_SSL_PROTOCOL_VERSIONS_OTHER_THAN_3 */
+}
 
-    /*  Client should always be sending highest supported protocol.  Server
-        will reply with a match or a lower version if enabled (or forced). */
-    if (ssl->majVer != 0)
+uint8_t psEncodeVersionMin(uint32_t ver)
+{
+    uint32_t ver_enc = psEncodeVersion(ver);
+
+    return (ver_enc & 0xff);
+}
+
+uint8_t psEncodeVersionMaj(uint32_t ver)
+{
+    uint32_t ver_enc = psEncodeVersion(ver);
+
+    return ((ver_enc & 0xff00) >> 8);
+}
+
+psProtocolVersion_t psVerFromEncoding(uint16_t enc)
+{
+    switch (enc)
     {
-        /* If our forced server version is a later protocol than their
-            request, we have to exit */
-        if (ssl->reqMinVer < ssl->minVer)
-        {
-            ssl->err = SSL_ALERT_PROTOCOL_VERSION;
-            psTraceErrr("Won't support client's SSL version\n");
-            return MATRIXSSL_ERROR;
-        }
-# ifdef USE_DTLS
-        if (ssl->flags & SSL_FLAGS_DTLS)
-        {
-            /* DTLS specfication somehow assigned minimum version of DTLS 1.0
-                as 255 so there was nowhere to go but down in DTLS 1.1 so
-                that is 253 and requires the opposite test from above */
-            if (ssl->reqMinVer > ssl->minVer)
-            {
-                ssl->err = SSL_ALERT_PROTOCOL_VERSION;
-                psTraceErrr("Won't support client's DTLS version\n");
-                return MATRIXSSL_ERROR;
-            }
-        }
-# endif
-        /* Otherwise we just set our forced version to act like it was
-            what the client wanted in order to move through the standard
-            negotiation. */
-        compareMin = ssl->minVer;
-        compareMaj = ssl->majVer;
-        /* Set the highest version to the version explicitly set */
-        *serverHighestMinor = ssl->minVer;
+    case v_ssl_3_0_enc:
+        return v_ssl_3_0;
+    case v_tls_1_0_enc:
+        return v_tls_1_0;
+    case v_tls_1_1_enc:
+        return v_tls_1_1;
+    case v_tls_1_2_enc:
+        return v_tls_1_2;
+    case v_tls_1_3_enc:
+        return v_tls_1_3;
+    case v_tls_1_3_draft_22_enc:
+        return v_tls_1_3_draft_22;
+    case v_tls_1_3_draft_23_enc:
+        return v_tls_1_3_draft_23;
+    case v_tls_1_3_draft_24_enc:
+        return v_tls_1_3_draft_24;
+    case v_tls_1_3_draft_26_enc:
+        return v_tls_1_3_draft_26;
+    case v_tls_1_3_draft_28_enc:
+        return v_tls_1_3_draft_28;
+    case v_dtls_1_0_enc:
+        return v_dtls_1_0;
+    case v_dtls_1_2_enc:
+        return v_dtls_1_2;
+    default:
+        return v_undefined;
     }
-    else
+}
+
+psProtocolVersion_t psVerFromEncodingMajMin(uint8_t maj, uint8_t min)
+{
+    uint16_t ver = (maj << 8) | min;
+
+    return psVerFromEncoding(ver);
+}
+
+int32_t psVerToFlag(psProtocolVersion_t ver)
+{
+    int32_t flags = 0;
+
+    if (ver & v_ssl_3_0)
     {
-        compareMin = ssl->reqMinVer;
-        compareMaj = ssl->reqMajVer;
-        /* If no explicit version was set for the server, use the highest supported */
-        *serverHighestMinor = TLS_HIGHEST_MINOR;
+        flags |= SSL_FLAGS_SSLV3;
     }
-
-    if (compareMaj >= SSL3_MAJ_VER)
+    else if (ver & v_tls_1_0)
     {
-        ssl->majVer = compareMaj;
-# ifdef USE_TLS
-        if (compareMin >= TLS_MIN_VER)
-        {
-#  ifndef DISABLE_TLS_1_0
-            /* Allow TLS 1.0, unless specifically disabled. */
-            if (tlsVersionSupported(ssl, tls_v_1_0))
-            {
-                ssl->minVer = TLS_MIN_VER;
-                ssl->flags |= SSL_FLAGS_TLS;
-            }
-#  endif
-#  ifdef USE_TLS_1_1 /* TLS_1_1 */
-#   ifdef USE_TLS_1_1_TOGGLE
-            if (tlsVersionSupported(ssl, tls_v_1_1))
-            {
-#   endif
-                if (compareMin >= TLS_1_1_MIN_VER)
-                {
-#   ifndef DISABLE_TLS_1_1
-                    ssl->minVer = TLS_1_1_MIN_VER;
-                    ssl->flags |= SSL_FLAGS_TLS_1_1 | SSL_FLAGS_TLS;
-#   endif
-                }
-#   ifdef USE_TLS_1_1_TOGGLE
-            }
-#   endif
-#   ifdef USE_TLS_1_2
-#    ifdef USE_TLS_1_2_TOGGLE
-            /* Prefer TLS 1.2, unless specifically disabled. */
-            if (tlsVersionSupported(ssl, tls_v_1_2))
-            {
-#    endif /* USE_TLS_1_2_TOGGLE */
-                if (compareMin == TLS_1_2_MIN_VER)
-                {
-                    ssl->minVer = TLS_1_2_MIN_VER;
-                    ssl->flags |= SSL_FLAGS_TLS_1_2 | SSL_FLAGS_TLS_1_1 | SSL_FLAGS_TLS;
-                }
-#    ifdef USE_TLS_1_2_TOGGLE
-            }
-#    endif /* USE_TLS_1_2_TOGGLE */
-#    ifdef USE_DTLS
-            if (ssl->flags & SSL_FLAGS_DTLS)
-            {
-                if (compareMin == DTLS_1_2_MIN_VER)
-                {
-                    ssl->minVer = DTLS_1_2_MIN_VER;
-                }
-            }
-#    endif
-#   endif /* USE_TLS_1_2 */
-#  endif  /* USE_TLS_1_1 */
-            if (ssl->minVer == 0)
-            {
-                /* TLS versions are disabled.  Go SSLv3 if available. */
-#  ifdef DISABLE_SSLV3
-                ssl->err = SSL_ALERT_PROTOCOL_VERSION;
-                return MATRIXSSL_ERROR;
-#  else
-                ssl->minVer = SSL3_MIN_VER;
-#  endif
-            }
-        }
-        else if (compareMin == 0)
-        {
-#  ifdef DISABLE_SSLV3
-            ssl->err = SSL_ALERT_PROTOCOL_VERSION;
-            psTraceErrr("Client wanted to talk SSLv3 but it's disabled\n");
-            return MATRIXSSL_ERROR;
-#  else
-            ssl->minVer = SSL3_MIN_VER;
-#  endif    /* DISABLE_SSLV3 */
-        }
-#  ifdef USE_DTLS
-        if (ssl->flags & SSL_FLAGS_DTLS)
-        {
-            if (compareMin < DTLS_1_2_MIN_VER)
-            {
-                ssl->err = SSL_ALERT_PROTOCOL_VERSION;
-                psTraceErrr("Error: incorrect DTLS required version\n");
-                return MATRIXSSL_ERROR;
-            }
-            ssl->minVer = DTLS_MIN_VER;
-#   ifdef USE_TLS_1_2
-#    ifdef USE_TLS_1_2_TOGGLE
-            /* Prefer TLS 1.2, unless specifically disabled. */
-            if (tlsVersionSupported(ssl, tls_v_1_2))
-            {
-#    endif /* USE_TLS_1_2_TOGGLE */
-                if (compareMin == DTLS_1_2_MIN_VER)
-                {
-                    ssl->flags |= SSL_FLAGS_TLS_1_2 | SSL_FLAGS_TLS_1_1 | SSL_FLAGS_TLS;
-                    ssl->minVer = DTLS_1_2_MIN_VER;
-                }
-#    ifdef USE_TLS_1_2_TOGGLE
-            }
-#    endif /* USE_TLS_1_2_TOGGLE */
-#    ifdef USE_DTLS
-            if (ssl->flags & SSL_FLAGS_DTLS)
-            {
-                if (compareMin == DTLS_1_2_MIN_VER)
-                {
-                    ssl->minVer = DTLS_1_2_MIN_VER;
-                }
-            }
-#    endif /* USE_DTLS */
-#   endif  /* USE_TLS_1_2 */
-
-        }
-#  endif /* USE_DTLS */
-# else
-        ssl->minVer = SSL3_MIN_VER;
-
-# endif /* USE_TLS */
-
+        flags |= SSL_FLAGS_TLS_1_0;
     }
-    else
+    else if (ver & v_tls_1_1)
     {
-        ssl->err = SSL_ALERT_PROTOCOL_VERSION;
-        psTraceIntInfo("Unsupported ssl version: %d\n", compareMaj);
-        return MATRIXSSL_ERROR;
+        flags |= SSL_FLAGS_TLS_1_1;
+    }
+    else if (ver & v_tls_1_2)
+    {
+        flags |= SSL_FLAGS_TLS_1_2;
+    }
+    else if (ver & v_tls_1_3)
+    {
+        flags |= SSL_FLAGS_TLS_1_3;
+    }
+    else if (ver & v_tls_1_3_draft_22)
+    {
+        flags |= SSL_FLAGS_TLS_1_3_DRAFT_22;
+    }
+    else if (ver & v_tls_1_3_draft_24)
+    {
+        flags |= SSL_FLAGS_TLS_1_3_DRAFT_24;
+    }
+    else if (ver & v_tls_1_3_draft_26)
+    {
+        flags |= SSL_FLAGS_TLS_1_3_DRAFT_26;
+    }
+    else if (ver & v_tls_1_3_draft_28)
+    {
+        flags |= SSL_FLAGS_TLS_1_3_DRAFT_28;
+    }
+    else if (ver & v_dtls_1_0)
+    {
+        flags |= SSL_FLAGS_DTLS;
+    }
+    else if (ver & v_dtls_1_2)
+    {
+        flags |= SSL_FLAGS_DTLS;
+        flags |= SSL_FLAGS_TLS_1_2;
     }
 
+    return flags;
+}
+
+psProtocolVersion_t psFlagToVer(int32_t flag)
+{
+    psProtocolVersion_t ver = v_undefined;
+
+    if (flag & SSL_FLAGS_SSLV3)
+    {
+        ver |= v_ssl_3_0;
+    }
+    if (flag & SSL_FLAGS_TLS_1_0)
+    {
+        ver |= v_tls_1_0;
+    }
+    if (flag & SSL_FLAGS_TLS_1_1)
+    {
+        ver |= v_tls_1_1;
+    }
+    if (flag & SSL_FLAGS_TLS_1_2)
+    {
+        ver |= v_tls_1_2;
+    }
+    if (flag & SSL_FLAGS_TLS_1_3)
+    {
+        ver |= v_tls_1_3;
+    }
+    if (flag & SSL_FLAGS_TLS_1_3_DRAFT_22)
+    {
+        ver |= v_tls_1_3_draft_22;
+    }
+    if (flag & SSL_FLAGS_TLS_1_3_DRAFT_23)
+    {
+        ver |= v_tls_1_3_draft_23;
+    }
+    if (flag & SSL_FLAGS_TLS_1_3_DRAFT_24)
+    {
+        ver |= v_tls_1_3_draft_23;
+    }
+    if (flag & SSL_FLAGS_TLS_1_3_DRAFT_26)
+    {
+        ver |= v_tls_1_3_draft_26;
+    }
+    if (flag & SSL_FLAGS_TLS_1_3_DRAFT_28)
+    {
+        ver |= v_tls_1_3_draft_28;
+    }
+    if (flag & SSL_FLAGS_DTLS)
+    {
+        ver |= v_dtls_1_0;
+        if (flag & SSL_FLAGS_TLS_1_2)
+        {
+            ver |= v_dtls_1_2;
+        }
+    }
+
+    return ver;
+}
+
+psProtocolVersion_t psVerGetLowest(psProtocolVersion_t ver,
+        int allowDtls)
+{
+    psSize_t i;
+    psProtocolVersion_t mask = 1;
+
+    ver = VER_GET_RAW(ver);
+
+    for (i = 0; i <= VER_MAX_BIT; i++)
+    {
+        if (ver & mask)
+        {
+            if (allowDtls || (mask & v_tls_any))
+            {
+                return mask;
+            }
+        }
+        mask <<= 1;
+    }
+
+    return v_undefined;
+}
+
+psProtocolVersion_t psVerGetLowestTls(psProtocolVersion_t ver)
+{
+    return psVerGetLowest(ver, 0);
+}
+
+psProtocolVersion_t psVerGetHighest(psProtocolVersion_t ver,
+        int allowDtls)
+{
+    psSize_t i;
+    psProtocolVersion_t mask;
+
+    ver = VER_GET_RAW(ver);
+
+    mask = (1 << VER_MAX_BIT);
+    for (i = VER_MAX_BIT; i > 0; i--)
+    {
+        if (ver & mask)
+        {
+            if (allowDtls || (mask & v_tls_any))
+            {
+                return mask;
+            }
+        }
+        mask >>= 1;
+    }
+
+    return v_undefined;
+}
+
+psProtocolVersion_t psVerGetHighestTls(psProtocolVersion_t ver)
+{
+    return psVerGetHighest(ver, 0);
+}
+
+int32_t checkClientHelloVersion(ssl_t *ssl)
+{
+    psProtocolVersion_t clientHighest;
+    psProtocolVersion_t negotiatedVer;
+    psProtocolVersion_t ver;
+    psBool_t clientWantsDtls = PS_FALSE, isDtls;
+    psSize_t i;
+
+    /*
+      Check the client_version (legacy_version in TLS 1.3) field
+      and try to negotiate a common version based on the field value.
+      The semantics of this field is that it should be the highest
+      version supported by the client (in TLS 1.2 and below) or should
+      be ignored (in TLS 1.3).
+    */
+
+    clientHighest = ssl->peerHelloVersion;
+    if (SUPP_VER(ssl, clientHighest))
+    {
+        negotiatedVer = clientHighest;
+        goto out_ok;
+    }
+
+    if (clientHighest & v_dtls_any)
+    {
+        clientWantsDtls = PS_TRUE;
+    }
+
+    /* We don't support clientHighest. See if we can propose a downgrade. */
+
+    /* Loop over our supported versions in priority order and select
+       the first version lower than clientHighest. */
+    for (i = 0; i < ssl->supportedVersionsPriorityLen; i++)
+    {
+        ver = ssl->supportedVersionsPriority[i];
+        isDtls = (ver & v_dtls_any) ? PS_TRUE : PS_FALSE;
+
+        /* Don't downgrade from TLS to DTLS, or vice versa. */
+        if ((clientWantsDtls && !isDtls)
+                || (!clientWantsDtls && isDtls))
+        {
+            continue;
+        }
+        if (ver < clientHighest)
+        {
+            negotiatedVer = ver;
+            goto out_ok;
+        }
+    }
+
+    /* Legacy (TLS <1.3) version negotiation failed. However, if the
+       ClientHello contains a supported_versions extension, we shall
+       still try to negotiate based on that. */
+    ssl->err = SSL_ALERT_PROTOCOL_VERSION;
+    return MATRIXSSL_ERROR;
+
+out_ok:
+    SET_NGTD_VER(ssl, negotiatedVer);
     return PS_SUCCESS;
 }
-
-# ifndef DISABLE_SSLV3
-int32_t ssl3CheckServerHelloVersion(ssl_t *ssl)
-{
-    psAssert(ssl->reqMajVer == SSL3_MAJ_VER);
-
-    /*  Server minVer now becomes OUR initial requested version.
-        This is used during the creation of the premaster where
-        this initial requested version is part of the calculation.
-        The RFC actually says to use the original requested version
-        but no implemenations seem to follow that and just use the
-        agreed upon one. */
-    ssl->reqMinVer = ssl->minVer;
-    ssl->minVer = SSL3_MIN_VER;
-    ssl->flags &= ~SSL_FLAGS_TLS;
-#   ifdef USE_TLS_1_1
-    ssl->flags &= ~SSL_FLAGS_TLS_1_1;
-#   endif   /* USE_TLS_1_1 */
-#   ifdef USE_TLS_1_2
-    ssl->flags &= ~SSL_FLAGS_TLS_1_2;
-#   endif /* USE_TLS_1_2 */
-}
-# endif  /* DISABLE_SSLV3 */
-
-# ifdef USE_TLS
-int32_t tlsCheckServerHelloVersion(ssl_t *ssl)
-{
-    psAssert(ssl->reqMajVer == TLS_MAJ_VER);
-
-    if (ssl->reqMinVer == ssl->minVer)
-    {
-        return MATRIXSSL_SUCCESS;
-    }
-    else
-    {
-        /* Server is trying to change (downgrade) the protocol version. */
-        /* Check if the requested version is in the supported
-           version list. */
-        if (!tlsVersionSupported(ssl, ssl->reqMinVer))
-        {
-            ssl->err = SSL_ALERT_PROTOCOL_VERSION;
-            psTraceErrr("Error: version downgrade attempt by server" \
-                    " rejected:\nServerHello.server_version <" \
-                    " ClientHello.client_version\n");
-            return MATRIXSSL_ERROR;
-        }
-
-        /* At this point we know that we support the requested version. */
-#  ifdef USE_TLS_1_2
-        if (ssl->reqMinVer == TLS_1_2_MIN_VER)
-        {
-            ssl->reqMinVer = ssl->minVer;
-            ssl->minVer = TLS_1_2_MIN_VER;
-            ssl->flags &= ~SSL_FLAGS_TLS_1_1;
-            return MATRIXSSL_SUCCESS;
-        }
-#  endif /* USE_TLS_1_2 */
-#  if defined(USE_TLS_1_1) && !defined(DISABLE_TLS_1_1)
-        else if (ssl->reqMinVer == TLS_1_1_MIN_VER)
-        {
-            ssl->reqMinVer = ssl->minVer;
-            ssl->minVer = TLS_1_1_MIN_VER;
-            ssl->flags &= ~SSL_FLAGS_TLS_1_2;
-            return MATRIXSSL_SUCCESS;
-        }
-#  endif /* USE_TLS_1_1 && !DISABLE_TLS_1_1*/
-#  ifndef DISABLE_TLS_1_0
-        else if (ssl->reqMinVer == TLS_MIN_VER)
-        {
-            ssl->reqMinVer = ssl->minVer;
-            ssl->minVer = TLS_MIN_VER;
-            ssl->flags &= ~SSL_FLAGS_TLS_1_2;
-            ssl->flags &= ~SSL_FLAGS_TLS_1_1;
-            return MATRIXSSL_SUCCESS;
-        }
-#  endif /* DISABLE_TLS_1_0 */
-        else
-        {
-            return MATRIXSSL_ERROR;
-        }
-    }
-}
-#endif /* USE_TLS */
-
-#ifdef USE_DTLS
-int32_t dtlsCheckServerHelloVersion(ssl_t *ssl)
-{
-    psAssert(ssl->reqMajVer == DTLS_MAJ_VER);
-
-    if (ssl->flags & SSL_FLAGS_DTLS)
-    {
-        if (ssl->reqMinVer == DTLS_MIN_VER &&
-                ssl->minVer == DTLS_1_2_MIN_VER)
-        {
-            ssl->reqMinVer = ssl->minVer;
-            ssl->minVer = DTLS_MIN_VER;
-            ssl->flags &= ~SSL_FLAGS_TLS_1_2;
-            return MATRIXSSL_SUCCESS;
-        }
-    }
-
-    return MATRIXSSL_ERROR;
-}
-#endif /* USE_DTLS */
 
 /** Check whether the protocol version selected by the server can
     be supported for this handshake.
 
-    @precond: ssl->reqMajVer, ssl->reqMinVer contains the version parsed
+    @precond: ssl->peerHelloVersion contains the version parsed
     from ServerHello.server_version (called ServerHello.legacy_version
     in TLS 1.3).
 */
 int32_t checkServerHelloVersion(ssl_t *ssl)
 {
-    int32_t rc = MATRIXSSL_ERROR;
+    psProtocolVersion_t serverVer;
 
-    /* Check that we have a common major version. For example,
-       do not allow the server to select DTLS when we tried to
-       connect using TLS. */
-    if (ssl->reqMajVer != ssl->majVer)
-    {
-        ssl->err = SSL_ALERT_PROTOCOL_VERSION;
-        psTraceIntInfo("Unsupported ssl version: %d\n", ssl->reqMajVer);
-        return MATRIXSSL_ERROR;
-    }
+    serverVer = ssl->peerHelloVersion;
 
-    /* Easy case: server chose our preferred version. */
-    if (ssl->reqMinVer == ssl->minVer)
+    if (!SUPP_VER(ssl, serverVer))
     {
-        return MATRIXSSL_SUCCESS;
-    }
-
-    /* Now handle downgrades. */
-    switch(ssl->reqMajVer)
-    {
-# ifdef USE_TLS
-    case TLS_MAJ_VER:
-        rc = tlsCheckServerHelloVersion(ssl);
-        break;
-# endif
-# ifdef USE_DTLS
-    case DTLS_MAJ_VER:
-        rc = dtlsCheckServerHelloVersion(ssl);
-        break;
-# endif
-    default:
-        rc = MATRIXSSL_ERROR;
-    }
-
- # ifndef DISABLE_SSLV3
-    if (rc != MATRIXSSL_SUCCESS
-            && ssl->reqMinVer == SSL3_MIN_VER
-            && ssl->minVer >= TLS_MIN_VER)
-    {
-        rc = sslv3CheckServerHelloVersion(ssl);
-    }
-# endif /* !DISABLE_SSLV3 */
-
-    if (rc != MATRIXSSL_SUCCESS)
-    {
-        /* Wasn't able to settle on a common protocol */
-        ssl->err = SSL_ALERT_PROTOCOL_VERSION;
-        psTracePrintProtocolVersion(INDENT_HS_MSG,
+        psTraceErrr("Cannot support ServerHello.server_version\n");
+        psTracePrintProtocolVersionNew(INDENT_HS_MSG,
                 "Unsupported protocol version",
-                ssl->reqMajVer, ssl->reqMinVer, PS_TRUE);
+                serverVer,
+                PS_TRUE);
+        ssl->err = SSL_ALERT_PROTOCOL_VERSION;
         return MATRIXSSL_ERROR;
     }
 
+    /* Version negotiation complete for now. Result may get
+       overriden by the supported_versions check. */
+    SET_NGTD_VER(ssl, serverVer);
     return MATRIXSSL_SUCCESS;
 }
 
@@ -399,8 +385,8 @@ int32_t checkServerHelloVersion(ssl_t *ssl)
 int32_t checkSupportedVersions(ssl_t *ssl)
 {
     int32 rc;
-    uint16_t selectedVersion = 0;
-    uint16_t forbiddenVer[16] = {0};
+    psProtocolVersion_t selectedVersion = 0;
+    psProtocolVersion_t forbiddenVer[16] = {0};
     psSize_t forbiddenVerLen = 0;
     psSize_t i = 0;
 
@@ -419,10 +405,10 @@ int32_t checkSupportedVersions(ssl_t *ssl)
 
     /* Choose version from the intersection of our and the client's
        version list. */
-    rc = tls13IntersectionPrioritySelect(ssl->supportedVersions,
-            ssl->supportedVersionsLen,
-            ssl->tls13PeerSupportedVersions,
-            ssl->tls13PeerSupportedVersionsLen,
+    rc = tls13IntersectionPrioritySelect(ssl->supportedVersionsPriority,
+            ssl->supportedVersionsPriorityLen,
+            ssl->peerSupportedVersionsPriority,
+            ssl->peerSupportedVersionsPriorityLen,
             forbiddenVer,
             forbiddenVerLen,
             &selectedVersion);
@@ -433,70 +419,7 @@ int32_t checkSupportedVersions(ssl_t *ssl)
         return MATRIXSSL_ERROR;
     }
 
-    switch (selectedVersion & 0xff)
-    {
-        case TLS_1_0_MIN_VER:
-            ssl->majVer = TLS_MAJ_VER;
-            ssl->minVer = TLS_1_0_MIN_VER;
-            ssl->flags |= SSL_FLAGS_TLS_1_0;
-            break;
-        case TLS_1_1_MIN_VER:
-            ssl->majVer = TLS_MAJ_VER;
-            ssl->minVer = TLS_1_1_MIN_VER;
-            ssl->flags |= SSL_FLAGS_TLS_1_1;
-            break;
-        case TLS_1_2_MIN_VER:
-            ssl->majVer = TLS_MAJ_VER;
-            ssl->minVer = TLS_1_2_MIN_VER;
-            ssl->flags |= SSL_FLAGS_TLS_1_2;
-            break;
-        case TLS_1_3_MIN_VER:
-            ssl->majVer = TLS_MAJ_VER;
-            ssl->minVer = TLS_1_2_MIN_VER;
-            ssl->flags |= SSL_FLAGS_TLS_1_3 |
-                          SSL_FLAGS_TLS_1_3_NEGOTIATED;
-            ssl->tls13NegotiatedMinorVer = selectedVersion & 0xff;
-            break;
-        case TLS_1_3_DRAFT_22_MIN_VER:
-            ssl->majVer = TLS_MAJ_VER;
-            ssl->minVer = TLS_1_2_MIN_VER;
-            ssl->flags |= SSL_FLAGS_TLS_1_3_DRAFT_22 |
-                          SSL_FLAGS_TLS_1_3_NEGOTIATED;
-            ssl->tls13NegotiatedMinorVer = selectedVersion & 0xff;
-            break;
-        case TLS_1_3_DRAFT_23_MIN_VER:
-            ssl->majVer = TLS_MAJ_VER;
-            ssl->minVer = TLS_1_2_MIN_VER;
-            ssl->flags |= SSL_FLAGS_TLS_1_3_DRAFT_23 |
-                          SSL_FLAGS_TLS_1_3_NEGOTIATED;
-            ssl->tls13NegotiatedMinorVer = selectedVersion & 0xff;
-            break;
-        case TLS_1_3_DRAFT_24_MIN_VER:
-            ssl->majVer = TLS_MAJ_VER;
-            ssl->minVer = TLS_1_2_MIN_VER;
-            ssl->flags |= SSL_FLAGS_TLS_1_3_DRAFT_24 |
-                          SSL_FLAGS_TLS_1_3_NEGOTIATED;
-            ssl->tls13NegotiatedMinorVer = selectedVersion & 0xff;
-            break;
-        case TLS_1_3_DRAFT_26_MIN_VER:
-            ssl->majVer = TLS_MAJ_VER;
-            ssl->minVer = TLS_1_2_MIN_VER;
-            ssl->flags |= SSL_FLAGS_TLS_1_3_DRAFT_26 |
-                          SSL_FLAGS_TLS_1_3_NEGOTIATED;
-            ssl->tls13NegotiatedMinorVer = selectedVersion & 0xff;
-            break;
-        case TLS_1_3_DRAFT_28_MIN_VER:
-            ssl->majVer = TLS_MAJ_VER;
-            ssl->minVer = TLS_1_2_MIN_VER;
-            ssl->flags |= SSL_FLAGS_TLS_1_3_DRAFT_28 |
-                          SSL_FLAGS_TLS_1_3_NEGOTIATED;
-            ssl->tls13NegotiatedMinorVer = selectedVersion & 0xff;
-            break;
-        default:
-            ssl->err = SSL_ALERT_PROTOCOL_VERSION;
-            psTraceErrr("Unsupported protocol version\n");
-            return MATRIXSSL_ERROR;
-    }
+    SET_NGTD_VER(ssl, selectedVersion);
 
     return PS_SUCCESS;
 }
@@ -516,7 +439,7 @@ int32_t performTls13DowngradeCheck(ssl_t *ssl)
         return MATRIXSSL_ERROR;
     }
 
-    if (tlsVersionSupported(ssl, TLS_1_3_MIN_VER))
+    if (SUPP_VER(ssl, v_tls_1_3))
     {
         /* TLS 1.3 downgrade protection: if we support (non-draft)
            TLS 1.3 and the server chose <1.3, check that the last 8

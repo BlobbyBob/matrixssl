@@ -811,7 +811,10 @@ int32_t psDynBufAppendTlsVector(psDynBuf_t *db,
         return PS_ARG_FAIL;
     }
 
-    target = psDynBufAppendSize(db, len + extralen);
+    if ((target = psDynBufAppendSize(db, len + extralen)) == NULL)
+    {
+        return PS_FAIL;
+    }
 
     if (extralen == 1)
     {

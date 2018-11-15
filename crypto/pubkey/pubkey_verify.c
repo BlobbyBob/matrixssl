@@ -84,6 +84,7 @@ psRes_t psVerifySig(psPool_t *pool,
         else
 #  endif /* USE_PKCS1_PSS */
         {
+
             if (opts && opts->msgIsDigestInfo)
             {
                 /* RSA PKCS 1.5 verification of TLS signed elements. */
@@ -216,6 +217,26 @@ psRes_t psHashDataAndVerifySig(psPool_t *pool,
     return rc;
 }
 
+# ifdef USE_PKCS1_PSS
+static
+int32_t get_pss_hash_sig_alg(psVerifyOptions_t *opts)
+{
+    switch (opts->rsaPssHashAlg)
+    {
+    case PKCS1_SHA1_ID:
+        return OID_SHA1_RSA_SIG;
+    case PKCS1_SHA256_ID:
+        return OID_SHA256_RSA_SIG;
+    case PKCS1_SHA384_ID:
+        return OID_SHA384_RSA_SIG;
+    case PKCS1_SHA512_ID:
+        return OID_SHA512_RSA_SIG;
+    default:
+        return PS_UNSUPPORTED_FAIL;
+    }
+}
+# endif /* USE_PKCS1_PSS */
+
 psRes_t psVerify(psPool_t *pool,
         const unsigned char *dataBegin,
         const psSizeL_t dataLen,
@@ -230,14 +251,22 @@ psRes_t psVerify(psPool_t *pool,
 
     *verifyResult = PS_FALSE;
 
-# if defined (USE_PKCS1_PSS) && defined(USE_CL_RSA)
     if (opts && opts->useRsaPss)
     {
+# if defined (USE_PKCS1_PSS) && defined(USE_CL_RSA)
         /* The crypto-cl API for RSA-PSS verification does not support
            pre-hashing. */
         needPreHash = PS_FALSE;
-    }
 # endif
+        if (needPreHash && signatureAlgorithm == OID_RSASSA_PSS)
+        {
+            /* psComputeHashForSig called by psHashDataAndVerifySig below
+               cannot operate on OID_RSASSA_PSS, since this ID does not
+               indicate the hash alg. So translate to one of the
+               OID_*_RSA_SIG IDs. */
+            signatureAlgorithm = get_pss_hash_sig_alg(opts);
+        }
+    }
 
 # ifdef USE_ED25519
     if (signatureAlgorithm == OID_ED25519_KEY_ALG)

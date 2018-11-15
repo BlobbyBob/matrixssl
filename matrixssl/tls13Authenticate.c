@@ -38,6 +38,7 @@
 # endif
 
 # ifdef USE_TLS_1_3
+#  ifdef USE_CERT_VALIDATE
 
 static int32_t matrixSslValidatePeerCerts(ssl_t *ssl,
         void *pkiData);
@@ -279,4 +280,5 @@ void psCheckSetPathLenFailure(ssl_t *ssl,
         cert = cert->next;
     }
 }
+#  endif /* USE_CERT_VALIDATE */
 # endif /* USE_TLS_1_3 */

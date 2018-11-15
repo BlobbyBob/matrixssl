@@ -95,6 +95,22 @@ psResSize_t psSigAlgToHashLen(int32_t sigAlg)
     case OID_SHA512_RSA_SIG:
     case OID_SHA512_ECDSA_SIG:
         return SHA512_HASH_SIZE;
+# ifdef USE_PKCS1_PSS
+    /*
+      The PSS IDs are not part of the same range as the above OIDs,
+      but they do not conflict with the OIDs either. Support them here
+      for convenience. Now one can always map e.g. cert->sigAlgorithm
+      to hash length.
+    */
+    case PKCS1_SHA1_ID:
+        return SHA1_HASH_SIZE;
+    case PKCS1_SHA256_ID:
+        return SHA256_HASH_SIZE;
+    case PKCS1_SHA384_ID:
+        return SHA384_HASH_SIZE;
+    case PKCS1_SHA512_ID:
+        return SHA512_HASH_SIZE;
+# endif
     default:
         return PS_UNSUPPORTED_FAIL;
     }
@@ -218,7 +234,10 @@ int32_t psHashLenToSigAlg(psSize_t hash_len,
 /** Return PS_TRUE if sigAlg is deemed insecure.
     Return PS_FALSE otherwise.
 */
-psBool_t psIsInsecureSigAlg(int32_t sigAlg, int keyAlgorithm, psSize_t keySize, psSize_t hashSize)
+psBool_t psIsInsecureSigAlg(int32_t sigAlg,
+        int keyAlgorithm,
+        psSize_t keySize,
+        psSize_t hashSize)
 {
     if (sigAlg == OID_MD2_RSA_SIG
             || sigAlg == OID_MD5_RSA_SIG
@@ -234,6 +253,69 @@ psBool_t psIsInsecureSigAlg(int32_t sigAlg, int keyAlgorithm, psSize_t keySize, 
             return PS_TRUE;
     }
     return PS_FALSE;
+}
+
+/* Return PS_TRUE if hashLen is valid for sigAlg,
+   e.g. OID_SHA256_RSA_SIG requires hashLen == 32. */
+psBool_t psIsValidHashLenSigAlgCombination(psSize_t hashLen,
+    int32_t sigAlg)
+{
+    switch (sigAlg)
+    {
+#  ifdef USE_MD2
+    case OID_MD2_RSA_SIG:
+        if (hashLen != MD2_HASH_SIZE)
+        {
+            return PS_FALSE;
+        }
+        break;
+#  endif /* USE_MD2 */
+#  ifdef USE_MD5
+    case OID_MD5_RSA_SIG:
+        if (hashLen != MD5_HASH_SIZE)
+        {
+            return PS_FALSE;
+        }
+        break;
+#  endif /* USE_MD5 */
+    case OID_SHA1_RSA_SIG:
+        if (hashLen != SHA1_HASH_SIZE)
+        {
+            return PS_FALSE;
+        }
+        break;
+#ifdef USE_SHA224
+    case OID_SHA224_RSA_SIG:
+        if (hashLen != SHA224_HASH_SIZE)
+        {
+            return PS_FALSE;
+        }
+        break;
+#endif /* USE_SHA224 */
+    case OID_SHA256_RSA_SIG:
+        if (hashLen != SHA256_HASH_SIZE)
+        {
+            return PS_FALSE;
+        }
+        break;
+    case OID_SHA384_RSA_SIG:
+        if (hashLen != SHA384_HASH_SIZE)
+        {
+            return PS_FALSE;
+        }
+        break;
+    case OID_SHA512_RSA_SIG:
+        if (hashLen != SHA512_HASH_SIZE)
+        {
+            return PS_FALSE;
+        }
+        break;
+    default:
+        psTraceIntCrypto("Unsupported RSA signature alg: %d\n", sigAlg);
+        return PS_FALSE;
+    }
+
+    return PS_TRUE;
 }
 
 /** Given the name of a signature algorithm (section 4.3.2 in TLS 1.3

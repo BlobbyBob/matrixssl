@@ -145,6 +145,7 @@ psBool_t tls13ExtensionAllowedInMessage(ssl_t *ssl,
     return PS_TRUE;
 }
 
+# if defined(USE_IDENTITY_CERTIFICATES) && defined(USE_OCSP_RESPONSE)
 int32_t tls13ParseStatusRequest(ssl_t *ssl,
         psParseBuf_t *extBuf)
 {
@@ -200,7 +201,10 @@ int32_t tls13ParseStatusRequest(ssl_t *ssl,
             cert = cert->next;
         }
 
-        psParseOctet(extBuf, &type);
+        if (!psParseOctet(extBuf, &type))
+        {
+            goto out_decode_error;
+        }
         if (type != 0x01)
         {
             psTraceErrr("Invalid status_type in status_request\n");
@@ -255,6 +259,7 @@ out_bad_certificate_status_response:
     ssl->err = SSL_ALERT_BAD_CERTIFICATE_STATUS_RESPONSE;
     return MATRIXSSL_ERROR;
 }
+# endif /* USE_IDENTITY_CERTIFICATES && USE_OCSP_RESPONSE */
 
 /*
   Parses a single extension:
@@ -322,6 +327,7 @@ int32_t tls13ParseSingleExtension(ssl_t *ssl,
             return rc;
         }
         break;
+# if defined(USE_IDENTITY_CERTIFICATES) && defined(USE_OCSP_RESPONSE)
     case EXT_STATUS_REQUEST:
         rc = tls13ParseStatusRequest(ssl, &extDataBuf);
         if (rc < 0)
@@ -329,6 +335,7 @@ int32_t tls13ParseSingleExtension(ssl_t *ssl,
             return rc;
         }
         break;
+# endif
     default:
         psTraceIntInfo("Ignoring unknown extension: %hu\n", extType);
     }
@@ -401,6 +408,7 @@ psSize_t tls13ParseSupportedVersions(ssl_t *ssl,
     psSize_t dataLen;
     int32 i = 0;
     unsigned char majVer, minVer;
+    psProtocolVersion_t ver;
     const unsigned char *p = *c;
     psSize_t parsedLen;
 
@@ -431,17 +439,17 @@ psSize_t tls13ParseSupportedVersions(ssl_t *ssl,
         psTraceErrr("Malformed supported_versions extension\n");
         goto out_decode_error;
     }
-
     ssl->extFlags.got_supported_versions = 1;
-    ssl->tls13PeerSupportedVersionsLen = 0;
+    ssl->peerSupportedVersionsPriorityLen = 0;
     while(len > 0)
     {
         majVer = *p; p++;
         minVer = *p; p++;
         len -= 2;
+        ver = psVerFromEncodingMajMin(majVer, minVer);
 
-        ssl->tls13PeerSupportedVersions[i] = (majVer << 8) | minVer;
-        ssl->tls13PeerSupportedVersionsLen++;
+        ADD_PEER_SUPP_VER(ssl, ver);
+        ADD_PEER_SUPP_VER_PRIORITY(ssl, ver);
         i++;
 
         if (i >= TLS_MAX_SUPPORTED_VERSIONS)
@@ -469,7 +477,7 @@ int32_t tls13ParseServerSupportedVersions(ssl_t *ssl,
         psParseBuf_t *pb)
 {
     unsigned char maj, min;
-    psBool_t negotiatedTls13 = PS_FALSE;
+    psProtocolVersion_t ver;
 
     psTracePrintExtensionParse(ssl, EXT_SUPPORTED_VERSIONS);
 
@@ -477,29 +485,23 @@ int32_t tls13ParseServerSupportedVersions(ssl_t *ssl,
     {
         return PS_PARSE_FAIL;
     }
+    ver = psVerFromEncodingMajMin(maj, min);
 
     psTracePrintProtocolVersion(INDENT_EXTENSION,
             "selected_version",
             maj, min, 1);
 
-    if (!tlsVersionSupported(ssl, min))
+    if (!SUPP_VER(ssl, ver))
     {
         ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
         psTraceIntInfo("Unsupported server version: %u", min);
         return MATRIXSSL_ERROR;
     }
 
-    if ((maj == TLS_MAJ_VER && min == TLS_1_3_MIN_VER) ||
-            (maj == TLS_1_3_DRAFT_MAJ_VER &&
-                    min >= MIN_ENABLED_TLS_1_3_DRAFT_VERSION))
-    {
-        negotiatedTls13 = PS_TRUE;
-    }
+    SET_NGTD_VER(ssl, ver);
 
-    if (negotiatedTls13)
+    if (ver & v_tls_1_3_any)
     {
-        ssl->flags |= SSL_FLAGS_TLS_1_3_NEGOTIATED;
-        ssl->tls13NegotiatedMinorVer = min;
         return PS_SUCCESS;
     }
     else
@@ -509,6 +511,7 @@ int32_t tls13ParseServerSupportedVersions(ssl_t *ssl,
     }
 }
 
+# ifndef USE_ONLY_PSK_CIPHER_SUITE
 static
 int32_t tls13ParseServerKeyShare(ssl_t *ssl,
         psParseBuf_t *pb)
@@ -607,6 +610,7 @@ out_illegal_parameter:
     ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
     return MATRIXSSL_ERROR;
 }
+# endif /* USE_ONLY_PSK_CIPHER_SUITE */
 
 static
 int32_t tls13VerifyBinder(ssl_t *ssl,
@@ -757,6 +761,11 @@ psBool_t tls13ServerFoundSupportedPsk(ssl_t *ssl,
         psTls13Psk_t *psk,
         uint16_t indexInClientPreSharedKey)
 {
+    psProtocolVersion_t pskVer;
+    uint8_t majVer, minVer;
+
+    (void)pskVer;
+
     psTraceInfo("Server recognized a PSK in pre_shared_key\n");
     if (psk->isResumptionPsk)
     {
@@ -768,9 +777,14 @@ psBool_t tls13ServerFoundSupportedPsk(ssl_t *ssl,
     ssl->sec.tls13SelectedIdentityIndex = indexInClientPreSharedKey;
     if (psk->params != NULL)
     {
-        ssl->majVer = psk->params->majVer;
-        ssl->minVer = TLS_1_2_MIN_VER; /* legacy_version. */
-        ssl->flags |= tlsMinVerToVersionFlag(psk->params->minVer);
+        majVer = psk->params->majVer;
+        minVer = psk->params->minVer;
+        if (minVer == 0)
+        {
+            minVer = TLS_1_2_MIN_VER;
+        }
+        pskVer = psVerFromEncodingMajMin(majVer, minVer);
+
         ssl->cipher = sslGetCipherSpec(ssl, psk->params->cipherId);
         if (ssl->cipher == NULL)
         {
@@ -778,14 +792,10 @@ psBool_t tls13ServerFoundSupportedPsk(ssl_t *ssl,
                     "ciphersuite\n");
             return PS_FALSE;
         }
-        if (psk->params->minVer != 0)
-        {
-            psTracePrintProtocolVersion(INDENT_EXTENSION,
-                    "PSK is associated with protocol version",
-                    ssl->majVer,
-                    psk->params->minVer,
-                    PS_TRUE);
-        }
+        psTracePrintProtocolVersionNew(INDENT_EXTENSION,
+                "PSK is associated with protocol version",
+                pskVer,
+                PS_TRUE);
         psTracePrintCiphersuiteName(INDENT_EXTENSION,
                     "PSK is associated with ciphersuite",
                     ssl->cipher->ident,
@@ -1209,7 +1219,7 @@ int32_t tls13ParseServerName(ssl_t *ssl,
     */
     psAssert(!IS_SERVER(ssl));
     psTracePrintExtensionParse(ssl, EXT_SERVER_NAME);
-
+# ifdef USE_CLIENT_SIDE_SSL
     /* Solicited or not? */
     if (ssl->extFlags.req_sni == 0)
     {
@@ -1226,7 +1236,9 @@ int32_t tls13ParseServerName(ssl_t *ssl,
     }
 
     psTraceInfo("Received empty server_name in EncryptedExtensions\n");
-
+# else
+    return MATRIXSSL_ERROR;
+# endif
     return PS_SUCCESS;
 }
 
@@ -1279,6 +1291,7 @@ int32_t tls13ParseSignatureAlgorithms(ssl_t *ssl,
         psTracePrintExtensionParse(ssl, EXT_SIGNATURE_ALGORITHMS);
     }
 
+
     (void)psParseBufFromStaticData(&pb, *c, len);
     /* Move the supplied pointer forwards to the end
        of this extension */
@@ -1293,7 +1306,9 @@ int32_t tls13ParseSignatureAlgorithms(ssl_t *ssl,
 
     if (isCert)
     {
+#  ifdef USE_IDENTITY_CERTIFICATES
         ssl->sec.keySelect.peerCertSigAlgsLen = 0;
+#  endif
     }
     else
     {
@@ -1318,6 +1333,7 @@ int32_t tls13ParseSignatureAlgorithms(ssl_t *ssl,
         /* Save the algoritm based on which extension this is */
         if (isCert)
         {
+#  ifdef USE_IDENTITY_CERTIFICATES
             /* Make sure this sig_alg_cert is in our supported list */
             if (findFromUint16Array(
                         ssl->tls13SupportedSigAlgsCert,
@@ -1331,6 +1347,7 @@ int32_t tls13ParseSignatureAlgorithms(ssl_t *ssl,
                 ssl->sec.keySelect.peerCertSigAlgMask |= mask;
                 i++;
             }
+# endif
         }
         else
         {
@@ -1352,12 +1369,14 @@ int32_t tls13ParseSignatureAlgorithms(ssl_t *ssl,
 
     if (isCert)
     {
+#  ifdef USE_IDENTITY_CERTIFICATES
         /* signature_algorithms_cert only defined in TLS 1.3. */
         psTracePrintTls13SigAlgList(INDENT_EXTENSION,
                 "Parsed signature_algorithms_cert",
                 ssl->sec.keySelect.peerCertSigAlgs,
                 ssl->sec.keySelect.peerCertSigAlgsLen,
                 PS_TRUE);
+#  endif
     }
     else
     {
@@ -1370,7 +1389,7 @@ int32_t tls13ParseSignatureAlgorithms(ssl_t *ssl,
 
     return MATRIXSSL_SUCCESS;
 }
-
+#  ifdef USE_IDENTITY_CERTIFICATES
 psRes_t tls13ParseCertificateAuthorities(ssl_t *ssl,
                                          const unsigned char **start, psSizeL_t len)
 {
@@ -1446,6 +1465,7 @@ psRes_t tls13ParseCertificateAuthorities(ssl_t *ssl,
     psTraceIntInfo(" got %d CA names\n", keySelect->nCas);
     return PS_SUCCESS;
 }
+# endif
 
 int32_t tls13ParseEncryptedExtensions(ssl_t *ssl,
         psParseBuf_t *pb)
@@ -1642,6 +1662,7 @@ int32_t tls13ParseServerHelloExtensions(ssl_t *ssl,
 
         switch (extensionType)
         {
+# ifndef USE_ONLY_PSK_CIPHER_SUITE
         case EXT_KEY_SHARE_PRE_DRAFT_23:
         case EXT_KEY_SHARE:
             rc = tls13ParseServerKeyShare(ssl, &extDataBuf);
@@ -1650,6 +1671,7 @@ int32_t tls13ParseServerHelloExtensions(ssl_t *ssl,
                 return rc;
             }
             break;
+# endif
         case EXT_PRE_SHARED_KEY:
             rc = tls13ParsePreSharedKey(ssl, &extDataBuf);
             if (rc < 0)
@@ -1687,7 +1709,7 @@ int32_t tls13ParseServerHelloExtensions(ssl_t *ssl,
     }
 
     /* We should have negotiated 1.3 if we get here. */
-    psAssert(NEGOTIATED_TLS_1_3(ssl));
+    psAssert(NGTD_VER(ssl, v_tls_1_3_any));
 
     if (gotForbiddenExtension)
     {

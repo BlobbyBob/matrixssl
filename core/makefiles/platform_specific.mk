@@ -19,7 +19,7 @@ ifneq (,$(NEON_VARIANT))
 CFLAGS_ENABLE_NEON=-march=armv7-a -mfpu=neon
 else
 # No neon mentioned. Request float abi to be softfp.
-CFLAGS_ENABLE_NEON=-march=armv7-a -mfloat-abi=softfp -mfpu=neon
+CFLAGS_ENABLE_NEON=$(CFLAGS_ARCHITECTURE_VARIANT) -mfloat-abi=softfp -mfpu=neon
 endif
 endif
 

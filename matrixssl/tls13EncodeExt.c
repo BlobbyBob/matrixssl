@@ -44,6 +44,7 @@
 #  warning "DEBUG_TLS_1_3_ENCODE_EXTENSIONS will leak secrets into logs!"
 # endif
 
+#  ifdef USE_CLIENT_SIDE_SSL
 static int32_t tls13WriteClientSupportedVersions(ssl_t *ssl,
         psDynBuf_t *extBuf)
 {
@@ -60,10 +61,10 @@ static int32_t tls13WriteClientSupportedVersions(ssl_t *ssl,
     psDynBufInit(ssl->hsPool, &workBuf,
                  TLS_MAX_SUPPORTED_VERSIONS * 2);
 
-    for (i = 0; i < ssl->supportedVersionsLen; i++)
+    for (i = 0; i < ssl->supportedVersionsPriorityLen; i++)
     {
-        maj = ssl->supportedVersions[i] >> 8;
-        min = ssl->supportedVersions[i] & 0xff;
+        maj = psEncodeVersionMaj(ssl->supportedVersionsPriority[i]);
+        min = psEncodeVersionMin(ssl->supportedVersionsPriority[i]);
 
         psDynBufAppendByte(&workBuf, maj);
         psDynBufAppendByte(&workBuf, min);
@@ -71,8 +72,8 @@ static int32_t tls13WriteClientSupportedVersions(ssl_t *ssl,
 
     psTracePrintVersionsList(INDENT_HS_MSG,
             "supported_versions",
-            ssl->supportedVersions,
-            ssl->supportedVersionsLen,
+            ssl->supportedVersionsPriority,
+            ssl->supportedVersionsPriorityLen,
             PS_FALSE);
 
     extensionData = psDynBufDetach(&workBuf, &extensionDataLen);
@@ -105,6 +106,7 @@ static int32_t tls13WriteClientSupportedVersions(ssl_t *ssl,
     return PS_SUCCESS;
 }
 
+# ifndef USE_ONLY_PSK_CIPHER_SUITE
 static
 int32_t tls13WriteKeyShareEntry(ssl_t *ssl,
         psDynBuf_t *sharesBuf,
@@ -199,12 +201,14 @@ int32_t tls13WriteClientKeyShare(ssl_t *ssl, psDynBuf_t *extBuf)
 
     psDynBufAppendOctets(extBuf, extensionType, 2);
 
+#ifndef USE_ONLY_PSK_CIPHER_SUITE
     /* Generate keys. */
     rc = tls13GenerateEphemeralKeys(ssl);
     if (rc < 0)
     {
         return rc;
     }
+
     /* KeyShareEntry client_shares<0..2^16-1>; */
     psDynBufInit(ssl->hsPool, &workBuf, 256);
 
@@ -246,6 +250,7 @@ int32_t tls13WriteClientKeyShare(ssl_t *ssl, psDynBuf_t *extBuf)
             extensionData,
             extensionDataLen);
     psFree(extensionData, ssl->hsPool);
+# endif
     return PS_SUCCESS;
 }
 
@@ -272,7 +277,7 @@ static int32_t tls13WriteClientSupportedGroups(ssl_t *ssl, psDynBuf_t *extBuf)
     }
 
     extensionData = psDynBufDetach(&workBuf,
-                                    &extensionDataLen);
+            &extensionDataLen);
     if (extensionData == NULL)
     {
         return PS_MEM_FAIL;
@@ -297,6 +302,8 @@ static int32_t tls13WriteClientSupportedGroups(ssl_t *ssl, psDynBuf_t *extBuf)
     psFree(extensionData, ssl->hsPool);
     return PS_SUCCESS;
 }
+#   endif /* USE_ONLY_PSK_CIPHER_SUITE */
+#  endif /* USE_CLIENT_SIDE_SSL */
 
 int32_t tls13WriteSigAlgs(ssl_t *ssl,
         psDynBuf_t *extBuf,
@@ -368,6 +375,7 @@ out_internal_error:
     return MATRIXSSL_ERROR;
 }
 
+# ifdef USE_IDENTITY_CERTIFICATES
 int32_t tls13WriteCertificateAuthorities(ssl_t *ssl,
         psDynBuf_t *extBuf)
 {
@@ -387,21 +395,22 @@ int32_t tls13WriteCertificateAuthorities(ssl_t *ssl,
     cert = ssl->keys->CAcerts;
     if (cert == NULL)
     {
-#ifdef SERVER_CAN_SEND_EMPTY_CERT_REQUEST
+#  ifdef SERVER_CAN_SEND_EMPTY_CERT_REQUEST
         /* Return success even in the case of no CAs in which
            case the extension is omitted. This might not be an error
            situation in case the cert verification is done by the
            application using the callback */
         return MATRIXSSL_SUCCESS;
-#else
+#  else
         psTraceInfo("Failed writing certificate_authorities because no " \
                     "CA certificates configured. Configure CA certificates or "\
                      "define SERVER_CAN_SEND_EMPTY_CERT_REQUEST.\n");
         return PS_ARG_FAIL;
-#endif
+#  endif
     }
     psDynBufAppendOctets(extBuf, extensionType, 2);
     psDynBufInit(ssl->hsPool, &dnBuf, 1024);
+#  ifdef USE_CERT_PARSE
     while (cert)
     {
         if (cert->parseStatus == PS_X509_PARSE_SUCCESS)
@@ -413,6 +422,7 @@ int32_t tls13WriteCertificateAuthorities(ssl_t *ssl,
         }
         cert = cert->next;
     }
+#  endif
     extensionData = psDynBufDetach(&dnBuf, &extensionDataLen);
     if (extensionData == NULL)
     {
@@ -439,7 +449,7 @@ int32_t tls13WriteCertificateAuthorities(ssl_t *ssl,
     psFree(extensionData, ssl->hsPool);
     return PS_SUCCESS;
 }
-
+# endif /* USE_IDENTITY_CERTIFICATES */
 
 int32_t tls13WriteEarlyData(ssl_t *ssl,
                            psDynBuf_t *extBuf,
@@ -467,27 +477,26 @@ int32_t tls13WriteEarlyData(ssl_t *ssl,
     return PS_SUCCESS;
 }
 
+#  ifdef USE_SERVER_SIDE_SSL
 static int32_t tls13WriteServerSupportedVersions(ssl_t *ssl,
         psDynBuf_t *extBuf)
 {
     psDynBuf_t verBuf;
     unsigned char extensionType[2] = {0x00, EXT_SUPPORTED_VERSIONS};
     unsigned char *extensionData;
-    unsigned char maj = TLS_MAJ_VER;
+    unsigned char maj, min;
     size_t extensionDataLen;
 
     psTracePrintExtensionCreate(ssl, EXT_SUPPORTED_VERSIONS);
 
     psDynBufAppendOctets(extBuf, extensionType, 2);
 
-    /*   ProtocolVersion selected_version; */
+    /* ProtocolVersion selected_version; */
     psDynBufInit(ssl->hsPool, &verBuf, 2);
-    if (ssl->tls13NegotiatedMinorVer > TLS_1_3_MIN_VER)
-    {
-        maj = TLS_1_3_DRAFT_MAJ_VER;
-    }
+    maj = psEncodeVersionMaj(GET_ACTV_VER(ssl));
+    min = psEncodeVersionMin(GET_ACTV_VER(ssl));
     psDynBufAppendOctets(&verBuf, &maj, 1);
-    psDynBufAppendOctets(&verBuf, &ssl->tls13NegotiatedMinorVer, 1);
+    psDynBufAppendOctets(&verBuf, &min, 1);
 
     /*   opaque extensionData<0..2^16-1>; */
     extensionData = psDynBufDetach(&verBuf, &extensionDataLen);
@@ -503,6 +512,9 @@ static int32_t tls13WriteServerSupportedVersions(ssl_t *ssl,
     return PS_SUCCESS;
 }
 
+#  endif /* USE_SERVER_SIDE_SSL */
+
+#  ifdef USE_CLIENT_SIDE_SSL
 static int32_t tls13WriteExtendedMasterSecret(ssl_t *ssl,
         psDynBuf_t *extBuf,
         sslSessOpts_t *options)
@@ -550,7 +562,7 @@ static int32_t tls13WriteExtendedMasterSecret(ssl_t *ssl,
     return PS_SUCCESS;
 }
 
-#  ifdef ENABLE_SECURE_REHANDSHAKES
+#   ifdef ENABLE_SECURE_REHANDSHAKES
 static int32_t tls13WriteRenegotiationInfo(ssl_t *ssl,
         psDynBuf_t *extBuf)
 {
@@ -567,8 +579,11 @@ static int32_t tls13WriteRenegotiationInfo(ssl_t *ssl,
 
     return PS_SUCCESS;
 }
-#  endif /* ENABLE_SECURE_REHANDSHAKES */
+#   endif /* ENABLE_SECURE_REHANDSHAKES */
+#  endif /* USE_CLIENT_SIDE_SSL */
 
+#  ifdef USE_SERVER_SIDE_SSL
+#   ifndef USE_ONLY_PSK_CIPHER_SUITE
 static int32_t tls13WriteServerKeyShare(ssl_t *ssl,
         psDynBuf_t *extBuf,
         psBool_t isHelloRetryRequest)
@@ -584,8 +599,7 @@ static int32_t tls13WriteServerKeyShare(ssl_t *ssl,
     int32_t rc;
 
     extensionType[0] = 0x00;
-    if (ssl->tls13NegotiatedMinorVer == TLS_1_3_MIN_VER ||
-            ssl->tls13NegotiatedMinorVer >= TLS_1_3_DRAFT_23_MIN_VER)
+    if (NGTD_VER(ssl, v_tls_1_3_key_share_51))
     {
         extensionType[1] = EXT_KEY_SHARE;
     }
@@ -637,7 +651,6 @@ static int32_t tls13WriteServerKeyShare(ssl_t *ssl,
     if (!isHelloRetryRequest)
     {
         /* Standard ServerHello --> KeyShareServerHello. */
-
         rc = tls13GenerateEphemeralKeys(ssl);
         if (rc < 0)
         {
@@ -684,6 +697,8 @@ static int32_t tls13WriteServerKeyShare(ssl_t *ssl,
 
     return PS_SUCCESS;
 }
+#   endif /* USE_ONLY_PSK_CIPHER_SUITE */
+#  endif /* USE_SERVER_SIDE_SSL */
 
 static
 int32_t tls13WritePskIdentity(ssl_t *ssl,
@@ -959,71 +974,6 @@ out_internal_failure:
     return MATRIXSSL_ERROR;
 }
 
-static
-int32_t tls13WritePskKeyExchangeModes(ssl_t *ssl,
-        psDynBuf_t *extBuf)
-{
-    psDynBuf_t buf, modesBuf;
-    unsigned char extensionType[2] = { 0x00, EXT_PSK_KEY_EXCHANGE_MODES };
-    unsigned char *modes, *extensionData;
-    psSize_t modesLen, extensionDataLen;
-    unsigned char psk_ke = 0;
-    unsigned char psk_dhe_ke = 1;
-
-    psTracePrintExtensionCreate(ssl, EXT_PSK_KEY_EXCHANGE_MODES);
-
-    /*
-      enum { psk_ke(0), psk_dhe_ke(1), (255) } PskKeyExchangeMode;
-
-      struct {
-          PskKeyExchangeMode ke_modes<1..255>;
-      } PskKeyExchangeModes;
-    */
-
-    psDynBufAppendOctets(extBuf, extensionType, 2);
-
-    psDynBufInit(ssl->hsPool, &buf, 6);
-    psDynBufInit(ssl->hsPool, &modesBuf, 4);
-
-    /* Always support both psk_dhe_ke and psk_ke. We can always support
-       psk_dhe_ke, because we always encode a key_share currently. Caller
-       has already ensured that we have a PSK for psk_ke. */
-    psDynBufAppendOctets(&modesBuf, &psk_dhe_ke, 1);
-    psDynBufAppendOctets(&modesBuf, &psk_ke, 1);
-
-    modes = psDynBufDetachPsSize(&modesBuf, &modesLen);
-    if (modes == NULL)
-    {
-        goto out_internal_failure;
-    }
-    psDynBufUninit(&modesBuf);
-
-    /* PskKeyExchangeMode ke_modes<1..255>; */
-    psDynBufAppendTlsVector(&buf,
-            1, 255,
-            modes,
-            modesLen);
-    psFree(modes, ssl->hsPool);
-
-    /*   opaque extensionData<0..2^16-1>; */
-    extensionData = psDynBufDetachPsSize(&buf, &extensionDataLen);
-    if (extensionData == NULL)
-    {
-        goto out_internal_failure;
-    }
-    psDynBufAppendTlsVector(extBuf,
-            0, (1 << 16) - 1,
-            extensionData,
-            extensionDataLen);
-
-    psFree(extensionData, ssl->hsPool);
-    psDynBufUninit(&buf);
-    return PS_SUCCESS;
-
-out_internal_failure:
-    ssl->err = SSL_ALERT_INTERNAL_ERROR;
-    return MATRIXSSL_ERROR;
-}
 
 static
 int32_t tls13WriteCookie(ssl_t *ssl,
@@ -1106,6 +1056,7 @@ int32_t tls13WriteCookie(ssl_t *ssl,
     return PS_SUCCESS;
 }
 
+#  ifdef USE_SERVER_SIDE_SSL
 /*
   Add mandatory extensions to TLS 1.3 ServerHello:
   supported_versions, key_share
@@ -1128,13 +1079,13 @@ int32 tls13WriteServerHelloExtensions(ssl_t *ssl,
     {
         return rc;
     }
-
+# ifndef USE_ONLY_PSK_CIPHER_SUITE
     rc = tls13WriteServerKeyShare(ssl, extBuf, isHelloRetryRequest);
     if (rc < 0)
     {
         return rc;
     }
-
+# endif
     if (ssl->sec.tls13UsingPsk)
     {
         rc = tls13WritePreSharedKey(ssl, extBuf, isHelloRetryRequest);
@@ -1154,6 +1105,74 @@ int32 tls13WriteServerHelloExtensions(ssl_t *ssl,
     }
 
     return PS_SUCCESS;
+}
+#  endif /* USE_SERVER_SIDE_SSL */
+
+#  ifdef USE_CLIENT_SIDE_SSL
+static
+int32_t tls13WritePskKeyExchangeModes(ssl_t *ssl,
+        psDynBuf_t *extBuf)
+{
+    psDynBuf_t buf, modesBuf;
+    unsigned char extensionType[2] = { 0x00, EXT_PSK_KEY_EXCHANGE_MODES };
+    unsigned char *modes, *extensionData;
+    psSize_t modesLen, extensionDataLen;
+    unsigned char psk_ke = 0;
+    unsigned char psk_dhe_ke = 1;
+
+    psTracePrintExtensionCreate(ssl, EXT_PSK_KEY_EXCHANGE_MODES);
+
+    /*
+      enum { psk_ke(0), psk_dhe_ke(1), (255) } PskKeyExchangeMode;
+
+      struct {
+          PskKeyExchangeMode ke_modes<1..255>;
+      } PskKeyExchangeModes;
+    */
+
+    psDynBufAppendOctets(extBuf, extensionType, 2);
+
+    psDynBufInit(ssl->hsPool, &buf, 6);
+    psDynBufInit(ssl->hsPool, &modesBuf, 4);
+
+    /* Always support both psk_dhe_ke and psk_ke. We can always support
+       psk_dhe_ke, because we always encode a key_share currently. Caller
+       has already ensured that we have a PSK for psk_ke. */
+    psDynBufAppendOctets(&modesBuf, &psk_dhe_ke, 1);
+    psDynBufAppendOctets(&modesBuf, &psk_ke, 1);
+
+    modes = psDynBufDetachPsSize(&modesBuf, &modesLen);
+    if (modes == NULL)
+    {
+        goto out_internal_failure;
+    }
+    psDynBufUninit(&modesBuf);
+
+    /* PskKeyExchangeMode ke_modes<1..255>; */
+    psDynBufAppendTlsVector(&buf,
+            1, 255,
+            modes,
+            modesLen);
+    psFree(modes, ssl->hsPool);
+
+    /*   opaque extensionData<0..2^16-1>; */
+    extensionData = psDynBufDetachPsSize(&buf, &extensionDataLen);
+    if (extensionData == NULL)
+    {
+        goto out_internal_failure;
+    }
+    psDynBufAppendTlsVector(extBuf,
+            0, (1 << 16) - 1,
+            extensionData,
+            extensionDataLen);
+
+    psFree(extensionData, ssl->hsPool);
+    psDynBufUninit(&buf);
+    return PS_SUCCESS;
+
+out_internal_failure:
+    ssl->err = SSL_ALERT_INTERNAL_ERROR;
+    return MATRIXSSL_ERROR;
 }
 
 int32_t tls13WriteUserExtensions(ssl_t *ssl,
@@ -1194,6 +1213,9 @@ int32_t tls13WriteUserExtensions(ssl_t *ssl,
     return MATRIXSSL_SUCCESS;
 }
 
+#  endif /* USE_CLIENT_SIDE_SSL */
+
+# ifdef USE_OCSP_RESPONSE
 int32_t tls13WriteOCSPStatusRequest(ssl_t *ssl,
         psDynBuf_t *extBuf)
 {
@@ -1244,6 +1266,7 @@ int32_t tls13WriteOCSPStatusRequest(ssl_t *ssl,
 
     if (IS_SERVER(ssl))
     {
+#  ifdef USE_SERVER_SIDE_SSL
         /* Server sends the stored OCSPResponse. */
         psAssert(ssl->keys->OCSPResponseBuf
                 && ssl->keys->OCSPResponseBufLen > 0);
@@ -1258,6 +1281,7 @@ int32_t tls13WriteOCSPStatusRequest(ssl_t *ssl,
                 1, (1 << 24) - 1,
                 ssl->keys->OCSPResponseBuf,
                 ssl->keys->OCSPResponseBufLen);
+#  endif /* ifdef USE_SERVER_SIDE_SSL */
     }
     else
     {
@@ -1286,7 +1310,9 @@ out_internal_error:
     ssl->err = SSL_ALERT_INTERNAL_ERROR;
     return MATRIXSSL_ERROR;
 }
+#  endif /* USE_OCSP_RESPONSE */
 
+#  ifdef USE_CLIENT_SIDE_SSL
 int32_t tls13WriteClientHelloExtensions(ssl_t *ssl,
         psDynBuf_t *extBuf,
         tlsExtension_t *userExt,
@@ -1325,7 +1351,7 @@ int32_t tls13WriteClientHelloExtensions(ssl_t *ssl,
     {
         return rc;
     }
-
+# ifndef USE_ONLY_PSK_CIPHER_SUITE
     rc = tls13WriteClientSupportedGroups(ssl, extBuf);
     if (rc < 0)
     {
@@ -1337,7 +1363,7 @@ int32_t tls13WriteClientHelloExtensions(ssl_t *ssl,
     {
         return rc;
     }
-
+# endif /* USE_ONLY_PSK_CIPHER_SUITE */
     if (ssl->tls13IncorrectDheKeyShare)
     {
         if (ssl->sec.tls13CookieFromServer
@@ -1351,6 +1377,7 @@ int32_t tls13WriteClientHelloExtensions(ssl_t *ssl,
         }
     }
 
+#  if defined(USE_OCSP_RESPONSE) && defined(USE_SERVER_SIDE_SSL)
     /*
       Add OCSP status request if:
       - it was requested in the session options
@@ -1368,7 +1395,7 @@ int32_t tls13WriteClientHelloExtensions(ssl_t *ssl,
         }
         ssl->extFlags.req_status_request = 1;
     }
-
+#  endif /* USE_OCSP_RESPONSE */
     /* Add user-provided extensions, e.g. server_name (SNI). */
     if (ssl->userExt)
     {
@@ -1378,7 +1405,6 @@ int32_t tls13WriteClientHelloExtensions(ssl_t *ssl,
             return rc;
         }
     }
-
     /*
       When offering TLS 1.0, 1.1 or 1.2, add some security-critical
       TLS 1.2 extensions.
@@ -1386,9 +1412,7 @@ int32_t tls13WriteClientHelloExtensions(ssl_t *ssl,
       Not that some old, incompliant TLS 1.0 implementations
       may not be able to parse any extensions.
     */
-    if (tlsVersionSupported(ssl, TLS_1_0_MIN_VER)
-            || tlsVersionSupported(ssl, TLS_1_1_MIN_VER)
-            || tlsVersionSupported(ssl, TLS_1_2_MIN_VER))
+    if (SUPP_VER(ssl, v_tls_legacy))
     {
         rc = tls13WriteExtendedMasterSecret(ssl, extBuf, options);
         if (rc < 0)
@@ -1444,4 +1468,5 @@ int32_t tls13WriteClientHelloExtensions(ssl_t *ssl,
     }
     return PS_SUCCESS;
 }
+#  endif /* USE_CLIENT_SIDE_SSL */
 #endif

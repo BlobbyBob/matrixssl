@@ -9,6 +9,7 @@ include $(MATRIXSSL_ROOT)/common.mk
 
 SRC:=\
 	common/alg_info.c \
+	common/digest_info.c \
 	symmetric/aes.c \
 	symmetric/aesCBC.c \
 	symmetric/aesGCM.c \

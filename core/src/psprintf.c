@@ -468,6 +468,7 @@ next_ch:
                 case 'd': l += 2;
                 /* fall-through. */
                 case 'o': l += 8;
+                /* fall-through. */
                 case 'c':
                     /* Promote "long" to "long long" on LP64 architectures. */
                     if (arg_size > 0 && sizeof(long) > sizeof(int))

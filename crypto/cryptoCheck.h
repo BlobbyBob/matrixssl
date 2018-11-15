@@ -115,6 +115,9 @@
 #  ifndef USE_SHA1
 #   error "Enable USE_SHA1 in cryptoConfig.h for OCSP support"
 #  endif
+#  ifndef USE_CERT_PARSE
+#    errro "enable USE_CERT_PARSE for USE_OCSP_RESPONSE."
+#  endif
 # endif
 
 # ifdef USE_OCSP_REQUEST

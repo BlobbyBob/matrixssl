@@ -420,6 +420,8 @@ file_readArgs(
                 if (newArgc >= SFZUTF_FILE_MAX_ARGS)
                 {
                     error_p = "Too many arguments";
+                    SFZUTF_FREE(line_p);
+                    SFZUTF_FREE(newArgv);
                     return error_p;
                 }
 

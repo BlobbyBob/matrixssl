@@ -362,6 +362,7 @@ static psRes_t sslLoadKeyPair(psPool_t *pool,
         psSizeL_t keydata_len)
 {
     psRes_t err = PS_SUCCESS;
+# ifdef USE_PRIVATE_KEY_PARSING
     unsigned char *unarmored;
     psSizeL_t unarmored_len;
     int32_t rc;
@@ -371,7 +372,6 @@ static psRes_t sslLoadKeyPair(psPool_t *pool,
         psTraceInfo("slLoadKeyPair(): no key material");
         return PS_SUCCESS;
     }
-
     rc = psPemTryDecode(pool,
             keydata,
             keydata_len,
@@ -461,6 +461,7 @@ static psRes_t sslLoadKeyPair(psPool_t *pool,
   out:
     if (unarmored != keydata)
         psFree(unarmored, pool);
+# endif
     return err;
 }
 
@@ -487,6 +488,7 @@ static psRes_t sslLoadCert(psPool_t *pool,
             (CERT_STORE_UNPARSED_BUFFER|CERT_STORE_DN_BUFFER));
     if (rc < PS_SUCCESS)
     {
+        psX509FreeCert((*cert));
         return rc;
     }
 
@@ -511,7 +513,7 @@ matrixSslCreateIdentityFromData(sslKeys_t *keys,
         matrixSslLoadKeysOpts_t *opts)
 {
     psPubKey_t idkey;
-    psX509Cert_t *idcert;
+    psX509Cert_t *idcert = NULL;
     int32 err;
     sslIdentity_t *id;
 
@@ -767,7 +769,7 @@ int32 matrixSslLoadPkcs12Mem(sslKeys_t *keys,
     psPool_t *pool;
     int32 rc;
     psX509Cert_t *cert;
-    psPubKey_t idkey;
+    psPubKey_t idkey = {0};
     sslIdentity_t *id;
 
     if (keys == NULL)
@@ -969,7 +971,7 @@ int32 matrixSslLoadPkcs12(sslKeys_t *keys,
     psPool_t *pool;
     int32 rc;
     psX509Cert_t *cert;
-    psPubKey_t idkey;
+    psPubKey_t idkey = {0};
     sslIdentity_t *id;
 
     if (keys == NULL)

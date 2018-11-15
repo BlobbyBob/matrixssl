@@ -514,10 +514,10 @@ psRes_t psPkcs8ParsePrivBin(psPool_t *pool,
 
 #if 0
 PKCS8_FAIL:
-#endif
     psClearPubKey(key);
     psTraceCrypto("Did not parse key in PKCS#8 parse\n");
     return PS_FAILURE;
+#endif
 }
 #    endif /* USE_PKCS8 */
 

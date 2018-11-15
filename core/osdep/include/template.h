@@ -9,6 +9,18 @@ __END__
  * Wrapper for system header __FILENAME__
  */
 
+#ifdef MATRIX_COMMERCIAL
+/*****************************************************************************
+* Copyright (c) 2017 INSIDE Secure Oy. All Rights Reserved.
+*
+* This confidential and proprietary software may be used only as authorized
+* by a licensing agreement from INSIDE Secure.
+*
+* The entire notice above must be reproduced on all authorized copies that
+* may only be made to the extent permitted by a licensing agreement from
+* INSIDE Secure.
+*****************************************************************************/
+#else
 /*****************************************************************************
 * Copyright (c) 2017 INSIDE Secure Oy. All Rights Reserved.
 *
@@ -33,6 +45,7 @@ __END__
 * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 * http://www.gnu.org/copyleft/gpl.html
 *****************************************************************************/
+#endif /* MATRIX_COMMERCIAL */
 
 /* This file just includes system header __TOFILE__.
    In case your system does not include all functions

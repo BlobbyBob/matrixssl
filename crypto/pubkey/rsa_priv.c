@@ -312,6 +312,7 @@ int32_t psRsaPssSignHash(psPool_t *pool,
     sig = psMalloc(pool, modNBytes);
     if (sig == NULL)
     {
+        psFree(em, pool);
         return PS_MEM_FAIL;
     }
     sigLen = modNBytes;

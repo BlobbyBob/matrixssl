@@ -19,12 +19,15 @@ SRC:=\
 	matrixssl.c \
 	matrixsslKeys.c \
 	matrixsslApi.c \
+	matrixsslInitVer.c \
+	matrixsslSecConfig.c \
 	prf.c \
 	psk.c \
 	sslDecode.c \
 	sslEncode.c \
 	tlsDefaults.c \
 	tlsSelectKeys.c \
+	tlsSigVer.c \
 	tlsTrace.c \
 	tls13Authenticate.c \
 	tls13CipherSuite.c \

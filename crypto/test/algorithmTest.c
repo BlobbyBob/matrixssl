@@ -4152,12 +4152,50 @@ static int32 psRsaKeyFormatTests(void)
     unsigned char hashTbs[MAX_HASH_SIZE] = {0};
     psSize_t hashTbsLen = sizeof(hashTbs);
     /*
-      echo -n "mytbs" \
-      |openssl dgst -binary -sha256 \
-      |openssl rsautl -inkey testkeys/RSA/2048_RSA_KEY.pem -sign \
+      echo -n "mytbs"
+      |openssl dgst -binary -sha256
+      |openssl pkeyutl -inkey testkeys/RSA/2048_RSA_KEY.pem -sign \
+      -pkeyopt rsa_padding_mode:pkcs1 -pkeyopt digest:sha256
       |xxd -i
+
+      Note: this is a PKCS #1.5 signature (used in TLS 1.2). The hash
+      of "mytbs" is first wrapped into a DigestInfo.
     */
-    unsigned char expectedSig[] =
+    unsigned char expectedSig1[] =
+    {
+        0x7f, 0x91, 0xb1, 0x24, 0xc4, 0x85, 0x12, 0x2b, 0x06, 0xef, 0xf1, 0x20,
+        0xbb, 0xde, 0x2b, 0x48, 0x39, 0x9b, 0x66, 0xfb, 0x1e, 0x6c, 0x8a, 0x77,
+        0x60, 0xec, 0x96, 0x21, 0xe3, 0x8a, 0xa0, 0xcc, 0x2f, 0x0a, 0x97, 0x6d,
+        0xa7, 0xd3, 0x6a, 0xb0, 0x89, 0xc2, 0x7a, 0xa4, 0x09, 0xbc, 0x87, 0xfa,
+        0xe3, 0x54, 0xc2, 0xde, 0xb3, 0x7d, 0x35, 0x55, 0xda, 0xb1, 0x58, 0xc2,
+        0x8d, 0xce, 0xfa, 0xd1, 0x5e, 0xd1, 0xd4, 0xef, 0x25, 0x22, 0x92, 0x8c,
+        0xdc, 0x62, 0x3a, 0xdd, 0x87, 0x8b, 0xcf, 0xfc, 0xa1, 0x6c, 0xaf, 0x83,
+        0xff, 0xbf, 0x29, 0x09, 0x05, 0xef, 0x76, 0x3a, 0xab, 0xba, 0xde, 0x3b,
+        0x16, 0xc9, 0x8e, 0x2a, 0x54, 0xe4, 0x60, 0x27, 0x57, 0xa8, 0x8c, 0xf0,
+        0x21, 0x05, 0xa6, 0x8e, 0x52, 0xc7, 0xe8, 0x79, 0x46, 0x46, 0x09, 0x7c,
+        0x75, 0xca, 0x7f, 0xc6, 0x98, 0x19, 0xcf, 0x98, 0xdf, 0x31, 0x11, 0x12,
+        0x66, 0x23, 0x56, 0xa6, 0xe9, 0x29, 0x71, 0xe4, 0x0f, 0x13, 0xb7, 0x1c,
+        0x7e, 0xeb, 0x8b, 0x22, 0xc6, 0x98, 0x64, 0xde, 0x76, 0xfd, 0xa4, 0xbd,
+        0x11, 0xea, 0xf5, 0x2c, 0x90, 0x12, 0xc0, 0x1c, 0xe3, 0x79, 0x19, 0xc1,
+        0x2f, 0x07, 0x0b, 0x25, 0x94, 0xf8, 0xc8, 0xac, 0x85, 0x87, 0xae, 0xbb,
+        0xe5, 0x24, 0xa8, 0x11, 0xeb, 0xc0, 0x46, 0x02, 0xa4, 0x39, 0xd3, 0xe6,
+        0xe1, 0x12, 0xfc, 0x60, 0x44, 0x5f, 0x68, 0x1d, 0x06, 0x6a, 0xcb, 0x26,
+        0x3e, 0xeb, 0xa3, 0xca, 0xba, 0x70, 0xb9, 0xd8, 0x32, 0x72, 0xf4, 0x26,
+        0x2c, 0x5d, 0x5d, 0xee, 0x75, 0x20, 0xf7, 0x52, 0xcc, 0x9c, 0x9f, 0x50,
+        0xf5, 0xb2, 0x2c, 0x67, 0x2e, 0x6b, 0xc1, 0xfd, 0x6c, 0xa0, 0x4b, 0x63,
+        0x52, 0xe7, 0xb0, 0x4a, 0xcb, 0x87, 0x2c, 0x73, 0x1c, 0xfe, 0xfb, 0xc6,
+        0xab, 0xb7, 0x81, 0x6d
+    };
+    /*
+      echo -n "mytbs"                                                   \
+      |openssl dgst -binary -sha256                                     \
+      |openssl rsautl -inkey testkeys/RSA/2048_RSA_KEY.pem -sign        \
+      |xxd -i
+
+      Note: this is a DigestInfoless signature (like the signatures used
+      in TLS 1.1 and below, but with SHA-256 instead of MD5-SHA1.
+     */
+     unsigned char expectedSig2[] =
     {
         0x27, 0x05, 0x37, 0x60, 0x71, 0x8f, 0x96, 0x9c, 0xbc, 0xc7, 0x29, 0x65,
         0xf5, 0xc7, 0x8e, 0xf4, 0x94, 0x8d, 0x2f, 0x23, 0xca, 0x88, 0xd1, 0x68,
@@ -4182,13 +4220,16 @@ static int32 psRsaKeyFormatTests(void)
         0xb2, 0x65, 0xe1, 0x56, 0xdc, 0xfe, 0xe8, 0xfc, 0x59, 0x8e, 0x00, 0x2f,
         0xac, 0x99, 0xac, 0xb4
     };
-    unsigned char *sig = NULL;
-    psSize_t sigLen;
+    unsigned char *sig1 = NULL;
+    psSize_t sigLen1;
+    unsigned char *sig2 = NULL;
+    psSize_t sigLen2;
     psPubKey_t privKey;
     psPubKey_t pubKey;
     int32_t rc;
     psRes_t rc2;
     psBool_t verifyOk;
+    psVerifyOptions_t verifyOpts = {0};
 
     /* Hash some data and sign the hash with 2048_RSA_KEY, then parse
        2048_RSA_PUB from PEM and try to verify the signature. */
@@ -4215,28 +4256,58 @@ static int32 psRsaKeyFormatTests(void)
         goto out_fail;
     }
 
+    /* OID_SHA256_RSA_SIG produces a PKCS #1.5 signature,
+       where hashTbs is first wrapped into a DigestInfo. */
     rc = psSign(NULL,
             &privKey,
             OID_SHA256_RSA_SIG,
             hashTbs,
             hashTbsLen,
-            &sig,
-            &sigLen,
+            &sig1,
+            &sigLen1,
             NULL);
     if (rc != PS_SUCCESS)
     {
-        _psTrace("psSign failed\n");
+        _psTrace("psSign failed for sig1\n");
         goto out_fail;
     }
-
-    if (sigLen != sizeof(expectedSig))
+    if (sigLen1 != sizeof(expectedSig1))
     {
-        _psTrace("psSign output sig has wrong len\n");
+        _psTrace("psSign output sig1 has wrong len\n");
         goto out_fail;
     }
-    if (Memcmp(sig, expectedSig, sigLen))
+    if (Memcmp(sig1, expectedSig1, sigLen1))
     {
-        _psTrace("psSign output sig is wrong\n");
+        psTraceBytes("Got: ", sig1, sigLen1);
+        psTraceBytes("Expected: ", expectedSig1, sigLen1);
+        _psTrace("psSign output sig1 is wrong\n");
+        goto out_fail;
+    }
+    /* OID_RSA_TLS_SIG_ALG produces a TLS 1.1 style signature
+       (without DigestInfo encoding). */
+    rc = psSign(NULL,
+            &privKey,
+            OID_RSA_TLS_SIG_ALG,
+            hashTbs,
+            hashTbsLen,
+            &sig2,
+            &sigLen2,
+            NULL);
+    if (rc != PS_SUCCESS)
+    {
+        _psTrace("psSign failed for sig2\n");
+        goto out_fail;
+    }
+    if (sigLen2 != sizeof(expectedSig2))
+    {
+        _psTrace("psSign output sig2 has wrong len\n");
+        goto out_fail;
+    }
+    if (Memcmp(sig2, expectedSig2, sigLen2))
+    {
+        psTraceBytes("Got: ", sig2, sigLen2);
+        psTraceBytes("Expected: ", expectedSig2, sigLen2);
+        _psTrace("psSign output sig2 is wrong\n");
         goto out_fail;
     }
 
@@ -4254,30 +4325,67 @@ static int32 psRsaKeyFormatTests(void)
 
     pubKey.type = PS_RSA;
 
+    verifyOpts.msgIsDigestInfo = PS_TRUE;
     rc2 = psVerify(NULL,
             tbs,
             tbsLen,
-            sig,
-            sigLen,
+            sig1,
+            sigLen1,
             &pubKey,
             OID_SHA256_RSA_SIG,
             &verifyOk,
-            NULL);
+            &verifyOpts);
     if (rc2 != PS_SUCCESS && !verifyOk)
     {
-        _psTrace("psVerify failed\n");
+        _psTrace("psVerify failed for sig 1\n");
+        goto out_fail;
+    }
+
+    verifyOpts.msgIsDigestInfo = PS_FALSE;
+    rc2 = psVerify(NULL,
+            tbs,
+            tbsLen,
+            sig2,
+            sigLen2,
+            &pubKey,
+            OID_SHA256_RSA_SIG,
+            &verifyOk,
+            &verifyOpts);
+    if (rc2 != PS_SUCCESS && !verifyOk)
+    {
+        _psTrace("psVerify failed for sig 2\n");
+        goto out_fail;
+    }
+
+    /* Now corrupt the sig a bit and ensure verification fails. */
+    sig2[4] = 0x0a;
+    verifyOpts.msgIsDigestInfo = PS_FALSE;
+    rc2 = psVerify(NULL,
+            tbs,
+            tbsLen,
+            sig2,
+            sigLen2,
+            &pubKey,
+            OID_SHA256_RSA_SIG,
+            &verifyOk,
+            &verifyOpts);
+    if (verifyOk || rc2 == PS_SUCCESS)
+    {
+        _psTrace("psVerify wrong result for corrupted sig 2\n");
         goto out_fail;
     }
 
     psClearPubKey(&privKey);
     psRsaClearKey(&pubKey.key.rsa);
-    psFree(sig, NULL);
+    psFree(sig1, NULL);
+    psFree(sig2, NULL);
     _psTrace(" PASSED\n");
 
     return PS_SUCCESS;
 
 out_fail:
-    psFree(sig, NULL);
+    psFree(sig1, NULL);
+    psFree(sig2, NULL);
     return PS_FAILURE;
 }
 # endif /* USE_PRIVATE_KEY_PARSING */
@@ -6391,6 +6499,7 @@ static int32_t psEccTestParsePriv(void)
             NULL);
     if (rc != PS_SUCCESS)
     {
+        psEccDeleteKey(&key1);
         goto fail;
     }
 
@@ -6446,6 +6555,138 @@ fail:
     return rc;
 }
 
+static int32_t psEccTestSigVer()
+{
+    int32_t rc = PS_FAILURE;
+    psPubKey_t key_noparam, key_noparam_nopub;
+    /* This is testkeys/EC/256_EC_KEY.noparam.pem in DER form. */
+    unsigned char p256_key_noparam[] =
+    {
+        0x30, 0x77, 0x02, 0x01, 0x01, 0x04, 0x20, 0x5c, 0xe9, 0x89, 0xc5, 0xb1,
+        0x53, 0xa0, 0x02, 0x3c, 0x90, 0xbe, 0x3a, 0x2a, 0x73, 0xb2, 0x08, 0x16,
+        0xc3, 0xed, 0xbc, 0xd5, 0xd6, 0x67, 0x26, 0x10, 0x4e, 0xec, 0x79, 0x28,
+        0x0f, 0xbf, 0xcb, 0xa0, 0x0a, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d,
+        0x03, 0x01, 0x07, 0xa1, 0x44, 0x03, 0x42, 0x00, 0x04, 0x5f, 0xad, 0x62,
+        0x02, 0x42, 0x48, 0xba, 0xfb, 0xe2, 0x88, 0xd8, 0x7f, 0xb9, 0x72, 0xcb,
+        0x28, 0xae, 0xc3, 0x8a, 0x1e, 0xc3, 0x0e, 0x9c, 0x7d, 0x7a, 0xa4, 0xb5,
+        0x7f, 0xda, 0xbd, 0x46, 0x5a, 0xb9, 0x95, 0x39, 0xe0, 0x44, 0x51, 0x71,
+        0xba, 0xe3, 0xb3, 0x40, 0xf2, 0x54, 0xfd, 0x23, 0x84, 0xb2, 0xea, 0x2a,
+        0x84, 0xa3, 0x4f, 0xd7, 0xb0, 0x08, 0xba, 0x6e, 0x80, 0xc3, 0xeb, 0xdf,
+        0x2f
+    };
+    /* This is testkeys/EC/256_EC_KEY.noparam.nopub.pem in DER form. */
+    unsigned char p256_key_noparam_nopub[] =
+    {
+        0x30, 0x31, 0x02, 0x01, 0x01, 0x04, 0x20, 0x5c, 0xe9, 0x89, 0xc5, 0xb1,
+        0x53, 0xa0, 0x02, 0x3c, 0x90, 0xbe, 0x3a, 0x2a, 0x73, 0xb2, 0x08, 0x16,
+        0xc3, 0xed, 0xbc, 0xd5, 0xd6, 0x67, 0x26, 0x10, 0x4e, 0xec, 0x79, 0x28,
+        0x0f, 0xbf, 0xcb, 0xa0, 0x0a, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d,
+        0x03, 0x01, 0x07
+    };
+    unsigned char tbs[] = {'i', 'n', 's', 'i', 'd', 'e'};
+    unsigned char tbs_hash[64] = {0};
+    psSize_t tbs_hash_len = sizeof(tbs_hash);
+    unsigned char sig[150] = {0};
+    psSize_t sig_len = sizeof(sig);
+    int32 verifyResult = 0;
+
+    /*
+      This is a simple pairwise sign + verify test. But in addition, it
+      tests that signing is possible without a public key:
+      key_noparam and key_noparam_nopub contain the same private key,
+      but key_noparam_nopub omits the optional public key.
+    */
+
+    _psTrace("  P-256 sig ver test...");
+
+    rc = psParseUnknownPrivKeyMem(NULL,
+            p256_key_noparam,
+            sizeof(p256_key_noparam),
+            NULL,
+            &key_noparam);
+    if (rc < 0) {
+        _psTrace("psParseUnknownPrivKeyMem failed\n");
+        rc = PS_FAILURE;
+        goto out_no_key_1;
+    }
+
+    rc = psParseUnknownPrivKeyMem(NULL,
+            p256_key_noparam_nopub,
+            sizeof(p256_key_noparam_nopub),
+            NULL,
+            &key_noparam_nopub);
+    if (rc < 0) {
+        _psTrace("psParseUnknownPrivKeyMem failed\n");
+        rc = PS_FAILURE;
+        goto out_no_key_2;
+    }
+
+    rc = psComputeHashForSig(tbs,
+            sizeof(tbs),
+            OID_SHA256_ECDSA_SIG,
+            tbs_hash,
+            &tbs_hash_len);
+    if (rc != PS_SUCCESS)
+    {
+        _psTraceInt("psComputeHashForSig failed: %d\n", rc);
+        rc = PS_FAILURE;
+        goto out;
+    }
+
+    rc = psEccDsaSign(NULL,
+            &key_noparam_nopub.key.ecc,
+            tbs_hash,
+            tbs_hash_len,
+            sig,
+            &sig_len,
+            0,
+            NULL);
+    if (rc != PS_SUCCESS)
+    {
+        _psTraceInt("psEccDsaSign failed : %d\n", rc);
+        rc = PS_FAILURE;
+        goto out;
+    }
+
+    rc = psEccDsaVerify(NULL,
+            &key_noparam.key.ecc,
+            tbs_hash,
+            tbs_hash_len,
+            sig,
+            sig_len,
+            &verifyResult,
+            NULL);
+    if (rc != PS_SUCCESS)
+    {
+        _psTraceInt("psEccDsaVerify failed : %d\n", rc);
+        rc = PS_FAILURE;
+        goto out;
+    }
+    if (verifyResult != 1)
+    {
+        _psTrace("verification failed failed\n");
+        rc = PS_FAILURE;
+        goto out;
+    }
+
+out:
+    psEccClearKey(&key_noparam_nopub.key.ecc);
+out_no_key_2:
+    psEccClearKey(&key_noparam.key.ecc);
+out_no_key_1:
+
+    if (rc == PS_SUCCESS)
+    {
+        _psTrace(" PASSED\n");
+    }
+    else
+    {
+        _psTrace(" FAILED\n");
+    }
+
+    return rc;
+}
+
 static int32_t psEccTest(void)
 {
     int32_t rc;
@@ -6477,6 +6718,12 @@ static int32_t psEccTest(void)
     }
 
     rc = psEccTestParsePriv();
+    if (rc != PS_SUCCESS)
+    {
+        return rc;
+    }
+
+    rc = psEccTestSigVer();
     if (rc != PS_SUCCESS)
     {
         return rc;

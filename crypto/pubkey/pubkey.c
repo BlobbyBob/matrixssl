@@ -34,7 +34,7 @@
 
 #include "../cryptoImpl.h"
 
-#if defined(USE_RSA) || defined(USE_ECC)
+# if defined(USE_RSA) || defined(USE_ECC) || defined(USE_DH) || defined(USE_X25519) || defined(USE_ED25519)
 
 /******************************************************************************/
 
@@ -124,4 +124,3 @@ void psDeletePubKey(psPubKey_t **key)
 /******************************************************************************/
 
 #endif /* USE_RSA || USE_ECC */
-

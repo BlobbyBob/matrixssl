@@ -448,7 +448,7 @@ sfzcl_make_time(SfzclCalendarTime calendar_time, SfzclTime *time_return,
     {
         int days_per_month;
 
-        while (calendar_time->month > 12)
+        while (calendar_time->month > 11)
         {
 #ifdef DEBUG
             L_DEBUG(LF_CERTLIB, "Month too large, adjusting %d",
@@ -477,7 +477,7 @@ sfzcl_make_time(SfzclCalendarTime calendar_time, SfzclTime *time_return,
 #endif
             if (calendar_time->month == 0)
             {
-                calendar_time->month = 12;
+                calendar_time->month = 11;
                 calendar_time->year--;
             }
             else

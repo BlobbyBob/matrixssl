@@ -246,7 +246,6 @@ int32_t tls13FindSessionPsk(ssl_t *ssl,
         psTls13Psk_t **pskOut)
 {
     psTls13Psk_t *psk;
-    psSessionTicketKeys_t *key;
 
     if (idLen <= 0)
     {
@@ -266,6 +265,9 @@ int32_t tls13FindSessionPsk(ssl_t *ssl,
     */
     if (IS_SERVER(ssl))
     {
+#  ifdef USE_SERVER_SIDE_SSL
+        psSessionTicketKeys_t *key;
+
         if (idLen >= 16 + 12 + 16)
         {
             key = ssl->keys->sessTickets;
@@ -278,6 +280,7 @@ int32_t tls13FindSessionPsk(ssl_t *ssl,
                 key = key->next;
             }
         }
+#  endif
     }
 
     psk = ssl->sec.tls13SessionPskList;

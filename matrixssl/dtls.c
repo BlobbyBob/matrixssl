@@ -244,7 +244,7 @@ int32 dtlsWriteCertificateRequest(psPool_t *pool, ssl_t *ssl, int32 certLen,
 #   endif
     *tmp++ = RSA_SIGN;
 #   ifdef USE_TLS_1_2
-    if (ssl->flags & SSL_FLAGS_TLS_1_2)
+    if (NGTD_VER(ssl, v_tls_with_signature_algorithms))
     {
         /* RFC: "The interaction of the certificate_types and
            supported_signature_algorithms fields is somewhat complicated.

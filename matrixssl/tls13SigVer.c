@@ -49,6 +49,7 @@
     priority.
     @param peerSigAlgsLen Number of entries in peerSigAlgs.
  */
+# ifdef USE_IDENTITY_CERTIFICATES
 uint16_t tls13ChooseSigAlg(ssl_t *ssl,
         const uint16_t *peerSigAlgs,
         psSize_t peerSigAlgsLen)
@@ -57,14 +58,15 @@ uint16_t tls13ChooseSigAlg(ssl_t *ssl,
     psBool_t foundMatch = PS_FALSE;
     uint16_t ourSigAlgs[8] = {0};
     psSize_t ourSigAlgsLen;
-    uint16_t chosenSigAlg;
+    uint16_t chosenSigAlg = 0;
     sslIdentity_t *p;
 
     /* Should only be generating signatures when NOT using a PSK. */
     psAssert(ssl->sec.tls13UsingPsk == PS_FALSE);
     /* Consider all the configured/present keys. */
-    for (p = ssl->keys->identity; p; p = p->next)
+    for (p = ssl->keys->identity; p && !foundMatch; p = p->next)
     {
+# ifdef USE_CERT_PARSE
         pubKeyAlg = p->cert->pubKeyAlgorithm;
         if (pubKeyAlg != OID_ECDSA_KEY_ALG &&
             pubKeyAlg != OID_RSA_KEY_ALG &&
@@ -75,6 +77,11 @@ uint16_t tls13ChooseSigAlg(ssl_t *ssl,
                            pubKeyAlg);
             return PS_UNSUPPORTED_FAIL;
         }
+# else
+        /* If not having USE_CERT_PARSE, we'll need to have just one
+           IdKey, and that's what we're going to use. */
+        foundMatch = PS_TRUE;
+# endif
         /*
           MatrixSSL only allows the server to load a single cert chain.
           This means that the public key in our cert fully determines:
@@ -89,6 +96,7 @@ uint16_t tls13ChooseSigAlg(ssl_t *ssl,
 */
 
         /* Build our list. */
+# ifdef USE_ECC
         if (p->privKey.type == PS_ECC)
         {
             if (p->privKey.key.ecc.curve->curveId == IANA_SECP256R1)
@@ -112,12 +120,15 @@ uint16_t tls13ChooseSigAlg(ssl_t *ssl,
                 continue;
             }
         }
+# endif
+#  ifdef USE_RSA
         else if (p->privKey.type == PS_RSA)
         {
             /* The OID restrictions are from section 4.2.3 of the TLS 1.3 draft.
                The restrictions apply when the public key is carried in a
                certificate. We would not be here unless we are using
                a certificate to authenticate ourselves. */
+#   ifdef USE_CERT_PARSE
             if (p->cert->pubKeyAlgorithm == OID_RSASSA_PSS)
             {
                 /*
@@ -144,19 +155,30 @@ uint16_t tls13ChooseSigAlg(ssl_t *ssl,
                             "the type of public key in cert\n");
                 return PS_UNSUPPORTED_FAIL;
             }
+#   else
+            /* We can do PSS with RSAE, but not the otherway around, so
+               default to PSS when we don't know. */
+            ourSigAlgs[0] = sigalg_rsa_pss_pss_sha256;
+            ourSigAlgs[1] = sigalg_rsa_pss_pss_sha384;
+            ourSigAlgs[2] = sigalg_rsa_pss_pss_sha512;
+            ourSigAlgsLen = 3;
+#   endif
         }
+# endif
+# ifdef USE_ED25519
         else if (p->privKey.type == PS_ED25519)
         {
             ourSigAlgs[0] = sigalg_ed25519;
             ourSigAlgsLen = 1;
         }
+# endif
         else
         {
             psTraceInfo("Key type not supported in TLS 1.3\n");
             continue;
         }
 
-        rc = tls13IntersectionPrioritySelect(ourSigAlgs,
+        rc = tls13IntersectionPrioritySelectU16(ourSigAlgs,
                 ourSigAlgsLen,
                 peerSigAlgs,
                 peerSigAlgsLen,
@@ -241,7 +263,7 @@ int32_t tls13Sign(psPool_t *pool,
     psSize_t hashTbsLen = sizeof(hashTbs);
     int32_t rc;
     int32_t hashSigAlg, sigAlgOid;
-    psSignOpts_t opts;
+    psSignOpts_t opts = {0};
     psBool_t needPreHash = PS_FALSE;
 
     rc = tls13MakeTbs(pool,
@@ -267,6 +289,7 @@ int32_t tls13Sign(psPool_t *pool,
 
     switch (sigAlg)
     {
+# ifdef USE_ECC
     case sigalg_ecdsa_secp256r1_sha256:
         hashSigAlg = OID_SHA256_ECDSA_SIG;
         sigAlgOid = hashSigAlg;
@@ -279,10 +302,14 @@ int32_t tls13Sign(psPool_t *pool,
         hashSigAlg = OID_SHA512_ECDSA_SIG;
         sigAlgOid = hashSigAlg;
         break;
+# endif
+# ifdef USE_ED25519
     case sigalg_ed25519:
         /* No pre-hashing used with Ed25519. */
         sigAlgOid = OID_ED25519_KEY_ALG;
         break;
+# endif
+# ifdef USE_RSA
     case sigalg_rsa_pss_pss_sha256:
     case sigalg_rsa_pss_rsae_sha256:
         hashSigAlg = OID_SHA256_RSA_SIG;
@@ -307,6 +334,7 @@ int32_t tls13Sign(psPool_t *pool,
         opts.rsaPssSalt = NULL; /* Random salt. */
         opts.rsaPssSaltLen = SHA512_HASH_SIZE;
         break;
+# endif /* USE_RSA */
     default:
         psTraceErrr("Unsupported sig alg\n");
         rc = PS_UNSUPPORTED_FAIL;
@@ -354,7 +382,6 @@ out_fail:
     }
     return rc;
 }
-
 /**
 
    @return PS_SUCCESS when signature was successfully verified;
@@ -399,6 +426,7 @@ int32_t tls13Verify(psPool_t *pool,
 
     /* Translate TLS 1.3 signature algorithm encoding to what
        our crypto layer uses. */
+#  ifdef USE_ECC
     if (sigAlg == sigalg_ecdsa_secp256r1_sha256)
     {
         cryptoLayerSigAlg = OID_SHA256_ECDSA_SIG;
@@ -414,6 +442,8 @@ int32_t tls13Verify(psPool_t *pool,
         cryptoLayerSigAlg = OID_SHA512_ECDSA_SIG;
         psAssert(pubKey->key.ecc.curve->curveId == IANA_SECP521R1);
     }
+#  endif
+#  ifdef USE_RSA
     else if (sigAlg == sigalg_rsa_pss_pss_sha256 ||
             sigAlg == sigalg_rsa_pss_rsae_sha256)
     {
@@ -438,11 +468,14 @@ int32_t tls13Verify(psPool_t *pool,
         opts.rsaPssSaltLen = SHA512_HASH_SIZE;
         opts.useRsaPss = PS_TRUE;
     }
+#  endif
+#ifdef USE_ED25519
     else if (sigAlg == sigalg_ed25519)
     {
         cryptoLayerSigAlg = OID_ED25519_KEY_ALG;
         psAssert(pubKey->type == PS_ED25519);
     }
+#endif
     else
     {
         psTraceIntInfo("Unsupported sig alg in tls13Verify: %u\n",
@@ -462,6 +495,7 @@ int32_t tls13Verify(psPool_t *pool,
             &opts);
     if (rc < 0)
     {
+        psFree(tbs, pool);
         return rc;
     }
     psFree(tbs, pool);
@@ -476,6 +510,9 @@ int32_t tls13Verify(psPool_t *pool,
     }
 }
 
+# endif /* USE_IDENTITY_CERTIFICATES */
+
+# ifdef USE_RSA
 psBool_t tls13IsRsaPssSigAlg(uint16_t alg)
 {
     switch (alg)
@@ -505,7 +542,7 @@ psBool_t tls13IsRsaSigAlg(uint16_t alg)
 
     return tls13IsRsaPssSigAlg(alg);
 }
-
+# endif
 psBool_t tls13IsEcdsaSigAlg(uint16_t alg)
 {
     switch (alg)
@@ -539,16 +576,19 @@ psBool_t tls13RequiresPreHash(uint16_t alg)
     {
         return PS_FALSE;
     }
+
+# ifdef USE_RSA
     else if (tls13IsRsaPssSigAlg(alg))
     {
-# ifdef USE_CL_RSA
+#  ifdef USE_CL_RSA
         /* Crypto-cl cannot sign pre-hashed data with PSS.
            So we shall sign the original message instead. */
         return PS_FALSE;
-# else
+#  else
         return PS_TRUE;
-# endif /* USE_CL_RSA */
+#  endif /* USE_CL_RSA */
     }
+# endif /* USE_RSA */
     else
     {
         return PS_TRUE;

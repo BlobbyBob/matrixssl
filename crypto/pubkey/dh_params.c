@@ -95,7 +95,10 @@ int32_t psPkcs3ParseDhParamBin(psPool_t *pool, const unsigned char *dhBin,
         /* Read desired length of private key.
            (Note: currently ignored by MatrixSSL). */
         pstm_int bitlen;
-        pstm_init_size(pool, &bitlen, 1);
+        if (pstm_init_size(pool, &bitlen, 1) < 0)
+        {
+            goto L_ERR;
+        }
         if (pstm_read_asn(pool, &c, (uint16_t) (end - c), &bitlen) < 0)
         {
             pstm_clear(&bitlen);

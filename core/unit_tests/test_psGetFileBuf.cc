@@ -77,7 +77,7 @@ AUTO_TEST(TEST_psGetFileBuf_empty_file)
     {
         return SKIPPED;
     }
-    
+
     res = psGetFileBuf(pool, file, &buf, &len);
     FAIL_IF(res != PS_SUCCESS);
     FAIL_IF(buf == NULL);
@@ -100,7 +100,7 @@ AUTO_TEST(TEST_psGetFileBuf_endless_file)
     {
         return SKIPPED;
     }
-    
+
     res = psGetFileBuf(pool, file, &buf, &len);
     FAIL_IF(res != PS_SUCCESS);
     FAIL_IF(buf == NULL);
@@ -125,7 +125,7 @@ AUTO_TEST(TEST_psGetFileBuf_4294967295_bytes_file)
            take a long time. */
         return SKIPPED;
     }
-    
+
     FAIL_IF(system("rm " FILENAME) < -1);
     FAIL_IF(system("fallocate -l 4294967295 " FILENAME) < -1);
     if (!can_read(FILENAME))
@@ -166,7 +166,7 @@ AUTO_TEST(TEST_psGetFileBuf_4294967297_bytes_file)
            take a long time. */
         return SKIPPED;
     }
-    
+
     FAIL_IF(system("rm " FILENAME) < -1);
     FAIL_IF(system("fallocate -l 4294967297 " FILENAME) < -1);
     if (!can_read(FILENAME))

@@ -47,13 +47,14 @@ int32_t tls13DeriveResumptionPsk(ssl_t *ssl,
         unsigned char *pskOut,
         psSize_t pskOutLen)
 {
-    psSize_t secretLen = psGetOutputBlockLength(hmacAlg);
-    int32_t rc;
+    psSize_t secretLen;
+    int32_t rc = psGetOutputBlockLength(hmacAlg);
 
-    if (secretLen < 0)
+    if (rc < 0)
     { /* this is an error code */
-        return secretLen;
+        return rc;
     }
+    secretLen = rc;
 
     if (pskOutLen < secretLen)
     {
@@ -90,8 +91,8 @@ void tls13GetCurrSessParams(ssl_t *ssl,
     params->sniLen = 0;
     params->alpn = NULL;
     params->alpnLen = 0;
-    params->majVer = TLS_1_3_DRAFT_MAJ_VER;
-    params->minVer = ssl->tls13NegotiatedMinorVer;
+    params->majVer = psEncodeVersionMaj(GET_ACTV_VER(ssl));
+    params->minVer = psEncodeVersionMin(GET_ACTV_VER(ssl));
     params->cipherId = ssl->cipher->ident;
     psGetTime(&params->timestamp, ssl->userPtr);
     params->maxEarlyData = ssl->tls13SessionMaxEarlyData;
@@ -476,8 +477,10 @@ int32_t tls13ExportState(ssl_t *ssl,
         0, (1 << 16) - 1,
         psk->params->alpn,
         psk->params->alpnLen);
-    psDynBufAppendByte(&paramsBuf, TLS_1_3_DRAFT_MAJ_VER);
-    psDynBufAppendByte(&paramsBuf, ssl->tls13NegotiatedMinorVer);
+    psDynBufAppendByte(&paramsBuf,
+            psEncodeVersionMaj(ssl->activeVersion));
+    psDynBufAppendByte(&paramsBuf,
+            psEncodeVersionMin(ssl->activeVersion));
     psDynBufAppendAsBigEndianUint16(&paramsBuf, psk->params->cipherId);
 
     psDynBufAppendAsBigEndianUint32(&paramsBuf, psk->params->ticketLifetime);
@@ -643,20 +646,20 @@ int32_t tls13ParseMatrixSessionParams(ssl_t *ssl,
 int32_t tls13ValidateSessionParams(ssl_t *ssl,
         psTls13SessionParams_t *params)
 {
-    if (params->majVer != TLS_1_3_DRAFT_MAJ_VER)
-    {
-        psTraceErrr("Decrypted session: major version mismatch\n");
-        psTraceIntInfo("Got %u ", params->majVer);
-        psTraceIntInfo("Expected: %u\n", TLS_1_3_DRAFT_MAJ_VER);
-        goto out_handshake_failure;
-    }
+    psProtocolVersion_t ver;
 
-    if (params->minVer != ssl->tls13NegotiatedMinorVer)
+    ver = psVerFromEncodingMajMin(params->majVer, params->minVer);
+    if (ver != VER_GET_RAW(ssl->activeVersion))
     {
-        psTraceErrr("Decrypted session: major version mismatch\n");
-        psTraceIntInfo("Got %u ", params->minVer);
-        psTraceIntInfo("Expected: %u\n",
-                ssl->tls13NegotiatedMinorVer);
+        psTraceErrr("Decrypted session: version mismatch\n");
+        psTracePrintProtocolVersionNew(INDENT_ERROR,
+                "Got",
+                ver,
+                PS_TRUE);
+        psTracePrintProtocolVersionNew(INDENT_ERROR,
+                "Expected",
+                ssl->activeVersion,
+                PS_TRUE);
         goto out_handshake_failure;
     }
 
