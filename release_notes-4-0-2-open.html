@@ -9,6 +9,8 @@
 </head>
 <body>
 <h1 id="matrixssl-4.x-changelog">MatrixSSL 4.x changelog</h1>
+<h2 id="changes-between-4.0.1-and-4.0.2-february-2019">Changes between 4.0.1 and 4.0.2 [February 2019]</h2>
+<p>This version fixes a critical vulnerability in RSA signature verification. A maliciously crafted certificate can be used to trigger a stack buffer overflow, allowing potential remote code execution attacks. The vulnerability only affects version 4.0.1 and the standard Matrix Crypto provider. Other providers, such as the FIPS crypto provider, are not affected by the bug. Thanks to Tavis Ormandy for reporting this.</p>
 <h2 id="changes-between-4.0.0-and-4.0.1-november-2018">Changes between 4.0.0 and 4.0.1 [November 2018]</h2>
 <p>This version improves the security of RSA PKCS #1.5 signature verification and adds better support for run-time security configuration.</p>
 <ul>
