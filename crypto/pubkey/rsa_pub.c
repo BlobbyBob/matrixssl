@@ -93,7 +93,7 @@ int32_t psRsaDecryptPubExt(psPool_t *pool,
     err = pkcs1UnpadExt(in,
             inlen,
             out,
-            ptLen,
+            *outlen,
             PS_PUBKEY,
             PS_FALSE,
             &unpaddedLen);
@@ -310,25 +310,25 @@ int32_t psRsaDecryptPub(psPool_t *pool, psRsaKey_t *key,
     void *data)
 {
     int32_t rc;
-    psSize_t ptLen;
+    psSize_t expectedOutLen = outlen;
 
     rc = psRsaDecryptPubExt(pool,
             key,
             in,
             inlen,
             out,
-            &ptLen,
-            outlen,
+            &outlen,
+            expectedOutLen,
             data);
     if (rc != PS_SUCCESS)
     {
         return rc;
     }
 
-    if (ptLen != outlen)
+    if (outlen != expectedOutLen)
     {
-        psTraceIntCrypto("Decrypted size error in psRsaDecryptPub %d\n",
-                ptLen);
+        psTraceIntCrypto("Decrypted size error in psRsaDecryptPub %hu\n",
+                outlen);
         return PS_FAILURE;
     }
 
