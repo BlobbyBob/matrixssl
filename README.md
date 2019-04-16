@@ -10,18 +10,18 @@ Lightweight Embedded SSL/TLS Implementation
 [![tls-attacker-status](http://www.matrixssl.org/assets/svg/status-tls-attacker.svg)](https://github.com/RUB-NDS/TLS-Attacker)
 [![coverity-status](https://scan.coverity.com/projects/8611/badge.svg)](https://scan.coverity.com/projects/matrixssl-matrixssl)
 
-##Overview
+## Overview
 
 MatrixSSL has been continuously maintained since 2002. It is the first open source small footprint SSL stack. Until recently, releases were tracked on http://freecode.com/projects/matrixssl
 
 MatrixSSL is an embedded SSL and TLS implementation designed for small footprint IoT devices requiring low overhead per connection. It includes client and server support through TLS 1.3, mutual authentication, session resumption, and implementations of RSA, ECC, AES, SHA1, SHA-256, ChaCha20-Poly1305 and more. The source is well documented and contains portability layers for additional operating systems, cipher suites, and cryptography providers.
 
-##Reporting Issues
+## Reporting Issues
 
 Please email support@matrixssl.org.
 Sensitive emails can be encrypted using the public key in this directory [pgp.asc](https://raw.githubusercontent.com/matrixssl/matrixssl/master/pgp.asc), Key fingerprint = `D6AD F1C5 E34E 696B 0953  556C 8BB2 B39A 2795 C6B3`.
 
-##Features
+## Features
 
 + Small total footprint with crypto provider
 + SSL 3.0 and TLS 1.0, 1.1, 1.2 and 1.3 server and client support
