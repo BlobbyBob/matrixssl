@@ -91,6 +91,35 @@ typedef struct
 } psAesGcm_t;
 # endif
 
+# ifdef USE_ROT_AES_GCM
+#  include "../../crypto-rot/rot/include/api_val.h"
+typedef struct
+{
+    ValSymContextPtr_t ctx;
+    unsigned char aad[32];
+    psSizeL_t aadLen;
+    unsigned char tag[16];
+    psSizeL_t tagLen;
+    unsigned char key[32];
+    psSizeL_t keyLen;
+} psAesGcm_t;
+
+#  ifdef USE_ROT_AES_BLOCK
+typedef struct
+{
+    ValSymContextPtr_t ctx;
+} psAesKey_t;
+#  endif
+
+#  ifdef USE_ROT_AES_CBC
+typedef struct
+{
+    ValSymContextPtr_t ctx;
+} psAesCbc_t;
+#  endif
+
+# endif /* USE_ROT_AES_GCM */
+
 /******************************************************************************/
 
 # ifdef USE_MATRIX_3DES

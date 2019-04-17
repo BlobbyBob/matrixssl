@@ -1,7 +1,7 @@
 #define _POSIX_C_SOURCE 200112L
 #include "psLog.h"
 
-#ifndef PS_NO_LOGF
+#ifdef PS_LOGF
 
 #include "osdep_stdarg.h"
 #include "osdep_stdio.h"
@@ -704,4 +704,4 @@ void psLogfDisable(const char *module_or_level)
     psLogfFlush();
 }
 
-#endif /* PS_NO_LOGF */
+#endif /* PS_LOGF */

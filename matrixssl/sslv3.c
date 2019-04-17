@@ -138,7 +138,7 @@ skipPremaster:
     if (createKeyBlock(ssl, ssl->sec.clientRandom, ssl->sec.serverRandom,
             ssl->sec.masterSecret) < 0)
     {
-        psTraceInfo("Unable to create key block\n");
+        psTraceErrr("Unable to create key block\n");
         return PS_FAILURE;
     }
 

@@ -41,6 +41,7 @@ include $(MATRIXSSL_ROOT)/common.mk
 
 # Linked files
 STATICS:=../libcrypt_s.a $(MATRIXSSL_ROOT)/core/libcore_s.a
+STATICS+=$(LIBDRIVER_VAL_UP_PATH)
 
 all: compile
 

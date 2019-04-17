@@ -19,6 +19,7 @@ SRC:=\
 	symmetric/idea.c \
 	symmetric/rc2.c \
 	symmetric/seed.c \
+	digest/hash.c \
 	digest/sha256_standalone.c \
 	digest/sha1.c \
 	digest/sha256.c \

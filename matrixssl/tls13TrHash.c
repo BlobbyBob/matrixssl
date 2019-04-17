@@ -33,6 +33,8 @@
 
 #include "matrixsslImpl.h"
 
+# ifndef USE_BUFFERED_HS_HASH
+
 # ifdef USE_TLS_1_3
 
 # ifndef DEBUG_TLS_1_3_TRANSCRIPT_HASH
@@ -174,7 +176,7 @@ int32_t tls13TranscriptHashUpdate(ssl_t *ssl,
        In case of server we originally parse ClientHello in the 1.2 side
        and later move to 1.3. That's why the hash functions call each other
        both ways */
-    if (!NGTD_VER(ssl, v_tls_1_3_any) && !IS_SERVER(ssl))
+    if (!NGTD_VER(ssl, v_tls_1_3_any) && !MATRIX_IS_SERVER(ssl))
     {
         sslUpdateHSHash(ssl, in, len);
     }
@@ -294,3 +296,5 @@ int32_t tls13TranscriptHashSnapshot(ssl_t *ssl,
 }
 
 # endif /* USE_TLS_1_3 */
+
+# endif /* USE_BUFFERED_HS_HASH */

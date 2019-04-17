@@ -36,6 +36,10 @@
 
 #if defined(USE_TLS_PRF) || defined(USE_TLS_PRF2)
 
+# ifndef DEBUG_PRF
+/* #  define DEBUG_PRF */ /* Enable PRF input/output hex dumping. */
+# endif
+
 # ifdef USE_TLS_PRF
 int32_t prf(const unsigned char *sec, psSize_t secLen,
     const unsigned char *seed, psSize_t seedLen,
@@ -368,6 +372,7 @@ L_RETURN:
     return rc;
 }
 
+# ifndef USE_ROT_TLS12_PRF
 /******************************************************************************/
 /*
     Psuedo-random function.  TLS uses this for key generation and hashing
@@ -379,6 +384,11 @@ int32_t prf2(const unsigned char *sec, psSize_t secLen,
     unsigned char sha2out[SSL_MAX_KEY_BLOCK_SIZE];
     int32_t rc;
     uint16_t i;
+
+# ifdef DEBUG_PRF
+    psTraceBytes("prf2 sec", sec, secLen);
+    psTraceBytes("prf2 seed", seed, seedLen);
+# endif
 
     psAssert(outLen <= SSL_MAX_KEY_BLOCK_SIZE);
 
@@ -393,8 +403,15 @@ int32_t prf2(const unsigned char *sec, psSize_t secLen,
         out[i] = sha2out[i];
     }
     memzero_s(sha2out, SSL_MAX_KEY_BLOCK_SIZE);
+
+# ifdef DEBUG_PRF
+    psTraceBytes("prf2 out", out, outLen);
+# endif
+
     return outLen;
 }
+# endif /* !USE_ROT_TLS12_PRF */
+
 #   endif /* USE_TLS_1_2 */
 
 #   ifdef USE_EAP_FAST

@@ -12,6 +12,9 @@
 CORE_PATH:=$(patsubst %/,%/..,$(dir $(lastword $(MAKEFILE_LIST))))
 include $(CORE_PATH)/Makefile.inc
 
+#ifdef USE_ROT_CRYPTO
+#endif
+
 # Allow extra CFLAGS, CPPFLAGS and LDFLAGS to be used.
 CFLAGS_DEBUGGABLE=$(DEBUGGABLE)
 CPPFLAGS_DEBUGGABLE=$(DEBUGGABLE)
@@ -24,6 +27,13 @@ CPPFLAGS += $(CPPFLAGS_STANDARD) $(CPPFLAGS_PLATFORM) $(CPPFLAGS_ADDITIONAL) $(C
 # @param[out] $(BUILD) Set here for release or debug
 BUILD:=release  ##< Release build strips binary and optimizes
 #BUILD:=debug 	##< Debug build keeps debug symbols and disables compiler optimizations. Assembly language optimizations remain enabled
+
+ifneq '$(MATRIX_OPTIMIZE)' ''
+BUILD:=release
+endif
+ifneq '$(MATRIX_OPTIMIZE_FOOTPRINT)' ''
+BUILD:=release
+endif
 
 #-------------------------------------------------------------------------------
 ## Makefile variables that are read by this file.
@@ -47,7 +57,7 @@ BUILD:=release  ##< Release build strips binary and optimizes
 # @param[out] $(STRIP) Set to the executable to use to strip debug symbols from executables
 # @param[out] $(STROPS) Human readable description of relevant MatrixSSL compile options.
 # @param[out] $(O) Set to the target platform specific object file extension
-# @param[out] $(A) Set to the target phatform specific static library (archive) file extension
+# @param[out] $(A) Set to the target platform specific static library (archive) file extension
 # @param[out] $(E) Set to the target platform specific executable file extension
 # @param[out] $(OBJS) Set to the list of objects that is to be built
 
@@ -150,6 +160,9 @@ ifndef MATRIX_DEBUG
  OPT:=-O3 -Wall		# Default compile for speed
  ifneq (,$(findstring -none,$(CCARCH)))
   OPT:=-Os -Wall	# Compile bare-metal for size
+ endif
+ ifneq '$(MATRIX_OPTIMIZE_FOOTPRINT)' ''
+  OPT:=-Os -Wall
  endif
  STRIP:=strip
 endif
@@ -408,6 +421,7 @@ LIBCORE_S_A=$(CORE_PATH)/libcore_s$(A)
 LIBCRYPT_S_A=$(MATRIXSSL_ROOT)/crypto/libcrypt_s$(A)
 LIBCMS_S_A=$(MATRIXSSL_ROOT)/crypto/cms/libcms_s$(A)
 LIBSSL_S_A=$(MATRIXSSL_ROOT)/matrixssl/libssl_s$(A)
+LIBROT_S_A=$(MATRIXSSL_ROOT)/crypto-rot/rot/lib/libdriver_val_up$(A)
 
 # Optional external libraries
 LIBZ=-lz

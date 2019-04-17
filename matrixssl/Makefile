@@ -15,6 +15,7 @@ SRC:=\
 	extDecode.c \
 	hsDecode.c \
 	hsHash.c \
+	hsHashBuffered.c \
 	hsNegotiateVersion.c \
 	matrixssl.c \
 	matrixsslKeys.c \
@@ -42,6 +43,7 @@ SRC:=\
 	tls13Resume.c \
 	tls13SigVer.c \
 	tls13TrHash.c \
+	tls13TrHashBuffered.c \
 	sslv3.c \
 	tls.c
 

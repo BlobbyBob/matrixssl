@@ -150,6 +150,17 @@ psRes_t validateRecordHdrVersion(ssl_t *ssl)
     }
 # endif
 
+# ifdef USE_LENIENT_TLS_RECORD_VERSION_MATCHING
+    /* If using TLS, allow the record header to have any TLS version
+       for compatility. There have been e.g. some real world servers
+       that always encode TLS 1.1 in the record header, even after
+       TLS 1.2 has been chosen or negotiated. */
+    if (NGTD_VER(ssl, v_tls_any) && (recordVer & v_tls_any))
+    {
+        ok = PS_TRUE;
+    }
+# endif
+
     if (ok)
     {
         return MATRIXSSL_SUCCESS;
@@ -183,7 +194,6 @@ out_fail:
             "Unexpected version",
             recordVer,
             PS_TRUE);
-    ssl->err = SSL_ALERT_PROTOCOL_VERSION;
     return MATRIXSSL_ERROR;
 }
 
@@ -363,7 +373,7 @@ int32 matrixSslDecode(ssl_t *ssl, unsigned char **buf, uint32 *len,
     *error = PS_SUCCESS;
     if (ssl->flags & SSL_FLAGS_ERROR || ssl->flags & SSL_FLAGS_CLOSED)
     {
-        psTraceInfo("Can't use matrixSslDecode on closed/error-flagged sess\n");
+        psTraceErrr("Can't use matrixSslDecode on closed/error-flagged sess\n");
         *error = PS_PROTOCOL_FAIL;
         return MATRIXSSL_ERROR;
     }
@@ -389,7 +399,7 @@ int32 matrixSslDecode(ssl_t *ssl, unsigned char **buf, uint32 *len,
         }
         psAssert(rc == SSL_NO_TLS_1_3);
 
-        if (IS_CLIENT(ssl))
+        if (MATRIX_IS_CLIENT(ssl))
         {
             /*
               Check for possibility to fail early on an unsupported downgrade.
@@ -693,8 +703,9 @@ SKIP_RECORD_PARSE:
             real mess trying to keep the expectedEpoch up-to-date when we can't
             possibly know how many epoch increments the peer has made before we
             receive a FINISHED message or an APPLICATION DATA record */
-        if (rc == 1 && ssl->rec.type == SSL_RECORD_TYPE_HANDSHAKE &&
-            ssl->hsState == SSL_HS_FINISHED)
+        if (rc == 1
+            && ssl->rec.type == SSL_RECORD_TYPE_HANDSHAKE
+            && ssl->hsState == SSL_HS_FINISHED)
         {
             /* Special handlers for these CCS/Finished cases because epoch
                 could be larger for a good reason */
@@ -720,7 +731,9 @@ SKIP_RECORD_PARSE:
         else if (rc != 0)
         {
             psTraceIntDtls("Epoch mismatch %d ", ssl->rec.epoch[1]);
-            psTraceIntDtls("on a record type of %d\n", ssl->rec.type);
+            psTraceIntDtls("expected %d ", ssl->expectedEpoch[1]);
+            psTraceIntDtls("on a record type of %d", ssl->rec.type);
+            psTraceIntDtls("at state %d\n", ssl->hsState);
 
             /* Another corner case where the peer has sent repeat FINISHED
                 messages when we are in the state where we are finished.
@@ -1113,38 +1126,38 @@ ADVANCE_TO_APP_DATA:
                 {
 #  ifdef USE_SHA256
                 case SHA256_HASH_SIZE:
-                    psSha256PreInit(&md.sha256);
-                    psSha256Init(&md.sha256);
+                    psSha256PreInit(&md.u.sha256);
+                    psSha256Init(&md.u.sha256);
                     while (rc > 0)
                     {
-                        psSha256Update(&md.sha256, tmp, 64);
+                        psSha256Update(&md.u.sha256, tmp, 64);
                         rc--;
                     }
-                    psSha256Final(&md.sha256, tmp);
+                    psSha256Final(&md.u.sha256, tmp);
                     break;
 #  endif
 #  ifdef USE_SHA384
                 case SHA384_HASH_SIZE:
-                    psSha384PreInit(&md.sha384);
-                    psSha384Init(&md.sha384);
+                    psSha384PreInit(&md.u.sha384);
+                    psSha384Init(&md.u.sha384);
                     while (rc > 0)
                     {
-                        psSha384Update(&md.sha384, tmp, 128);
+                        psSha384Update(&md.u.sha384, tmp, 128);
                         rc--;
                     }
-                    psSha384Final(&md.sha384, tmp);
+                    psSha384Final(&md.u.sha384, tmp);
                     break;
 #  endif
 #  ifdef USE_SHA1
                 case SHA1_HASH_SIZE:
-                    psSha1PreInit(&md.sha1);
-                    psSha1Init(&md.sha1);
+                    psSha1PreInit(&md.u.sha1);
+                    psSha1Init(&md.u.sha1);
                     while (rc > 0)
                     {
-                        psSha1Update(&md.sha1, tmp, 64);
+                        psSha1Update(&md.u.sha1, tmp, 64);
                         rc--;
                     }
-                    psSha1Final(&md.sha1, tmp);
+                    psSha1Final(&md.u.sha1, tmp);
                     break;
 #  endif
                 default:
@@ -1923,8 +1936,18 @@ encodeResponse:
         session is made on that side, so always send the current session
         Re-send the backed up user extensions (if any). TODO: test this.
 */
-        rc = matrixSslEncodeClientHello(ssl, &tmpout, 0, 0, requiredLen,
-                ssl->userExt, &options);
+        rc = matrixSslEncodeClientHello(ssl,
+                &tmpout,
+# ifdef ENABLE_SECURE_REHANDSHAKES
+                ssl->tlsClientCipherSuites,
+                ssl->tlsClientCipherSuitesLen,
+# else
+                0,
+                0,
+# endif
+                requiredLen,
+                ssl->userExt,
+                &options);
     }
     else
     {
@@ -2456,8 +2479,7 @@ hsStateDetermined:
  */
     if (ssl->hsState == SSL_HS_FINISHED)
     {
-        if (sslSnapshotHSHash(ssl, hsMsgHash,
-                (ssl->flags & SSL_FLAGS_SERVER) ? 0 : SSL_FLAGS_SERVER) <= 0)
+        if (sslSnapshotHSHash(ssl, hsMsgHash, PS_FALSE, PS_TRUE) <= 0)
         {
             psTraceErrr("Error snapshotting HS hash\n");
             ssl->err = SSL_ALERT_INTERNAL_ERROR;
@@ -2469,7 +2491,7 @@ hsStateDetermined:
     {
         /* Same issue as above for client auth.  Need a handshake snapshot
             that doesn't include this message we are about to process */
-        if (sslSnapshotHSHash(ssl, hsMsgHash, -1) <= 0)
+        if (sslSnapshotHSHash(ssl, hsMsgHash, PS_FALSE, PS_FALSE) <= 0)
         {
             psTraceErrr("Error snapshotting HS hash\n");
             ssl->err = SSL_ALERT_INTERNAL_ERROR;
@@ -2819,6 +2841,19 @@ SKIP_HSHEADER_PARSE:
            feature for the re-handshake. */
         ssl->extClientCertKeyStateFlags = EXT_CLIENT_CERT_KEY_STATE_INIT;
 # endif /* USE_EXT_CLIENT_CERT_KEY_LOADING */
+
+#ifdef USE_DTLS
+    if (ACTV_VER(ssl, v_dtls_any))
+    {
+        /* Server initiated rehandshake - brign resend epoch up to
+           date ... shouldn't this be done when entering
+           done-state? */
+        ssl->resendEpoch[0] = ssl->epoch[0];
+        ssl->resendEpoch[1] = ssl->epoch[1];
+        ssl->appDataExch = 0;
+        ssl->msn = ssl->resendMsn = 0;
+    }
+#endif
         break;
 
 /******************************************************************************/

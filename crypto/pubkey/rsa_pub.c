@@ -372,6 +372,14 @@ psRes_t psRsaPssVerify(psPool_t *pool,
         psFree(em, pool);
         return rc;
     }
+# ifdef DEBUG_RSA_PSS
+    psTraceBytes("psRsaPssVerify in", msgIn, msgInLen);
+    psTraceBytes("psRsaPssVerify sig", sig, sigLen);
+    psTraceIntCrypto("hashlen: %hu\n",
+            (uint16_t)psPssHashAlgToHashLen(opts->rsaPssHashAlg));
+    psTraceIntCrypto("saltlen: %hu\n",
+            opts->rsaPssSaltLen);
+# endif
     rc = psPkcs1PssDecode(pool,
             msgIn,
             msgInLen,

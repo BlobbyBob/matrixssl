@@ -263,9 +263,9 @@ int32_t tls13FindSessionPsk(ssl_t *ssl,
       length and the contents of the first 16 bytes. In the resumption
       case, the first 16 bytes should be opaque key_name[16].
     */
-    if (IS_SERVER(ssl))
+    if (MATRIX_IS_SERVER(ssl))
     {
-#  ifdef USE_SERVER_SIDE_SSL
+#  if defined(USE_SERVER_SIDE_SSL) && defined(USE_STATELESS_SESSION_TICKETS)
         psSessionTicketKeys_t *key;
 
         if (idLen >= 16 + 12 + 16)

@@ -341,6 +341,20 @@ PSPUBLIC void psDes3Clear(psDes3_t *ctx);
 /*
     Hash Digest Algorithms
  */
+typedef struct
+{
+    uint32_t flags;
+} psHashOpts_t;
+
+psRes_t psHashInit(psDigestContext_t *ctx,
+        int32_t hashAlgId,
+        psHashOpts_t *opts);
+psRes_t psHashUpdate(psDigestContext_t *ctx,
+        const unsigned char *data,
+        psSizeL_t dataLen);
+psRes_t psHashFinal(psDigestContext_t *ctx,
+        unsigned char *hashOut);
+
 # ifdef USE_MD5
 /******************************************************************************/
 static inline void psMd5PreInit(psMd5_t *md5)
@@ -625,7 +639,6 @@ PSPUBLIC void psHmacSha384Final(psHmacSha384_t * ctx,
                                 unsigned char hash[SHA384_HASHLEN]);
 # endif
 
-#  ifdef USE_PEM_DECODE
 typedef enum {
     PEM_TYPE_ANY = 0,
     PEM_TYPE_KEY,
@@ -634,6 +647,7 @@ typedef enum {
     PEM_TYPE_CERTIFICATE
 } psPemType_t;
 
+#  ifdef USE_PEM_DECODE
 
 PSPUBLIC int32_t
 psPemFileToDer(psPool_t *pool,
@@ -665,6 +679,8 @@ psPemCertBufToList(psPool_t *pool,
         psSizeL_t len,
         psList_t **x509certList);
 
+#  endif /* USE_PEM_DECODE */
+
 PSPUBLIC int32_t
 psPemTryDecode(psPool_t *pool,
         const unsigned char *in,
@@ -673,8 +689,6 @@ psPemTryDecode(psPool_t *pool,
         const char *password,
         unsigned char **out,
         psSizeL_t *outlen);
-
-#  endif /* USE_PEM_DECODE */
 
 /******************************************************************************/
 /*

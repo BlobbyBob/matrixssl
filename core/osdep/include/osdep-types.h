@@ -53,18 +53,24 @@
 # if defined(__linux__) /* Linux and Android */
 #  define POSIX
 #  define LINUX
-#  define MATRIX_USE_FILE_SYSTEM
+#  ifndef NO_FILE_SYSTEM
+#   define MATRIX_USE_FILE_SYSTEM
+#  endif
 # elif defined(__APPLE__) && defined(__MACH__) /* Mac OS X */
 #  define POSIX
 #  define OSX
 #  define HAVE_NATIVE_INT64
-#  define MATRIX_USE_FILE_SYSTEM
+#  ifndef NO_FILE_SYSTEM
+#   define MATRIX_USE_FILE_SYSTEM
+#  endif
 # elif defined(_WIN32) /* Windows */
 #  ifndef WIN32
 #   define WIN32
 #  endif
 #  define HAVE_NATIVE_INT64
-#  define MATRIX_USE_FILE_SYSTEM
+#  ifndef NO_FILE_SYSTEM
+#   define MATRIX_USE_FILE_SYSTEM
+#  endif
 # endif
 /* For others such as FREERTOS, define in build system */
 

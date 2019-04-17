@@ -45,12 +45,8 @@
 # endif
 #endif /* _h_PS_CORECONFIG */
 
-# ifndef PS_NO_LOGF
-/* Define a common logging framework.
-   If you want to use previous MatrixSSL logging facilities only, 
-   please add #define PS_NO_LOGF
-   to coreConfig.h.
-*/
+# ifdef PS_LOGF
+/* Experimental a common logging framework. */
 #include "psPrnf.h"
 
 #ifdef __GNUC__
@@ -550,7 +546,7 @@ psLogfSetHookPrintfFunction_t psLogfSetHookPrintf(
 #define PS_LOGF_FATAL_LN(...) \
     do { /* fatal error logging not available */ } while(0)
 
-# endif /* PS_NO_LOGF */
+# endif /* PS_LOGF */
 
 #endif /* _h_PS_LOG */
 

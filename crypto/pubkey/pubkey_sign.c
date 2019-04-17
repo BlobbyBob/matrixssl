@@ -203,7 +203,8 @@ int32_t psSignHash(psPool_t *pool,
         }
         break;
 # endif /* USE_ECC */
-# ifdef USE_PKCS1_PSS
+# ifdef USE_RSA
+#  ifdef USE_PKCS1_PSS
     case OID_RSASSA_PSS:
         if (privKey->type == PS_RSA)
         {
@@ -211,8 +212,7 @@ int32_t psSignHash(psPool_t *pool,
                 in, inLen, out, outLen, opts);
         }
         break;
-# endif /* USE_PKCS1_PSS */
-# ifdef USE_RSA
+#  endif /* USE_PKCS1_PSS */
     case OID_SHA256_RSA_SIG:
     case OID_SHA384_RSA_SIG:
     case OID_SHA512_RSA_SIG:
@@ -250,6 +250,11 @@ int32_t psSign(psPool_t *pool,
 # ifdef DEBUG_PUBKEY_SIGN
     psTraceBytes("psSign in", in, inLen);
 # endif
+
+    if (opts && (opts->flags & PS_SIGN_OPTS_USE_PREALLOCATED_OUTBUF))
+    {
+        sigOut = *out;
+    }
 
     switch (sigAlg)
     {
@@ -326,12 +331,12 @@ psRes_t psComputeHashForSig(const unsigned char *dataBegin,
         {
             return PS_OUTPUT_LENGTH;
         }
-        psMd2Init(&hash.md2);
-        if (psMd2Update(&hash.md2, dataBegin, dataLen) < 0)
+        psMd2Init(&hash.u.md2);
+        if (psMd2Update(&hash.u.md2, dataBegin, dataLen) < 0)
         {
             return PS_FAILURE;
         }
-        if (psMd2Final(&hash.md2, hashOut) < 0)
+        if (psMd2Final(&hash.u.md2, hashOut) < 0)
         {
             return PS_FAILURE;
         }
@@ -343,15 +348,16 @@ psRes_t psComputeHashForSig(const unsigned char *dataBegin,
         {
             return PS_OUTPUT_LENGTH;
         }
-        if (psMd5Init(&hash.md5) < 0)
+        if (psMd5Init(&hash.u.md5) < 0)
         {
             return PS_FAILURE;
         }
-        psMd5Update(&hash.md5, dataBegin, dataLen);
-        psMd5Final(&hash.md5, hashOut);
+        psMd5Update(&hash.u.md5, dataBegin, dataLen);
+        psMd5Final(&hash.u.md5, hashOut);
         *hashOutLen = MD5_HASH_SIZE;
         break;
 # endif /* ENABLE_MD5_SIGNED_CERTS */
+# ifdef USE_SHA1
     case OID_SHA1_RSA_SIG:
     case OID_SHA1_RSA_SIG2:
     case OID_SHA1_ECDSA_SIG:
@@ -359,12 +365,13 @@ psRes_t psComputeHashForSig(const unsigned char *dataBegin,
         {
             return PS_OUTPUT_LENGTH;
         }
-        psSha1PreInit(&hash.sha1);
-        psSha1Init(&hash.sha1);
-        psSha1Update(&hash.sha1, dataBegin, dataLen);
-        psSha1Final(&hash.sha1, hashOut);
+        psSha1PreInit(&hash.u.sha1);
+        psSha1Init(&hash.u.sha1);
+        psSha1Update(&hash.u.sha1, dataBegin, dataLen);
+        psSha1Final(&hash.u.sha1, hashOut);
         *hashOutLen = SHA1_HASH_SIZE;
         break;
+#endif
 #ifdef USE_SHA224
     case OID_SHA224_RSA_SIG:
     case OID_SHA224_ECDSA_SIG:
@@ -372,10 +379,10 @@ psRes_t psComputeHashForSig(const unsigned char *dataBegin,
         {
             return PS_OUTPUT_LENGTH;
         }
-        psSha224PreInit(&hash.sha256);
-        psSha224Init(&hash.sha256);
-        psSha224Update(&hash.sha256, dataBegin, dataLen);
-        psSha224Final(&hash.sha256, hashOut);
+        psSha224PreInit(&hash.u.sha256);
+        psSha224Init(&hash.u.sha256);
+        psSha224Update(&hash.u.sha256, dataBegin, dataLen);
+        psSha224Final(&hash.u.sha256, hashOut);
         *hashOutLen = SHA224_HASH_SIZE;
         break;
 #endif /* USE_SHA224 */
@@ -385,10 +392,10 @@ psRes_t psComputeHashForSig(const unsigned char *dataBegin,
         {
             return PS_OUTPUT_LENGTH;
         }
-        psSha256PreInit(&hash.sha256);
-        psSha256Init(&hash.sha256);
-        psSha256Update(&hash.sha256, dataBegin, dataLen);
-        psSha256Final(&hash.sha256, hashOut);
+        psSha256PreInit(&hash.u.sha256);
+        psSha256Init(&hash.u.sha256);
+        psSha256Update(&hash.u.sha256, dataBegin, dataLen);
+        psSha256Final(&hash.u.sha256, hashOut);
         *hashOutLen = SHA256_HASH_SIZE;
         break;
 # ifdef USE_SHA384
@@ -398,10 +405,10 @@ psRes_t psComputeHashForSig(const unsigned char *dataBegin,
         {
             return PS_OUTPUT_LENGTH;
         }
-        psSha384PreInit(&hash.sha384);
-        psSha384Init(&hash.sha384);
-        psSha384Update(&hash.sha384, dataBegin, dataLen);
-        psSha384Final(&hash.sha384, hashOut);
+        psSha384PreInit(&hash.u.sha384);
+        psSha384Init(&hash.u.sha384);
+        psSha384Update(&hash.u.sha384, dataBegin, dataLen);
+        psSha384Final(&hash.u.sha384, hashOut);
         *hashOutLen = SHA384_HASH_SIZE;
         break;
 # endif
@@ -412,10 +419,10 @@ psRes_t psComputeHashForSig(const unsigned char *dataBegin,
         {
             return PS_OUTPUT_LENGTH;
         }
-        psSha512PreInit(&hash.sha512);
-        psSha512Init(&hash.sha512);
-        psSha512Update(&hash.sha512, dataBegin, dataLen);
-        psSha512Final(&hash.sha512, hashOut);
+        psSha512PreInit(&hash.u.sha512);
+        psSha512Init(&hash.u.sha512);
+        psSha512Update(&hash.u.sha512, dataBegin, dataLen);
+        psSha512Final(&hash.u.sha512, hashOut);
         *hashOutLen = SHA512_HASH_SIZE;
         break;
 # endif

@@ -96,16 +96,21 @@ typedef enum
     X509_V1,    /* 1988 X.509v1 Pre-RFC */
 } rfc_e;
 
+#ifdef PS_FIND_OID_NEEDED
 #  ifdef USE_CRYPTO_TRACE
 #   define OID_LIST(A, B) { { A, B }, #B, oid_ ## B }
 #  else
 #   define OID_LIST(A, B) { { A, B }, oid_ ## B }
 #  endif
+
+/* Oid database.
+   Note: This database is used only by deprecated functions.
+   The current database is found in oid_names and oid_list_e. */
 static const struct
 {
     uint16_t oid[MAX_OID_LEN];
 #  ifdef USE_CRYPTO_TRACE
-    char name[32];
+    char name[33];
 #  endif
     int id;
 } oid_list[] = {
@@ -146,6 +151,99 @@ static const struct
     /* List terminator */
     OID_LIST(0,         0),
 };
+#endif /* PS_FIND_OID_NEEDED */
+
+#define OID_NAME(A, B) { oid_ ## B, #B }
+
+static const struct
+{
+    int id;
+    const char name[33]; /* 33 is based on the current maximum length. */
+} oid_names[] = {
+    /* X.509 certificate extensions */
+    OID_NAME(id_ce,     id_ce_authorityKeyIdentifier),
+    OID_NAME(id_ce,     id_ce_subjectKeyIdentifier),
+    OID_NAME(id_ce,     id_ce_keyUsage),
+    OID_NAME(id_ce,     id_ce_certificatePolicies),
+    OID_NAME(id_ce,     id_ce_policyMappings),
+    OID_NAME(id_ce,     id_ce_subjectAltName),
+    OID_NAME(id_ce,     id_ce_issuerAltName),
+    OID_NAME(id_ce,     id_ce_subjectDirectoryAttributes),
+    OID_NAME(id_ce,     id_ce_basicConstraints),
+    OID_NAME(id_ce,     id_ce_nameConstraints),
+    OID_NAME(id_ce,     id_ce_policyConstraints),
+    OID_NAME(id_ce,     id_ce_extKeyUsage),
+    OID_NAME(id_ce,     id_ce_cRLDistributionPoints),
+    OID_NAME(id_ce,     id_ce_cRLNumber),
+    OID_NAME(id_ce,     id_ce_issuingDistributionPoint),
+    OID_NAME(id_ce,     id_ce_inhibitAnyPolicy),
+    OID_NAME(id_ce,     id_ce_freshestCRL),
+    OID_NAME(id_pe,     id_pe_authorityInfoAccess),
+    OID_NAME(id_pe,     id_pe_subjectInfoAccess),
+    /* Extended Key Usage */
+    OID_NAME(id_ce_eku, id_ce_eku_anyExtendedKeyUsage),
+    OID_NAME(id_kp,     id_kp_serverAuth),
+    OID_NAME(id_kp,     id_kp_clientAuth),
+    OID_NAME(id_kp,     id_kp_codeSigning),
+    OID_NAME(id_kp,     id_kp_emailProtection),
+    OID_NAME(id_kp,     id_kp_timeStamping),
+    OID_NAME(id_kp,     id_kp_OCSPSigning),
+    /* policyIdentifiers */
+    OID_NAME(id_qt,     id_qt_cps),
+    OID_NAME(id_qt,     id_qt_unotice),
+    /* accessDescriptors */
+    OID_NAME(id_ad,     id_ad_caIssuers),
+    OID_NAME(id_ad,     id_ad_ocsp),
+    /* List terminator */
+    OID_NAME(0,         0),
+};
+
+#undef OID_NAME
+
+#define OID_LIST_E(A, B, C, D) { oid_ ## B, D} /* A and C are for only for reader of the source code. */
+
+/* Oid for mapping between encoding and id. */
+static const struct
+{
+    int id;
+    const char *oid_encoded;
+} oid_list_e[] = {
+    /* X.509 certificate extensions */
+    OID_LIST_E(id_ce, id_ce_authorityKeyIdentifier, 2.5.29.35, "\x06\x03\x55\x1D\x23"),
+    OID_LIST_E(id_ce, id_ce_subjectKeyIdentifier, 2.5.29.14, "\x06\x03\x55\x1D\x0E"),
+    OID_LIST_E(id_ce, id_ce_keyUsage, 2.5.29.15, "\x06\x03\x55\x1D\x0F"),
+    OID_LIST_E(id_ce, id_ce_certificatePolicies, 2.5.29.32, "\x06\x03\x55\x1D\x20"),
+    OID_LIST_E(id_ce, id_ce_policyMappings, 2.5.29.33, "\x06\x03\x55\x1D\x21"),
+    OID_LIST_E(id_ce, id_ce_subjectAltName, 2.5.29.17, "\x06\x03\x55\x1D\x11"),
+    OID_LIST_E(id_ce, id_ce_issuerAltName, 2.5.29.18, "\x06\x03\x55\x1D\x12"),
+    OID_LIST_E(id_ce, id_ce_subjectDirectoryAttributes, 2.5.29.9, "\x06\x03\x55\x1D\x09"),
+    OID_LIST_E(id_ce, id_ce_basicConstraints, 2.5.29.19, "\x06\x03\x55\x1D\x13"),
+    OID_LIST_E(id_ce, id_ce_nameConstraints, 2.5.29.30, "\x06\x03\x55\x1D\x1E"),
+    OID_LIST_E(id_ce, id_ce_policyConstraints, 2.5.29.36, "\x06\x03\x55\x1D\x24"),
+    OID_LIST_E(id_ce, id_ce_extKeyUsage, 2.5.29.37, "\x06\x03\x55\x1D\x25"),
+    OID_LIST_E(id_ce, id_ce_cRLDistributionPoints, 2.5.29.31, "\x06\x03\x55\x1D\x1F"),
+    OID_LIST_E(id_ce, id_ce_cRLNumber, 2.5.29.20, "\x06\x03\x55\x1D\x14"),
+    OID_LIST_E(id_ce, id_ce_issuingDistributionPoint, 2.5.29.28, "\x06\x03\x55\x1D\x1C"),
+    OID_LIST_E(id_ce, id_ce_inhibitAnyPolicy, 2.5.29.54, "\x06\x03\x55\x1D\x36"),
+    OID_LIST_E(id_ce, id_ce_freshestCRL, 2.5.29.46, "\x06\x03\x55\x1D\x2E"),
+    OID_LIST_E(id_pe, id_pe_authorityInfoAccess, 1.3.6.1.5.5.7.1.1, "\x06\x08\x2B\x06\x01\x05\x05\x07\x01\x01"),
+    OID_LIST_E(id_pe, id_pe_subjectInfoAccess, 1.3.6.1.5.5.7.1.11, "\x06\x08\x2B\x06\x01\x05\x05\x07\x01\x0B"),
+    OID_LIST_E(id_ce_eku, id_ce_eku_anyExtendedKeyUsage, 2.5.29.37.0, "\x06\x04\x55\x1D\x25\x00"),
+    OID_LIST_E(id_kp, id_kp_serverAuth, 1.3.6.1.5.5.7.3.1, "\x06\x08\x2B\x06\x01\x05\x05\x07\x03\x01"),
+    OID_LIST_E(id_kp, id_kp_clientAuth, 1.3.6.1.5.5.7.3.2, "\x06\x08\x2B\x06\x01\x05\x05\x07\x03\x02"),
+    OID_LIST_E(id_kp, id_kp_codeSigning, 1.3.6.1.5.5.7.3.3, "\x06\x08\x2B\x06\x01\x05\x05\x07\x03\x03"),
+    OID_LIST_E(id_kp, id_kp_emailProtection, 1.3.6.1.5.5.7.3.4, "\x06\x08\x2B\x06\x01\x05\x05\x07\x03\x04"),
+    OID_LIST_E(id_kp, id_kp_timeStamping, 1.3.6.1.5.5.7.3.8, "\x06\x08\x2B\x06\x01\x05\x05\x07\x03\x08"),
+    OID_LIST_E(id_kp, id_kp_OCSPSigning, 1.3.6.1.5.5.7.3.9, "\x06\x08\x2B\x06\x01\x05\x05\x07\x03\x09"),
+    OID_LIST_E(id_qt, id_qt_cps, 1.3.6.1.5.5.7.2.1, "\x06\x08\x2B\x06\x01\x05\x05\x07\x02\x01"),
+    OID_LIST_E(id_qt, id_qt_unotice, 1.3.6.1.5.5.7.2.2, "\x06\x08\x2B\x06\x01\x05\x05\x07\x02\x02"),
+    OID_LIST_E(id_ad, id_ad_caIssuers, 1.3.6.1.5.5.7.48.2, "\x06\x08\x2B\x06\x01\x05\x05\x07\x30\x02"),
+    OID_LIST_E(id_ad, id_ad_ocsp, 1.3.6.1.5.5.7.48.1, "\x06\x08\x2B\x06\x01\x05\x05\x07\x30\x01"),
+    /* List terminator */
+    OID_LIST_E(0, 0, 0, NULL),
+};
+
+#undef OID_LIST_E
 
 /*
     Hybrid ASN.1/X.509 cert parsing helpers
@@ -185,7 +283,16 @@ psRes_t psX509ParseCertData(psPool_t *pool,
     if (err < PS_SUCCESS)
     {
         /* PEM serialization failed or not supported. Try binary input. */
-        err = psX509ParseCert(pool, buf, len, certs, flags);
+        err = psX509ParseCert(pool, buf, len, &current, flags);
+        if (err < 0)
+        {
+            psX509FreeCert(current);
+        }
+        else
+        {
+            *tailp = current;
+            tailp = &(current->next);
+        }
         return err;
     }
 
@@ -200,8 +307,10 @@ psRes_t psX509ParseCertData(psPool_t *pool,
     for (certData = certDatas; certData; certData = certData->next)
     {
         err = psX509ParseCert(pool,
-                              certData->item, certData->len,
-                              &current, flags);
+                certData->item,
+                certData->len,
+                &current,
+                flags);
         if (err < 0 && !(flags & CERT_ALLOW_BUNDLE_PARTIAL_PARSE))
         {
             psX509FreeCert(current);
@@ -537,6 +646,37 @@ PSPUBLIC int32 psX509GetCertPublicKeyDer(psX509Cert_t *cert,
     return PS_SUCCESS;
 }
 
+# ifdef USE_CERT_PARSE
+static
+psRes_t getCertSignatureHashLen(psX509Cert_t *cert,
+        psSize_t *sigHashLenOut)
+{
+    psResSize_t sigHashLen;
+
+# ifdef USE_PKCS1_PSS
+    if (cert->certAlgorithm == OID_RSASSA_PSS)
+    {
+        sigHashLen = psPssHashAlgToHashLen(cert->pssHash);
+    }
+    else
+# endif /* USE_PKCS1_PSS */
+    {
+        sigHashLen = psSigAlgToHashLen(cert->sigAlgorithm);
+    }
+
+    if (sigHashLen < 0)
+    {
+        psTraceIntCrypto("Unsupported cert sig hash alg: %d\n",
+                         (int)cert->sigAlgorithm);
+        return PS_UNSUPPORTED_FAIL;
+    }
+
+    *sigHashLenOut = (psSize_t)sigHashLen;
+
+    return PS_SUCCESS;
+}
+# endif /* USE_CERT_PARSE */
+
 /*
   Parse a single, DER-encoded ASN.1 Certificate.
 
@@ -631,11 +771,11 @@ static int parse_single_cert(psPool_t *pool, const unsigned char **pp,
 # ifdef ENABLE_CA_CERT_HASH
     /* We use the cert_sha1_hash type for the Trusted CA Indication so
        run a SHA1 has over the entire Certificate DER encoding. */
-    psSha1PreInit(&hashCtx.sha1);
-    psSha1Init(&hashCtx.sha1);
-    psSha1Update(&hashCtx.sha1, certStart,
+    psSha1PreInit(&hashCtx.u.sha1);
+    psSha1Init(&hashCtx.u.sha1);
+    psSha1Update(&hashCtx.u.sha1, certStart,
             oneCertLen + (int32) (p - certStart));
-    psSha1Final(&hashCtx.sha1, cert->sha1CertHash);
+    psSha1Final(&hashCtx.u.sha1, cert->sha1CertHash);
 # endif
 
 # ifdef USE_CERT_PARSE
@@ -899,6 +1039,7 @@ static int parse_single_cert(psPool_t *pool, const unsigned char **pp,
 #  endif
 #  ifdef USE_RSA
     case OID_RSA_KEY_ALG:
+    case OID_RSASSA_PSS:
         psAssert(plen == 0); /* No parameters on RSA pub key OID */
         psInitPubKey(pool, &cert->publicKey, PS_RSA);
         if ((rc = psRsaParseAsnPubKey(pool, &p, (uint16_t) (end - p),
@@ -1071,7 +1212,44 @@ static int parse_single_cert(psPool_t *pool, const unsigned char **pp,
         goto out;
     }
 
-    cert->sigHashLen = psSigAlgToHashLen(cert->sigAlgorithm);
+    rc = getCertSignatureHashLen(cert, &cert->sigHashLen);
+    if (rc < 0)
+    {
+        return rc;
+    }
+
+# ifdef USE_ROT_CRYPTO
+    switch (cert->certAlgorithm)
+    {
+#  ifdef USE_ROT_ECC
+    case OID_SHA256_ECDSA_SIG:
+#   ifdef USE_SECP384R1
+    case OID_SHA384_ECDSA_SIG:
+#   endif
+#   ifdef USE_SECP521R1
+    case OID_SHA512_ECDSA_SIG:
+#   endif
+#  endif /* USE_ROT_ECC */
+#  ifdef USE_ROT_RSA
+    case OID_SHA256_RSA_SIG:
+    case OID_SHA384_RSA_SIG:
+#  endif /* USE_ROT_RSA */
+        /* No pre-hashing used with crypto-rot. */
+        (void)hashCtx;
+        cert->tbsCertStart = psMalloc(pool, certLen);
+        if (cert->tbsCertStart == NULL)
+        {
+            return PS_MEM_FAIL;
+        }
+        Memcpy(cert->tbsCertStart, tbsCertStart, certLen);
+        cert->tbsCertLen = certLen;
+        goto preprocessing_complete;
+        break;
+    default:
+        psTraceCrypto("Warning: cert sig alg not supported by crypto-rot\n");
+        psTraceCrypto("Falling back to SW crypto\n");
+    }
+# endif /* USE_ROT_CRYPTO */
 
     /*
       Compute the hash of the cert here for CA validation
@@ -1081,22 +1259,22 @@ static int parse_single_cert(psPool_t *pool, const unsigned char **pp,
 #  ifdef ENABLE_MD5_SIGNED_CERTS
 #   ifdef USE_MD2
     case OID_MD2_RSA_SIG:
-        psMd2Init(&hashCtx.md2);
-        psMd2Update(&hashCtx.md2, tbsCertStart, certLen);
-        psMd2Final(&hashCtx.md2, cert->sigHash);
+        psMd2Init(&hashCtx.u.md2);
+        psMd2Update(&hashCtx.u.md2, tbsCertStart, certLen);
+        psMd2Final(&hashCtx.u.md2, cert->sigHash);
         break;
 #   endif   /* USE_MD2 */
 #   ifdef USE_MD4
     case OID_MD4_RSA_SIG:
-        psMd4Init(&hashCtx.md4);
-        psMd4Update(&hashCtx.md4, tbsCertStart, certLen);
-        psMd4Final(&hashCtx.md4, cert->sigHash);
+        psMd4Init(&hashCtx.u.md4);
+        psMd4Update(&hashCtx.u.md4, tbsCertStart, certLen);
+        psMd4Final(&hashCtx.u.md4, cert->sigHash);
         break;
 #   endif   /* USE_MD4 */
     case OID_MD5_RSA_SIG:
-        psMd5Init(&hashCtx.md5);
-        psMd5Update(&hashCtx.md5, tbsCertStart, certLen);
-        psMd5Final(&hashCtx.md5, cert->sigHash);
+        psMd5Init(&hashCtx.u.md5);
+        psMd5Update(&hashCtx.u.md5, tbsCertStart, certLen);
+        psMd5Final(&hashCtx.u.md5, cert->sigHash);
         break;
 #  endif
 #  ifdef USE_SHA1
@@ -1117,10 +1295,10 @@ static int parse_single_cert(psPool_t *pool, const unsigned char **pp,
             goto unsupported_sig_alg;
         }
 #   endif /* !ENABLE_SHA1_SIGNED_CERTS */
-        psSha1PreInit(&hashCtx.sha1);
-        psSha1Init(&hashCtx.sha1);
-        psSha1Update(&hashCtx.sha1, tbsCertStart, certLen);
-        psSha1Final(&hashCtx.sha1, cert->sigHash);
+        psSha1PreInit(&hashCtx.u.sha1);
+        psSha1Init(&hashCtx.u.sha1);
+        psSha1Update(&hashCtx.u.sha1, tbsCertStart, certLen);
+        psSha1Final(&hashCtx.u.sha1, cert->sigHash);
         break;
 #  endif /* USE_SHA1 */
 #  ifdef USE_SHA224
@@ -1128,10 +1306,10 @@ static int parse_single_cert(psPool_t *pool, const unsigned char **pp,
 #   ifdef USE_ECC
     case OID_SHA224_ECDSA_SIG:
 #   endif
-        psSha224PreInit(&hashCtx.sha256);
-        psSha224Init(&hashCtx.sha256);
-        psSha224Update(&hashCtx.sha256, tbsCertStart, certLen);
-        psSha224Final(&hashCtx.sha256, cert->sigHash);
+        psSha224PreInit(&hashCtx.u.sha256);
+        psSha224Init(&hashCtx.u.sha256);
+        psSha224Update(&hashCtx.u.sha256, tbsCertStart, certLen);
+        psSha224Final(&hashCtx.u.sha256, cert->sigHash);
         break;
 #  endif
 #  ifdef USE_SHA256
@@ -1139,10 +1317,10 @@ static int parse_single_cert(psPool_t *pool, const unsigned char **pp,
 #   ifdef USE_ECC
     case OID_SHA256_ECDSA_SIG:
 #   endif
-        psSha256PreInit(&hashCtx.sha256);
-        psSha256Init(&hashCtx.sha256);
-        psSha256Update(&hashCtx.sha256, tbsCertStart, certLen);
-        psSha256Final(&hashCtx.sha256, cert->sigHash);
+        psSha256PreInit(&hashCtx.u.sha256);
+        psSha256Init(&hashCtx.u.sha256);
+        psSha256Update(&hashCtx.u.sha256, tbsCertStart, certLen);
+        psSha256Final(&hashCtx.u.sha256, cert->sigHash);
         break;
 #  endif
 #  ifdef USE_SHA384
@@ -1150,10 +1328,10 @@ static int parse_single_cert(psPool_t *pool, const unsigned char **pp,
 #   ifdef USE_ECC
     case OID_SHA384_ECDSA_SIG:
 #   endif
-        psSha384PreInit(&hashCtx.sha384);
-        psSha384Init(&hashCtx.sha384);
-        psSha384Update(&hashCtx.sha384, tbsCertStart, certLen);
-        psSha384Final(&hashCtx.sha384, cert->sigHash);
+        psSha384PreInit(&hashCtx.u.sha384);
+        psSha384Init(&hashCtx.u.sha384);
+        psSha384Update(&hashCtx.u.sha384, tbsCertStart, certLen);
+        psSha384Final(&hashCtx.u.sha384, cert->sigHash);
         break;
 #  endif
 #  ifdef USE_SHA512
@@ -1161,10 +1339,10 @@ static int parse_single_cert(psPool_t *pool, const unsigned char **pp,
 #   ifdef USE_ECC
     case OID_SHA512_ECDSA_SIG:
 #   endif
-        psSha512PreInit(&hashCtx.sha512);
-        psSha512Init(&hashCtx.sha512);
-        psSha512Update(&hashCtx.sha512, tbsCertStart, certLen);
-        psSha512Final(&hashCtx.sha512, cert->sigHash);
+        psSha512PreInit(&hashCtx.u.sha512);
+        psSha512Init(&hashCtx.u.sha512);
+        psSha512Update(&hashCtx.u.sha512, tbsCertStart, certLen);
+        psSha512Final(&hashCtx.u.sha512, cert->sigHash);
         break;
 #  endif
 #  ifdef USE_ED25519
@@ -1187,49 +1365,49 @@ static int parse_single_cert(psPool_t *pool, const unsigned char **pp,
         {
 #   ifdef ENABLE_MD5_SIGNED_CERTS
         case PKCS1_MD5_ID:
-            psMd5Init(&hashCtx.md5);
-            psMd5Update(&hashCtx.md5, tbsCertStart, certLen);
-            psMd5Final(&hashCtx.md5, cert->sigHash);
+            psMd5Init(&hashCtx.u.md5);
+            psMd5Update(&hashCtx.u.md5, tbsCertStart, certLen);
+            psMd5Final(&hashCtx.u.md5, cert->sigHash);
             break;
 #   endif
 #   ifdef ENABLE_SHA1_SIGNED_CERTS
         case PKCS1_SHA1_ID:
-            psSha1PreInit(&hashCtx.sha1);
-            psSha1Init(&hashCtx.sha1);
-            psSha1Update(&hashCtx.sha1, tbsCertStart, certLen);
-            psSha1Final(&hashCtx.sha1, cert->sigHash);
+            psSha1PreInit(&hashCtx.u.sha1);
+            psSha1Init(&hashCtx.u.sha1);
+            psSha1Update(&hashCtx.u.sha1, tbsCertStart, certLen);
+            psSha1Final(&hashCtx.u.sha1, cert->sigHash);
             break;
 #   endif
 #   ifdef USE_SHA224
         case PKCS1_SHA224_ID:
-            psSha224PreInit(&hashCtx.sha256);
-            psSha224Init(&hashCtx.sha256);
-            psSha224Update(&hashCtx.sha256, tbsCertStart, certLen);
-            psSha224Final(&hashCtx.sha256, cert->sigHash);
+            psSha224PreInit(&hashCtx.u.sha256);
+            psSha224Init(&hashCtx.u.sha256);
+            psSha224Update(&hashCtx.u.sha256, tbsCertStart, certLen);
+            psSha224Final(&hashCtx.u.sha256, cert->sigHash);
             break;
 #   endif
 #   ifdef USE_SHA256
         case PKCS1_SHA256_ID:
-            psSha256PreInit(&hashCtx.sha256);
-            psSha256Init(&hashCtx.sha256);
-            psSha256Update(&hashCtx.sha256, tbsCertStart, certLen);
-            psSha256Final(&hashCtx.sha256, cert->sigHash);
+            psSha256PreInit(&hashCtx.u.sha256);
+            psSha256Init(&hashCtx.u.sha256);
+            psSha256Update(&hashCtx.u.sha256, tbsCertStart, certLen);
+            psSha256Final(&hashCtx.u.sha256, cert->sigHash);
             break;
 #   endif
 #   ifdef USE_SHA384
         case PKCS1_SHA384_ID:
-            psSha384PreInit(&hashCtx.sha384);
-            psSha384Init(&hashCtx.sha384);
-            psSha384Update(&hashCtx.sha384, tbsCertStart, certLen);
-            psSha384Final(&hashCtx.sha384, cert->sigHash);
+            psSha384PreInit(&hashCtx.u.sha384);
+            psSha384Init(&hashCtx.u.sha384);
+            psSha384Update(&hashCtx.u.sha384, tbsCertStart, certLen);
+            psSha384Final(&hashCtx.u.sha384, cert->sigHash);
             break;
 #   endif
 #   ifdef USE_SHA512
         case PKCS1_SHA512_ID:
-            psSha512PreInit(&hashCtx.sha512);
-            psSha512Init(&hashCtx.sha512);
-            psSha512Update(&hashCtx.sha512, tbsCertStart, certLen);
-            psSha512Final(&hashCtx.sha512, cert->sigHash);
+            psSha512PreInit(&hashCtx.u.sha512);
+            psSha512Init(&hashCtx.u.sha512);
+            psSha512Update(&hashCtx.u.sha512, tbsCertStart, certLen);
+            psSha512Final(&hashCtx.u.sha512, cert->sigHash);
             break;
 #   endif
         default:
@@ -1242,7 +1420,7 @@ static int parse_single_cert(psPool_t *pool, const unsigned char **pp,
         break;
 #  endif /* USE_PKCS1_PSS */
 
-#  ifndef ENABLE_SHA1_SIGNED_CERTS
+#  if defined(USE_SHA1) && !defined(ENABLE_SHA1_SIGNED_CERTS)
 unsupported_sig_alg:
 #  endif
     default:
@@ -1266,6 +1444,9 @@ unsupported_sig_alg:
     }
 # endif /* USE_CERT_PARSE */
 
+# ifdef USE_ROT_CRYPTO
+preprocessing_complete:
+# endif /* USE_ROT_CRYPTO */
     if ((rc = psX509GetSignature(pool, &p, (uint32) (end - p),
                             &cert->signature, &cert->signatureLen)) < 0)
     {
@@ -1475,9 +1656,11 @@ void x509FreeExtensions(x509v3extensions_t *extensions)
     x509GeneralName_t *active, *inc;
 
 #  if defined(USE_FULL_CERT_PARSE) || defined(USE_CERT_GEN)
+#   ifdef USE_CERT_POLICY_EXTENSIONS
     x509PolicyQualifierInfo_t *qual_info, *qual_info_inc;
     x509PolicyInformation_t *pol_info, *pol_info_inc;
     x509policyMappings_t *pol_map, *pol_map_inc;
+#   endif
     x509authorityInfoAccess_t *authInfo, *authInfoInc;
 #  endif /* USE_FULL_CERT_PARSE || USE_CERT_GEN */
 
@@ -1596,12 +1779,13 @@ void x509FreeExtensions(x509v3extensions_t *extensions)
     psX509FreeDNStruct(&extensions->ak.attribs, extensions->pool);
 
 #  if defined(USE_FULL_CERT_PARSE) || defined(USE_CERT_GEN)
+#   ifdef USE_CERT_POLICY_EXTENSIONS
     pol_info = extensions->certificatePolicy.policy;
     while (pol_info != NULL)
     {
         /* Free PolicyInformation member variables. */
         pol_info_inc = pol_info->next;
-        psFree(pol_info->policyOid, extensions->pool);
+        psFree(pol_info->policyAsnOid, extensions->pool);
         qual_info = pol_info->qualifiers;
         while (qual_info != NULL)
         {
@@ -1626,6 +1810,7 @@ void x509FreeExtensions(x509v3extensions_t *extensions)
         psFree(pol_map, extensions->pool);
         pol_map = pol_map_inc;
     }
+#  endif /* USE_CERT_POLICY_EXTENSIONS */
 
     if (extensions->netscapeComment)
     {
@@ -2236,6 +2421,18 @@ void psX509FreeCert(psX509Cert_t *cert)
             psFree(curr->uniqueSubjectId, pool);
         }
 
+# ifdef USE_ROT_ECC
+        if (curr->pubKeyAlgorithm == OID_ECDSA_KEY_ALG)
+        {
+            psFree(curr->tbsCertStart, pool);
+        }
+# endif
+# ifdef USE_ROT_RSA
+        if (curr->pubKeyAlgorithm == OID_RSA_KEY_ALG)
+        {
+            psFree(curr->tbsCertStart, pool);
+        }
+# endif
 
         if (curr->publicKey.type != PS_NOKEY)
         {
@@ -2712,12 +2909,17 @@ static int32_t parseGeneralNames(psPool_t *pool, const unsigned char **buf,
     return PS_SUCCESS;
 }
 
+/* This functionality is considered obsolete. */
+#ifdef PS_FIND_OID_NEEDED
 /**
     Look up an OID in our known oid table.
     @param[in] oid Array of OID segments to look up in table.
     @param[in] oidlen Number of segments in 'oid'
     @return A valid OID enum on success, 0 on failure.
  */
+static oid_e psFindOid(const uint32_t oid[MAX_OID_LEN], uint8_t oidlen)
+    PSDEPRECATED_WARN;
+
 static oid_e psFindOid(const uint32_t oid[MAX_OID_LEN], uint8_t oidlen)
 {
     int i, j;
@@ -2739,6 +2941,39 @@ static oid_e psFindOid(const uint32_t oid[MAX_OID_LEN], uint8_t oidlen)
     }
     return (oid_e) 0;
 }
+#endif /* PS_FIND_OID_NEEDED */
+
+/**
+    Look up an OID in our known oid table.
+    @param[in] oid Copy (or reference) to oid
+    @return A valid OID enum on success, 0 on failure.
+ */
+static oid_e psOidToEnum(psAsnOid_t oid)
+{
+    int i;
+    uint8_t id;
+    uint8_t len_encoded;
+    unsigned int len;
+
+    id = oid[0];
+    len_encoded = oid[1];
+    len = len_encoded + 2;
+
+    if (id != ASN_OID || len > MAX_OID_BYTES)
+    {
+        return (oid_e) 0;
+    }
+
+    for (i = 0; oid_list_e[i].id != 0; i++)
+    {
+        if (oid_list_e[i].oid_encoded[1] == len_encoded &&
+            memcmp(oid, oid_list_e[i].oid_encoded, len) == 0)
+        {
+            return (oid_e) oid_list_e[i].id;
+        }
+    }
+    return (oid_e) 0;
+}
 
 #  ifdef USE_CRYPTO_TRACE
 /**
@@ -2746,10 +2981,19 @@ static oid_e psFindOid(const uint32_t oid[MAX_OID_LEN], uint8_t oidlen)
     @param[in] oid Array of OID segments print.
     @param[in] oidlen Number of segments in 'oid'
     @return void
+
+    @note: This function is deprecated in favor of psSprintAsnOid(),
+           which is similarin function but uses different arguments.
  */
-static void psTraceOid(uint32_t oid[MAX_OID_LEN], uint8_t oidlen)
+static inline void psTraceOid(uint32_t oid[MAX_OID_LEN], uint8_t oidlen)
+    PSDEPRECATED_WARN;
+static inline void psTraceOid(uint32_t oid[MAX_OID_LEN], uint8_t oidlen)
 {
-    int i, j, found;
+    int i;
+#ifdef PS_FIND_OID_NEEDED
+    int j;
+    int found;
+#endif /* PS_FIND_OID_NEEDED */
 
     for (i = 0; i < oidlen; i++)
     {
@@ -2762,6 +3006,7 @@ static void psTraceOid(uint32_t oid[MAX_OID_LEN], uint8_t oidlen)
             psTraceIntCrypto("%u", oid[i]);
         }
     }
+#ifdef PS_FIND_OID_NEEDED
     found = 0;
     for (j = 0; oid_list[j].oid[0] != 0 && !found; j++)
     {
@@ -2778,6 +3023,7 @@ static void psTraceOid(uint32_t oid[MAX_OID_LEN], uint8_t oidlen)
             }
         }
     }
+#endif /* PS_FIND_OID_NEEDED */
     psTraceCrypto("\n");
 }
 #  else
@@ -2785,11 +3031,71 @@ static void psTraceOid(uint32_t oid[MAX_OID_LEN], uint8_t oidlen)
 #  endif
 
 /******************************************************************************/
+
+/**
+    Print an OID in dot notation, with it's symbolic name, if found.
+    @param[in] oid Array of OID segments print.
+    @param[in] oidlen Number of segments in 'oid'
+    @param[out] out formatting target buffer
+                    (must be sufficient: MAX_OID_PRINTED_LEN will suffice.)
+    @return void
+ */
+const char *psSprintAsnOid(
+        psAsnOid_t oid,
+        char out[MAX_OID_PRINTED_LEN])
+{
+    int i;
+    const char *orig_out = out;
+    uint8_t id;
+    unsigned int len;
+    char *mem;
+    oid_e oe;
+
+    id = oid[0];
+    len = oid[1] + 2;
+
+    if (id != ASN_OID || len < 2 || len > MAX_OID_BYTES)
+    {
+        strcpy(out, "(Illegal OID)");
+        return out;
+    }
+    
+    mem = asnFormatOid(
+            (psPool_t*) MATRIX_NO_POOL,
+            (const unsigned char *) oid,
+            len);
+
+    if (mem == NULL)
+    {
+        strcpy(out, "(OID cannot be displayed)");
+    }
+    else
+    {
+        strcpy(out, mem);
+    }
+
+    psFree(mem, (psPool_t*) MATRIX_NO_POOL);
+
+    oe = psOidToEnum(oid);
+    if (oe != oid_0)
+    {
+        for (i = 0; oid_names[i].id != oid_0 && oid_names[i].id != oe; i++)
+        {
+            /* Search for oid_list_e entry with the oid. */
+        }
+        out += strlen(out);
+        sprintf(out, " (%s)", oid_names[i].name);
+    }
+    return orig_out; /* Return buffer for convenience. */
+}
+
+/******************************************************************************/
 /*
     X509v3 extensions
  */
 
 #  ifdef USE_FULL_CERT_PARSE
+#   ifdef USE_CERT_POLICY_EXTENSIONS
 static
 int32_t parsePolicyQualifierInfo(psPool_t *pool,
     const unsigned char *p,
@@ -2798,8 +3104,7 @@ int32_t parsePolicyQualifierInfo(psPool_t *pool,
     x509PolicyQualifierInfo_t *qualInfo,
     psSize_t *qual_info_len)
 {
-    uint32_t oid[MAX_OID_LEN] = { 0 };
-    uint8_t oidlen;
+    psAsnOid_t asnOid;
     oid_e noid;
     psSize_t len;
     const unsigned char *qualifierStart, *qualifierEnd;
@@ -2830,13 +3135,13 @@ int32_t parsePolicyQualifierInfo(psPool_t *pool,
         psTraceCrypto("Malformed extension length\n");
         return PS_PARSE_FAIL;
     }
-    if ((oidlen = asnParseOid(p, len, oid)) < 1)
+    if (asnCopyOid(p, len, asnOid) < 1)
     {
         psTraceCrypto("Malformed extension OID\n");
         return PS_PARSE_FAIL;
     }
     /* PolicyQualifierId ::= OBJECT IDENTIFIER ( id-qt-cps | id-qt-unotice )*/
-    noid = psFindOid(oid, oidlen);
+    noid = psOidToEnum(asnOid);
     p += len;
     if (noid == oid_id_qt_cps)
     {
@@ -2990,14 +3295,12 @@ int32_t parsePolicyInformation(psPool_t *pool,
     x509PolicyInformation_t *polInfo,
     psSize_t *pol_info_len)
 {
-    uint32_t oid[MAX_OID_LEN] = { 0 };
-    uint8_t oidlen;
+    psAsnOid_t asnOid;
     psSize_t len;
     const unsigned char *qualifierEnd;
     const unsigned char *polInfoStart, *polInfoEnd;
     x509PolicyQualifierInfo_t *qualInfo;
     psSize_t qualInfoLen;
-    int i;
 
     polInfoStart = p;
 
@@ -3028,29 +3331,20 @@ int32_t parsePolicyInformation(psPool_t *pool,
         psTraceCrypto("Malformed extension length\n");
         return PS_PARSE_FAIL;
     }
-    if ((oidlen = asnParseOid(p, len, oid)) < 1)
+    if (asnCopyOid(p, len, asnOid) < 1)
     {
         psTraceCrypto("Malformed extension OID\n");
         return PS_PARSE_FAIL;
     }
     p += len;
-    if (oidlen == 0 || oidlen > MAX_OID_LEN)
-    {
-        psTraceCrypto("Malformed extension OID\n");
-        return PS_PARSE_FAIL;
-    }
 
     /* Store the policy ID. */
-    polInfo->policyOid = psMalloc(pool, oidlen * sizeof(uint32_t));
-    if (polInfo->policyOid == NULL)
+    polInfo->policyAsnOid = psMalloc(pool, sizeof(psAsnOid_t));
+    if (polInfo->policyAsnOid == NULL)
     {
         return PS_MEM_FAIL;
     }
-    for (i = 0; i < oidlen; i++)
-    {
-        polInfo->policyOid[i] = oid[i];
-    }
-    polInfo->policyOidLen = oidlen;
+    Memcpy(polInfo->policyAsnOid, asnOid, sizeof(psAsnOid_t));
 
     if ((p >= polInfoEnd) ||
         (*p != (ASN_SEQUENCE | ASN_CONSTRUCTED)))
@@ -3214,11 +3508,10 @@ int32_t parsePolicyMappings(psPool_t *pool,
     x509policyMappings_t *policyMappings,
     psSize_t *polMappingsLen)
 {
-    uint32_t oid[MAX_OID_LEN] = { 0 };
-    psSize_t len, oidlen;
+    psAsnOid_t asnOid;
+    psSize_t len;
     const unsigned char *polMappingsStart, *polMappingsEnd;
     x509policyMappings_t *pol_map;
-    int i;
     int num_mappings = 0;
 
     /*
@@ -3272,23 +3565,20 @@ int32_t parsePolicyMappings(psPool_t *pool,
             psTraceCrypto("getAsnLength failure in policyMappings parsing\n");
             return PS_PARSE_FAIL;
         }
-        Memset(oid, 0, sizeof(oid));
-        if ((oidlen = asnParseOid(p, len, oid)) < 1)
+        if (asnCopyOid(p, len, asnOid) < 1)
         {
             psTraceCrypto("Malformed extension OID\n");
             return PS_PARSE_FAIL;
         }
         p += len;
 
-        pol_map->issuerDomainPolicy = psMalloc(pool,
-                oidlen * sizeof(uint32_t));
-        Memset(pol_map->issuerDomainPolicy, 0, oidlen * sizeof(uint32_t));
-
-        for (i = 0; i < oidlen; i++)
+        pol_map->issuerDomainPolicy = psMalloc(pool, sizeof(psAsnOid_t));
+        if (pol_map->issuerDomainPolicy == NULL)
         {
-            pol_map->issuerDomainPolicy[i] = oid[i];
+            psTraceCrypto("Memory allocation failure.\n");
+            return PS_PARSE_FAIL;
         }
-        pol_map->issuerDomainPolicyLen = oidlen;
+        Memcpy(pol_map->issuerDomainPolicy, asnOid, sizeof(psAsnOid_t));
 
         /* Parse subjectDomainPolicy OID. */
         if (*p++ != ASN_OID)
@@ -3303,23 +3593,20 @@ int32_t parsePolicyMappings(psPool_t *pool,
             psTraceCrypto("getAsnLength failure in policyMappings parsing\n");
             return PS_PARSE_FAIL;
         }
-        Memset(oid, 0, sizeof(oid));
-        if ((oidlen = asnParseOid(p, len, oid)) < 1)
+        if (asnCopyOid(p, len, asnOid) < 1)
         {
             psTraceCrypto("Malformed extension OID\n");
             return PS_PARSE_FAIL;
         }
         p += len;
 
-        pol_map->subjectDomainPolicy = psMalloc(pool,
-                oidlen * sizeof(uint32_t));
-        Memset(pol_map->subjectDomainPolicy, 0, oidlen * sizeof(uint32_t));
-
-        for (i = 0; i < oidlen; i++)
+        pol_map->subjectDomainPolicy = psMalloc(pool, sizeof(psAsnOid_t));
+        if (pol_map->issuerDomainPolicy == NULL)
         {
-            pol_map->subjectDomainPolicy[i] = oid[i];
+            psTraceCrypto("Memory allocation failure.\n");
+            return PS_PARSE_FAIL;
         }
-        pol_map->subjectDomainPolicyLen = oidlen;
+        Memcpy(pol_map->subjectDomainPolicy, asnOid, sizeof(psAsnOid_t));
 
         ++num_mappings;
     }
@@ -3332,7 +3619,9 @@ int32_t parsePolicyMappings(psPool_t *pool,
 
     return PS_SUCCESS;
 }
+# endif /* USE_CERT_POLICY_EXTENSIONS */
 
+# ifdef USE_CRL
 static
 int32_t parseAuthorityInfoAccess(psPool_t *pool,
     const unsigned char *p,
@@ -3340,10 +3629,10 @@ int32_t parseAuthorityInfoAccess(psPool_t *pool,
     x509authorityInfoAccess_t **authInfo,
     psSize_t *authInfoLen)
 {
-    psSize_t len, oidlen, adLen;
+    psSize_t len, adLen;
     const unsigned char *authInfoStart, *authInfoEnd;
     x509authorityInfoAccess_t *pAuthInfo;
-    uint32_t oid[MAX_OID_LEN] = { 0 };
+    psAsnOid_t asnOid;
     oid_e noid;
     int first_entry = 0;
 
@@ -3434,13 +3723,12 @@ int32_t parseAuthorityInfoAccess(psPool_t *pool,
             psTraceCrypto("getAsnLength failure in authInfo parsing\n");
             return PS_PARSE_FAIL;
         }
-        Memset(oid, 0, sizeof(oid));
-        if ((oidlen = asnParseOid(p, len, oid)) < 1)
+        if (asnCopyOid(p, len, asnOid) < 1)
         {
             psTraceCrypto("Malformed extension OID\n");
             return PS_PARSE_FAIL;
         }
-        noid = psFindOid(oid, oidlen);
+        noid = psOidToEnum(asnOid);
         p += len;
         if (noid != oid_id_ad_caIssuers &&
             noid != oid_id_ad_ocsp)
@@ -3494,6 +3782,7 @@ int32_t parseAuthorityInfoAccess(psPool_t *pool,
 
     return PS_SUCCESS;
 }
+#   endif /* USE_CRL */
 #  endif /* USE_FULL_CERT_PARSE */
 
 int32_t getExplicitExtensions(psPool_t *pool, const unsigned char **pp,
@@ -3504,16 +3793,17 @@ int32_t getExplicitExtensions(psPool_t *pool, const unsigned char **pp,
     const unsigned char *extEnd, *extStart, *save;
     unsigned char critical;
     psSize_t len, fullExtLen;
-    uint32_t oid[MAX_OID_LEN];
-    uint8_t oidlen;
+    psAsnOid_t asnOid;
     oid_e noid;
 
 #  ifdef USE_FULL_CERT_PARSE
     psSize_t subExtLen;
     const unsigned char *subSave;
     int32_t nc = 0;
+#   ifdef USE_CERT_POLICY_EXTENSIONS
     x509PolicyInformation_t *pPolicy;
     const unsigned char *policiesEnd;
+#   endif
 #  endif /* USE_FULL_CERT_PARSE */
 
     end = p + inlen;
@@ -3580,12 +3870,12 @@ KNOWN_EXT:
             psTraceCrypto("Malformed extension length\n");
             return PS_PARSE_FAIL;
         }
-        if ((oidlen = asnParseOid(p, len, oid)) < 1)
+        if (asnCopyOid(p, len, asnOid) < 1)
         {
             psTraceCrypto("Malformed extension OID\n");
             return PS_PARSE_FAIL;
         }
-        noid = psFindOid(oid, oidlen);
+        noid = psOidToEnum(asnOid);
         p += len;
 /*
         Possible boolean value here for 'critical' id.  It's a failure if a
@@ -3812,12 +4102,12 @@ KNOWN_EXT:
                     psTraceCrypto("Malformed extension length\n");
                     return PS_PARSE_FAIL;
                 }
-                if ((oidlen = asnParseOid(p, len, oid)) < 1)
+                if (asnCopyOid(p, len, asnOid) < 1)
                 {
                     psTraceCrypto("Malformed extension OID\n");
                     return PS_PARSE_FAIL;
                 }
-                noid = psFindOid(oid, oidlen);
+                noid = psOidToEnum(asnOid);
                 p += len;
                 if (fullExtLen < (uint32) (p - save))
                 {
@@ -3850,9 +4140,14 @@ KNOWN_EXT:
                     extensions->ekuFlags |= EXT_KEY_USAGE_ANY;
                     break;
                 default:
-                    psTraceCrypto("WARNING: Unknown EXT_KEY_USAGE:");
-                    psTraceOid(oid, oidlen);
-                    break;
+                    {
+#  ifdef USE_CRYPTO_TRACE
+                        char buffer[MAX_OID_PRINTED_LEN];
+                        psTraceStrCrypto("WARNING: Unknown EXT_KEY_USAGE: %s\n",
+                                         psSprintAsnOid(asnOid, buffer));
+#  endif /* USE_CRYPTO_TRACE */
+                        break;
+                    }
                 }     /* end switch */
             }
             break;
@@ -4174,6 +4469,7 @@ KNOWN_EXT:
             break;
 #  ifdef USE_FULL_CERT_PARSE
 
+#   ifdef USE_CERT_POLICY_EXTENSIONS
         case OID_ENUM(id_ce_certificatePolicies):
 /*
             certificatePolicies ::= SEQUENCE SIZE (1..MAX) OF PolicyInformation
@@ -4241,6 +4537,7 @@ KNOWN_EXT:
 
             p += len;
             break;
+#  endif /* USE_CERT_POLICY_EXTENSIONS */
         case OID_ENUM(id_ce_issuerAltName):
             if (getAsnSequence(&p, (uint32) (extEnd - p), &len) < 0)
             {
@@ -4270,8 +4567,11 @@ KNOWN_EXT:
             /* Unsupported or skipping because USE_FULL_CERT_PARSE undefd */
             if (critical)
             {
-                psTraceCrypto("Unsupported critical ext encountered: ");
-                psTraceOid(oid, oidlen);
+#  ifdef USE_CRYPTO_TRACE
+                char buffer[MAX_OID_PRINTED_LEN];
+                psTraceStrCrypto("Unsupported critical ext encountered: %s\n",
+                                 psSprintAsnOid(asnOid, buffer));
+#  endif /* USE_CRYPTO_TRACE */
 #  ifndef ALLOW_UNKNOWN_CRITICAL_EXTENSIONS
                 _psTrace("An unsupported critical extension was "
                     "encountered.  X.509 specifications say "
@@ -4898,6 +5198,11 @@ oid_parsing_done:
         {
         case ASN_BMPSTRING:
         {
+# ifndef USE_ASN_BMPSTRING_DN_ATTRIBS
+            psTraceCrypto("Error: BMPString not supported in DN attributes\n");
+            psTraceCrypto("Please enable USE_ASN_BMPSTRING in cryptoConfig.h\n");
+            return PS_UNSUPPORTED_FAIL;
+# else
             /* MatrixSSL generally uses single byte character string
                formats. This function converts ASN_BMPSTRING to
                UTF-8 for further handling. */
@@ -4933,6 +5238,7 @@ oid_parsing_done:
             p = p + llen;
             llen = (uint16_t) length + DN_NUM_TERMINATING_NULLS;
             break;
+# endif /* USE_ASN_BMPSTRING_DN_ATTRIBS */
         }
         case ASN_PRINTABLESTRING:
         case ASN_UTF8STRING:
@@ -5440,6 +5746,10 @@ int32 psX509AuthenticateCert(psPool_t *pool, psX509Cert_t *subjectCert,
                 opts.msgIsDigestInfo = PS_FALSE;
             }
 # endif /* USE_ED25519 */
+# if defined(USE_ROT_CRYPTO) && (defined(USE_ROT_ECC) || defined(USE_ROT_RSA))
+            tbs = sc->tbsCertStart;
+            tbsLen = sc->tbsCertLen;
+# endif
             res = psVerifySig(NULL,
                     tbs,
                     tbsLen,

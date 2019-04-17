@@ -18,6 +18,10 @@ STATIC:=\
 	$(MATRIXSSL_ROOT)/crypto/libcrypt_s.a \
 	$(MATRIXSSL_ROOT)/core/libcore_s.a
 
+#ifdef USE_ROT_CRYPTO
+STATIC+=$(LIBDRIVER_VAL_UP_PATH)
+#endif
+
 all: compile
 
 compile: $(OBJS) $(TEST_EXE)

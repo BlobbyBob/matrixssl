@@ -219,7 +219,7 @@ test: tests
 
 libs:
 	$(MAKE) --directory=core
-	if $(MAKE) --directory=crypto parse-config | grep -q -e '#define USE_FIPS_CRYPTO' -e '#define USE_CL_CRYPTO'; then $(MAKE) --directory=crypto-cl; else $(MAKE) --directory=crypto; fi
+	if $(MAKE) --directory=crypto parse-config | grep -q -e '#define USE_FIPS_CRYPTO' -e '#define USE_CL_CRYPTO'; then $(MAKE) --directory=crypto-cl; else if $(MAKE) --directory=crypto parse-config | grep -q -e "#define USE_ROT_CRYPTO"; then $(MAKE) --directory=crypto-rot; else $(MAKE) --directory=crypto; fi; fi
 	if $(MAKE) --directory=crypto parse-config | grep -q '#define USE_CMS'; then $(MAKE) --directory=crypto/cms;fi
 	$(MAKE) --directory=matrixssl
 	if [ -e matrixssh ]; then if $(MAKE) --directory=crypto parse-config | grep -q '#define USE_AES_CTR' && $(MAKE) --directory=crypto parse-config | grep -q '#define USE_DH'; then $(MAKE) --directory=matrixssh;fi;fi
@@ -256,6 +256,7 @@ clean:
 	$(MAKE) clean --directory=crypto/test
 	$(MAKE) clean --directory=matrixssl/test
 	if [ -e crypto-cl ]; then $(MAKE) clean --directory=crypto-cl;fi
+	if [ -e crypto-rot ]; then $(MAKE) clean --directory=crypto-rot;fi
 	if [ -e crypto/cms ]; then $(MAKE) clean --directory=crypto/cms;fi
 	$(MAKE) clean --directory=apps/common
 	$(MAKE) clean --directory=apps/ssl

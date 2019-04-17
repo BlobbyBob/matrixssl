@@ -747,6 +747,12 @@ static int32 parseSafeContents(psPool_t *pool, unsigned char *password,
     if ((rc = getAsnSequence(&p, (int32) (end - p), &tmplen)) < 0)
     {
         psTraceCrypto("Initial SafeContents parse failure\n");
+        if (rc == PS_PARSE_FAIL)
+        {
+            /* The error is probably due to decryption error.
+               Issue the error as PS_AUTH_FAIL. */
+            rc = PS_AUTH_FAIL;
+        }
         return rc;
     }
 
@@ -1059,6 +1065,13 @@ static int32 psParseAuthenticatedSafe(psPool_t *pool, psX509Cert_t **cert,
                      privKey, (unsigned char *) p, tmplen)) < 0)
             {
                 psTraceCrypto("Error parsing plaintext safe contents\n");
+                /* parseSafeContents() guesses error code according to
+                   the contents of the safe. If is guessed PS_AUTH_FAIL,
+                   it meant PS_PARSE_FAIL, for plaintext store. */
+                if (rc == PS_AUTH_FAIL)
+                {
+                    rc = PS_PARSE_FAIL;
+                }
                 return rc;
             }
             p += rc;
@@ -1165,6 +1178,12 @@ int32 psPkcs12ParseMem(psPool_t *pool, psX509Cert_t **cert, psPubKey_t *privKey,
         ipass is import password
         mpass is MAC password */
     ipassLen = (pLen * 2) + 2; /* 2 for each char put double 0x0 to terminate */
+    if (ipassLen > sizeof iwidePass)
+    {
+        psTraceCrypto("Password too long.\n");
+        rc = PS_AUTH_FAIL;
+        goto ERR_PARSE;
+    }
     Memset(iwidePass, 0x0, ipassLen);
     for (i = 1, j = 0; i < ipassLen - 1; i += 2, j++)
     {
@@ -1185,6 +1204,12 @@ int32 psPkcs12ParseMem(psPool_t *pool, psX509Cert_t **cert, psPubKey_t *privKey,
     if (integrity == PASSWORD_INTEGRITY)
     {
         mpassLen = (macPassLen * 2) + 2;
+        if (mpassLen > sizeof mwidePass)
+        {
+            psTraceCrypto("Password too long.\n");
+            rc = PS_AUTH_FAIL;
+            goto ERR_PARSE;
+        }
         Memset(mwidePass, 0x0, mpassLen);
         for (i = 1, j = 0; i < mpassLen - 1; i += 2, j++)
         {
@@ -1276,6 +1301,8 @@ int32 psPkcs12ParseMem(psPool_t *pool, psX509Cert_t **cert, psPubKey_t *privKey,
             if (Memcmp(digest, mac, SHA1_HASH_SIZE) != 0)
             {
                 psTraceCrypto("CAUTION: PKCS#12 MAC did not validate\n");
+                rc = PS_AUTH_FAIL;
+                goto ERR_PARSE;
             }
         }
         else
@@ -1334,28 +1361,28 @@ int32_t psPkcs5Pbkdf1(unsigned char *pass, uint32 passlen, unsigned char *salt,
 
     psAssert(iter == 1);
 
-    rc = psMd5Init(&md.md5);
+    rc = psMd5Init(&md.u.md5);
     if (rc != PS_SUCCESS)
     {
         psTraceCrypto("psMd5Init failed. Please ensure non-FIPS mode.\n");
         return rc;
     }
-    psMd5Update(&md.md5, pass, passlen);
-    psMd5Update(&md.md5, salt, 8);
-    psMd5Final(&md.md5, md5);
+    psMd5Update(&md.u.md5, pass, passlen);
+    psMd5Update(&md.u.md5, salt, 8);
+    psMd5Final(&md.u.md5, md5);
     Memcpy(key, md5, MD5_HASH_SIZE);
 
-    rc = psMd5Init(&md.md5);
+    rc = psMd5Init(&md.u.md5);
     if (rc != PS_SUCCESS)
     {
         psTraceCrypto("psMd5Init failed. Please ensure non-FIPS mode.\n");
         return rc;
     }
 
-    psMd5Update(&md.md5, md5, MD5_HASH_SIZE);
-    psMd5Update(&md.md5, pass, passlen);
-    psMd5Update(&md.md5, salt, 8);
-    psMd5Final(&md.md5, md5);
+    psMd5Update(&md.u.md5, md5, MD5_HASH_SIZE);
+    psMd5Update(&md.u.md5, pass, passlen);
+    psMd5Update(&md.u.md5, salt, 8);
+    psMd5Final(&md.u.md5, md5);
     Memcpy(key + MD5_HASH_SIZE, md5, 24 - MD5_HASH_SIZE);
 
     memset_s(md5, MD5_HASH_SIZE, 0x0, MD5_HASH_SIZE);
@@ -1547,46 +1574,24 @@ static int32 pkcs_1_mgf1(psPool_t *pool, const unsigned char *seed,
     uint32 counter;
     psDigestContext_t md;
     unsigned char *buf;
+    int32_t rc;
+    psResSize_t hLenTmp;
 
     if ((seed == NULL) || (mask == NULL))
     {
         return -1;
     }
     hLen = 0;
-/*
-    Get hash output size.  Index has already been verified by caller so
-    don't need 'else' error cases
- */
-    if (hash_idx == PKCS1_SHA1_ID)
+
+    /* Get hash output size. */
+    hLenTmp = psPssHashAlgToHashLen(hash_idx);
+    if (hLenTmp < 0)
     {
-        hLen = SHA1_HASH_SIZE;
-    }
-    else if (hash_idx == PKCS1_MD5_ID)
-    {
-        hLen = MD5_HASH_SIZE;
-# ifdef USE_SHA256
-    }
-    else if (hash_idx == PKCS1_SHA256_ID)
-    {
-        hLen = SHA256_HASH_SIZE;
-# endif
-# ifdef USE_SHA384
-    }
-    else if (hash_idx == PKCS1_SHA384_ID)
-    {
-        hLen = SHA384_HASH_SIZE;
-# endif
-# ifdef USE_SHA512
-    }
-    else if (hash_idx == PKCS1_SHA512_ID)
-    {
-        hLen = SHA512_HASH_SIZE;
-# endif
-    }
-    else
-    {
+        psTraceIntCrypto("Unsupported MGF hash alg: %d\n",
+                         hash_idx);
         return PS_UNSUPPORTED_FAIL;
     }
+    hLen = hLenTmp;
 
     buf = psMalloc(pool, hLen);
     if (buf == NULL)
@@ -1608,48 +1613,52 @@ static int32 pkcs_1_mgf1(psPool_t *pool, const unsigned char *seed,
 /*
         Get hash of seed || counter
  */
-        if (hash_idx == PKCS1_SHA1_ID)
+        switch (hash_idx)
         {
-            psSha1Init(&md.sha1);
-            psSha1Update(&md.sha1, seed, seedlen);
-            psSha1Update(&md.sha1, buf, 4);
-            psSha1Final(&md.sha1, buf);
+# ifdef USE_SHA1
+        case PKCS1_SHA1_ID:
+            psSha1Init(&md.u.sha1);
+            psSha1Update(&md.u.sha1, seed, seedlen);
+            psSha1Update(&md.u.sha1, buf, 4);
+            psSha1Final(&md.u.sha1, buf);
+            break;
+# endif
 # ifdef USE_MD5
-        }
-        else if (hash_idx == PKCS1_MD5_ID)
-        {
-            psMd5Init(&md.md5);
-            psMd5Update(&md.md5, seed, seedlen);
-            psMd5Update(&md.md5, buf, 4);
-            psMd5Final(&md.md5, buf);
+        case PKCS1_MD5_ID:
+            psMd5Init(&md.u.md5);
+            psMd5Update(&md.u.md5, seed, seedlen);
+            psMd5Update(&md.u.md5, buf, 4);
+            psMd5Final(&md.u.md5, buf);
+            break;
 # endif     /* USE_MD5 */
 # ifdef USE_SHA256
-        }
-        else if (hash_idx == PKCS1_SHA256_ID)
-        {
-            psSha256Init(&md.sha256);
-            psSha256Update(&md.sha256, seed, seedlen);
-            psSha256Update(&md.sha256, buf, 4);
-            psSha256Final(&md.sha256, buf);
+        case PKCS1_SHA256_ID:
+            psSha256Init(&md.u.sha256);
+            psSha256Update(&md.u.sha256, seed, seedlen);
+            psSha256Update(&md.u.sha256, buf, 4);
+            psSha256Final(&md.u.sha256, buf);
+            break;
 # endif
 # ifdef USE_SHA384
-        }
-        else if (hash_idx == PKCS1_SHA384_ID)
-        {
-            psSha384Init(&md.sha384);
-            psSha384Update(&md.sha384, seed, seedlen);
-            psSha384Update(&md.sha384, buf, 4);
-            psSha384Final(&md.sha384, buf);
+        case PKCS1_SHA384_ID:
+            psSha384Init(&md.u.sha384);
+            psSha384Update(&md.u.sha384, seed, seedlen);
+            psSha384Update(&md.u.sha384, buf, 4);
+            psSha384Final(&md.u.sha384, buf);
+            break;
 # endif
 # ifdef USE_SHA512
-        }
-        else if (hash_idx == PKCS1_SHA512_ID)
-        {
-            psSha512Init(&md.sha512);
-            psSha512Update(&md.sha512, seed, seedlen);
-            psSha512Update(&md.sha512, buf, 4);
-            psSha512Final(&md.sha512, buf);
+        case PKCS1_SHA512_ID:
+            psSha512Init(&md.u.sha512);
+            psSha512Update(&md.u.sha512, seed, seedlen);
+            psSha512Update(&md.u.sha512, buf, 4);
+            psSha512Final(&md.u.sha512, buf);
+            break;
 # endif
+        default:
+            psTraceCrypto("Unknown PSS MFG hash function\n");
+            rc = PS_UNSUPPORTED_FAIL;
+            goto out_fail;
         }
 
         /* store it */
@@ -1659,8 +1668,11 @@ static int32 pkcs_1_mgf1(psPool_t *pool, const unsigned char *seed,
         }
     }
 
+    rc = PS_SUCCESS;
+
+out_fail:
     psFree(buf, pool);
-    return PS_SUCCESS;
+    return rc;
 }
 #endif /* defined(USE_PKCS1_OAEP) || defined(USE_PKCS1_PSS) */
 
@@ -1772,16 +1784,16 @@ int32 psPkcs1OaepEncode(psPool_t *pool, const unsigned char *msg, uint32 msglen,
     {
         if (hash_idx == PKCS1_SHA1_ID)
         {
-            psSha1Init(&md.sha1);
-            psSha1Update(&md.sha1, lparam, lparamlen);
-            psSha1Final(&md.sha1, DB);
+            psSha1Init(&md.u.sha1);
+            psSha1Update(&md.u.sha1, lparam, lparamlen);
+            psSha1Final(&md.u.sha1, DB);
         }
 # ifdef USE_MD5
         else
         {
-            psMd5Init(&md.md5);
-            psMd5Update(&md.md5, lparam, lparamlen);
-            psMd5Final(&md.md5, DB);
+            psMd5Init(&md.u.md5);
+            psMd5Update(&md.u.md5, lparam, lparamlen);
+            psMd5Final(&md.u.md5, DB);
         }
 # endif /* USE_MD5 */
     }
@@ -1790,16 +1802,16 @@ int32 psPkcs1OaepEncode(psPool_t *pool, const unsigned char *msg, uint32 msglen,
         /* can't pass hash a NULL so use DB with zero length */
         if (hash_idx == PKCS1_SHA1_ID)
         {
-            psSha1Init(&md.sha1);
-            psSha1Update(&md.sha1, DB, 0);
-            psSha1Final(&md.sha1, DB);
+            psSha1Init(&md.u.sha1);
+            psSha1Update(&md.u.sha1, DB, 0);
+            psSha1Final(&md.u.sha1, DB);
         }
 # ifdef USE_MD5
         else
         {
-            psMd5Init(&md.md5);
-            psMd5Update(&md.md5, DB, 0);
-            psMd5Final(&md.md5, DB);
+            psMd5Init(&md.u.md5);
+            psMd5Update(&md.u.md5, DB, 0);
+            psMd5Final(&md.u.md5, DB);
         }
 # endif /* USE_MD5 */
     }
@@ -2076,16 +2088,16 @@ int32 psPkcs1OaepDecode(psPool_t *pool, const unsigned char *msg, uint32 msglen,
     {
         if (hash_idx == PKCS1_SHA1_ID)
         {
-            psSha1Init(&md.sha1);
-            psSha1Update(&md.sha1, lparam, lparamlen);
-            psSha1Final(&md.sha1, seed);
+            psSha1Init(&md.u.sha1);
+            psSha1Update(&md.u.sha1, lparam, lparamlen);
+            psSha1Final(&md.u.sha1, seed);
         }
 # ifdef USE_MD5
         else
         {
-            psMd5Init(&md.md5);
-            psMd5Update(&md.md5, lparam, lparamlen);
-            psMd5Final(&md.md5, seed);
+            psMd5Init(&md.u.md5);
+            psMd5Update(&md.u.md5, lparam, lparamlen);
+            psMd5Final(&md.u.md5, seed);
         }
 # endif /* USE_MD5 */
     }
@@ -2094,16 +2106,16 @@ int32 psPkcs1OaepDecode(psPool_t *pool, const unsigned char *msg, uint32 msglen,
         /* can't pass hash routine a NULL so use DB with zero length */
         if (hash_idx == PKCS1_SHA1_ID)
         {
-            psSha1Init(&md.sha1);
-            psSha1Update(&md.sha1, DB, 0);
-            psSha1Final(&md.sha1, seed);
+            psSha1Init(&md.u.sha1);
+            psSha1Update(&md.u.sha1, DB, 0);
+            psSha1Final(&md.u.sha1, seed);
         }
 # ifdef USE_MD5
         else
         {
-            psMd5Init(&md.md5);
-            psMd5Update(&md.md5, DB, 0);
-            psMd5Final(&md.md5, seed);
+            psMd5Init(&md.u.md5);
+            psMd5Update(&md.u.md5, DB, 0);
+            psMd5Final(&md.u.md5, seed);
         }
 # endif /* USE_MD5 */
     }
@@ -2190,6 +2202,7 @@ int32 psPkcs1PssEncode(psPool_t *pool, const unsigned char *msghash,
     uint32 x, y, hLen, modulus_len;
     int32 err;
     psDigestContext_t md;
+    psResSize_t hLenTmp;
 
     if ((msghash == NULL) || (out == NULL) || (outlen == NULL))
     {
@@ -2197,43 +2210,15 @@ int32 psPkcs1PssEncode(psPool_t *pool, const unsigned char *msghash,
         return PS_ARG_FAIL;
     }
 
-    if (hash_idx == PKCS1_SHA1_ID)
+    /* Get hash output size. */
+    hLenTmp = psPssHashAlgToHashLen(hash_idx);
+    if (hLenTmp < 0)
     {
-        hLen = SHA1_HASH_SIZE;
-    }
-    else if (hash_idx == PKCS1_MD5_ID)
-    {
-# ifdef USE_MD5
-        hLen = MD5_HASH_SIZE;
-# else
-        psTraceCrypto("MD5 not supported in this build.");
-        psTraceCrypto(" Please enable USE_MD5\n");
+        psTraceIntCrypto("Unsupported MGF hash alg: %d\n",
+                         hash_idx);
         return PS_UNSUPPORTED_FAIL;
-# endif /* USE_MD5 */
     }
-# ifdef USE_SHA256
-    else if (hash_idx == PKCS1_SHA256_ID)
-    {
-        hLen = SHA256_HASH_SIZE;
-    }
-# endif
-# ifdef USE_SHA384
-    else if (hash_idx == PKCS1_SHA384_ID)
-    {
-        hLen = SHA384_HASH_SIZE;
-    }
-# endif
-# ifdef USE_SHA512
-    else if (hash_idx == PKCS1_SHA512_ID)
-    {
-        hLen = SHA512_HASH_SIZE;
-    }
-# endif
-    else
-    {
-        psTraceStrCrypto("Bad hash index to PSS encode\n", NULL);
-        return PS_ARG_FAIL;
-    }
+    hLen = hLenTmp;
 
     modulus_len = (modulus_bitlen >> 3) + (modulus_bitlen & 7 ? 1 : 0);
 
@@ -2285,54 +2270,58 @@ int32 psPkcs1PssEncode(psPool_t *pool, const unsigned char *msghash,
     }
 
     /* M = (eight) 0x00 || msghash || salt, hash = H(M) */
-    if (hash_idx == PKCS1_SHA1_ID)
+    switch (hash_idx)
     {
-        psSha1Init(&md.sha1);
-        psSha1Update(&md.sha1, DB, 8); /* 8 0's */
-        psSha1Update(&md.sha1, msghash, msghashlen);
-        psSha1Update(&md.sha1, salt, saltlen);
-        psSha1Final(&md.sha1, hash);
-    }
+# ifdef USE_SHA1
+    case PKCS1_SHA1_ID:
+        psSha1Init(&md.u.sha1);
+        psSha1Update(&md.u.sha1, DB, 8); /* 8 0's */
+        psSha1Update(&md.u.sha1, msghash, msghashlen);
+        psSha1Update(&md.u.sha1, salt, saltlen);
+        psSha1Final(&md.u.sha1, hash);
+        break;
+# endif
 # ifdef USE_MD5
-    if (hash_idx == PKCS1_MD5_ID)
-    {
-        psMd5Init(&md.md5);
-        psMd5Update(&md.md5, DB, 8); /* 8 0's */
-        psMd5Update(&md.md5, msghash, msghashlen);
-        psMd5Update(&md.md5, salt, saltlen);
-        psMd5Final(&md.md5, hash);
-    }
+    case PKCS1_MD5_ID:
+        psMd5Init(&md.u.md5);
+        psMd5Update(&md.u.md5, DB, 8); /* 8 0's */
+        psMd5Update(&md.u.md5, msghash, msghashlen);
+        psMd5Update(&md.u.md5, salt, saltlen);
+        psMd5Final(&md.u.md5, hash);
+        break;
 # endif /* USE_MD5 */
 # ifdef USE_SHA256
-    if (hash_idx == PKCS1_SHA256_ID)
-    {
-        psSha256Init(&md.sha256);
-        psSha256Update(&md.sha256, DB, 8); /* 8 0's */
-        psSha256Update(&md.sha256, msghash, msghashlen);
-        psSha256Update(&md.sha256, salt, saltlen);
-        psSha256Final(&md.sha256, hash);
-    }
+    case PKCS1_SHA256_ID:
+        psSha256Init(&md.u.sha256);
+        psSha256Update(&md.u.sha256, DB, 8); /* 8 0's */
+        psSha256Update(&md.u.sha256, msghash, msghashlen);
+        psSha256Update(&md.u.sha256, salt, saltlen);
+        psSha256Final(&md.u.sha256, hash);
+        break;
 # endif
 # ifdef USE_SHA384
-    if (hash_idx == PKCS1_SHA384_ID)
-    {
-        psSha384Init(&md.sha384);
-        psSha384Update(&md.sha384, DB, 8); /* 8 0's */
-        psSha384Update(&md.sha384, msghash, msghashlen);
-        psSha384Update(&md.sha384, salt, saltlen);
-        psSha384Final(&md.sha384, hash);
-    }
+    case PKCS1_SHA384_ID:
+        psSha384Init(&md.u.sha384);
+        psSha384Update(&md.u.sha384, DB, 8); /* 8 0's */
+        psSha384Update(&md.u.sha384, msghash, msghashlen);
+        psSha384Update(&md.u.sha384, salt, saltlen);
+        psSha384Final(&md.u.sha384, hash);
+        break;
 # endif
 # ifdef USE_SHA512
-    if (hash_idx == PKCS1_SHA512_ID)
-    {
-        psSha512Init(&md.sha512);
-        psSha512Update(&md.sha512, DB, 8); /* 8 0's */
-        psSha512Update(&md.sha512, msghash, msghashlen);
-        psSha512Update(&md.sha512, salt, saltlen);
-        psSha512Final(&md.sha512, hash);
-    }
+    case PKCS1_SHA512_ID:
+        psSha512Init(&md.u.sha512);
+        psSha512Update(&md.u.sha512, DB, 8); /* 8 0's */
+        psSha512Update(&md.u.sha512, msghash, msghashlen);
+        psSha512Update(&md.u.sha512, salt, saltlen);
+        psSha512Final(&md.u.sha512, hash);
+        break;
 # endif
+    default:
+        psTraceIntCrypto("Unsupported PSS MFG alg: %d\n", hash_idx);
+        err = PS_UNSUPPORTED_FAIL;
+        goto LBL_ERR;
+    }
 
     /* generate DB = PS || 0x01 || salt
         PS == modulus_len - saltlen - hLen - 2 zero bytes */
@@ -2412,6 +2401,7 @@ int32 psPkcs1PssDecode(psPool_t *pool, const unsigned char *msghash,
     uint32 x, y, hLen, modulus_len;
     int32 err;
     psDigestContext_t md;
+    psResSize_t hLenTmp;
 
     if ((msghash == NULL) || (res == NULL))
     {
@@ -2422,43 +2412,15 @@ int32 psPkcs1PssDecode(psPool_t *pool, const unsigned char *msghash,
     /* default to invalid */
     *res = 0;
 
-    if (hash_idx == PKCS1_SHA1_ID)
+    /* Get hash output size. */
+    hLenTmp = psPssHashAlgToHashLen(hash_idx);
+    if (hLenTmp < 0)
     {
-        hLen = SHA1_HASH_SIZE;
-    }
-    else if (hash_idx == PKCS1_MD5_ID)
-    {
-# ifdef USE_MD5
-        hLen = MD5_HASH_SIZE;
-# else
-        psTraceCrypto("MD5 not supported in this build.");
-        psTraceCrypto(" Please enable USE_MD5\n");
+        psTraceIntCrypto("Unsupported MGF hash alg: %d\n",
+                         hash_idx);
         return PS_UNSUPPORTED_FAIL;
-# endif /* USE_MD5 */
-# ifdef USE_SHA256
     }
-    else if (hash_idx == PKCS1_SHA256_ID)
-    {
-        hLen = SHA256_HASH_SIZE;
-# endif
-# ifdef USE_SHA384
-    }
-    else if (hash_idx == PKCS1_SHA384_ID)
-    {
-        hLen = SHA384_HASH_SIZE;
-# endif
-# ifdef USE_SHA512
-    }
-    else if (hash_idx == PKCS1_SHA512_ID)
-    {
-        hLen = SHA512_HASH_SIZE;
-# endif
-    }
-    else
-    {
-        psTraceStrCrypto("Bad hash index to PSS decode\n", NULL);
-        return PS_ARG_FAIL;
-    }
+    hLen = hLenTmp;
 
     modulus_len = (modulus_bitlen >> 3) + (modulus_bitlen & 7 ? 1 : 0);
 
@@ -2553,60 +2515,64 @@ int32 psPkcs1PssDecode(psPool_t *pool, const unsigned char *msghash,
     }
 
     /* M = (eight) 0x00 || msghash || salt, mask = H(M) */
-    if (hash_idx == PKCS1_SHA1_ID)
+    switch (hash_idx)
     {
-        psSha1Init(&md.sha1);
+# ifdef USE_SHA1
+    case PKCS1_SHA1_ID:
+        psSha1Init(&md.u.sha1);
         Memset(mask, 0x0, 8);
-        psSha1Update(&md.sha1, mask, 8);
-        psSha1Update(&md.sha1, msghash, msghashlen);
-        psSha1Update(&md.sha1, DB + x, saltlen);
-        psSha1Final(&md.sha1, mask);
-    }
+        psSha1Update(&md.u.sha1, mask, 8);
+        psSha1Update(&md.u.sha1, msghash, msghashlen);
+        psSha1Update(&md.u.sha1, DB + x, saltlen);
+        psSha1Final(&md.u.sha1, mask);
+        break;
+# endif
 # ifdef USE_MD5
-    if (hash_idx == PKCS1_MD5_ID)
-    {
-        psMd5Init(&md.md5);
+    case PKCS1_MD5_ID:
+        psMd5Init(&md.u.md5);
         Memset(mask, 0x0, 8);
-        psMd5Update(&md.md5, mask, 8);
-        psMd5Update(&md.md5, msghash, msghashlen);
-        psMd5Update(&md.md5, DB + x, saltlen);
-        psMd5Final(&md.md5, mask);
-    }
+        psMd5Update(&md.u.md5, mask, 8);
+        psMd5Update(&md.u.md5, msghash, msghashlen);
+        psMd5Update(&md.u.md5, DB + x, saltlen);
+        psMd5Final(&md.u.md5, mask);
+        break;
 # endif /* USE_MD5 */
-
 # ifdef USE_SHA256
-    if (hash_idx == PKCS1_SHA256_ID)
-    {
-        psSha256Init(&md.sha256);
+    case PKCS1_SHA256_ID:
+        psSha256Init(&md.u.sha256);
         Memset(mask, 0x0, 8);
-        psSha256Update(&md.sha256, mask, 8);
-        psSha256Update(&md.sha256, msghash, msghashlen);
-        psSha256Update(&md.sha256, DB + x, saltlen);
-        psSha256Final(&md.sha256, mask);
-    }
+        psSha256Update(&md.u.sha256, mask, 8);
+        psSha256Update(&md.u.sha256, msghash, msghashlen);
+        psSha256Update(&md.u.sha256, DB + x, saltlen);
+        psSha256Final(&md.u.sha256, mask);
+        break;
 # endif
 # ifdef USE_SHA384
-    if (hash_idx == PKCS1_SHA384_ID)
-    {
-        psSha384Init(&md.sha384);
+    case PKCS1_SHA384_ID:
+        psSha384Init(&md.u.sha384);
         Memset(mask, 0x0, 8);
-        psSha384Update(&md.sha384, mask, 8);
-        psSha384Update(&md.sha384, msghash, msghashlen);
-        psSha384Update(&md.sha384, DB + x, saltlen);
-        psSha384Final(&md.sha384, mask);
-    }
+        psSha384Update(&md.u.sha384, mask, 8);
+        psSha384Update(&md.u.sha384, msghash, msghashlen);
+        psSha384Update(&md.u.sha384, DB + x, saltlen);
+        psSha384Final(&md.u.sha384, mask);
+        break;
 # endif
 # ifdef USE_SHA512
-    if (hash_idx == PKCS1_SHA512_ID)
-    {
-        psSha512Init(&md.sha512);
+    case PKCS1_SHA512_ID:
+        psSha512Init(&md.u.sha512);
         Memset(mask, 0x0, 8);
-        psSha512Update(&md.sha512, mask, 8);
-        psSha512Update(&md.sha512, msghash, msghashlen);
-        psSha512Update(&md.sha512, DB + x, saltlen);
-        psSha512Final(&md.sha512, mask);
-    }
+        psSha512Update(&md.u.sha512, mask, 8);
+        psSha512Update(&md.u.sha512, msghash, msghashlen);
+        psSha512Update(&md.u.sha512, DB + x, saltlen);
+        psSha512Final(&md.u.sha512, mask);
+        break;
 # endif
+    default:
+        psTraceIntCrypto("Unsupported PSS MFG hash alg: %d\n",
+                hash_idx);
+        err = PS_UNSUPPORTED_FAIL;
+        goto LBL_ERR;
+    }
 
     /* mask == hash means valid signature */
     if (Memcmp(mask, hash, hLen) == 0)

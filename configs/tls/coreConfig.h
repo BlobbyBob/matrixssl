@@ -41,60 +41,9 @@
 /******************************************************************************/
 
 /**
-    Select tracing facility.
-    Default: Use psLogf, which is used in all of MatrixSSL, CL etc. and
-    allows log redirection.
-
-    On the smallest embedded targets platform using PS_NO_LOGF may provide
-    footprint benefits but will limit logging capabilities.
- */
- 
-/* Uncomment to use previous generation logging facility: */
-/* #define PS_NO_LOGF */
-
-/* When using psLogf, logging messages by default go to the binary, but
-   they are not shown unless enabled by environment variables or
-   filter loaded with psLogfSetHookEnabledCheck() function.
-
-   Enable macros below to completely remove specified logging class. */
-/* #define PS_NO_LOGF_FATAL */
-/* #define PS_NO_LOGF_ERROR */
-/* #define PS_NO_LOGF_WARNING */
-/* #define PS_NO_LOGF_INFO */
-/* #define PS_NO_LOGF_VERBOSE */
-/* #define PS_NO_LOGF_DEBUG */
-/* #define PS_NO_LOGF_TRACE */
-/* #define PS_NO_LOGF_CALL_TRACE */
-
-/* MatrixSSL contains extensive tracing capabilities. The lines below
-   disable trace and call trace message levels, unless debug build.
-   Omitting the messages will improve performance and create smaller
-   executables with a degradation in debugging capabilities. */
-#  ifndef DEBUG
-#   ifndef PS_NO_LOGF_TRACE
-#    define PS_NO_LOGF_TRACE
-#   endif
-#   ifndef PS_NO_LOGF_CALL_TRACE
-#    define PS_NO_LOGF_CALL_TRACE
-#   endif
-#  endif
-
-/* File and line information consumes some storage and may reveal details on
-   structure of software. This information is omitted from production builds,
-   but included within "debug build". If you want to include file and line
-   information also on production builds, disable the lines below. */
-#  ifndef DEBUG
-#   ifndef  PS_NO_LOGF_FILELINE
-#    define PS_NO_LOGF_FILELINE
-#   endif
-#  endif
-
-/**
     Enable various levels of trace.
     When these option is turned off, messages are silently
     discarded and their text does not take space in the binary image.
-    Note: These are legacy configuration, and it is recommended to use
-    PS_NO_LOGF_* above, unless PS_NO_LOGF is set.
  */
 /* #define USE_CORE_TRACE */
 #  ifndef NO_CORE_ERROR
@@ -103,6 +52,16 @@
 #  ifndef NO_CORE_ASSERT
 #   define USE_CORE_ASSERT
 #  endif
+
+/** Allow target file of psTrace output to be chosen with the
+    PSCORE_DEBUG_FILE and PSCORE_DEBUG_FILE_APPEND environment variables.
+    By default, stdout is used. Disable to minimize footprint. */
+/* #define USE_TRACE_FILE */
+
+/** Experimental, extensible logging facility. Only used by the SL/CL
+    crypto libraries; not used by the TLS library. Disable to minimize
+    footprint. */
+/* #define PS_LOGF */
 
 /******************************************************************************/
 /* Other Configurable features */
@@ -115,6 +74,11 @@
 #  ifdef DEBUG
 /* #define HALT_ON_PS_ERROR  *//* NOT RECOMMENDED FOR PRODUCTION BUILDS */
 #  endif
+
+/** Enable to disable file IO related APIs, such as psGetFileBuf
+    and psParseCertFile. This helps to minimize footprint when no file IO
+    is needed. */
+/* #define NO_FILE_SYSTEM */
 
 /**
     Include the psCoreOsdepMutex family of APIs

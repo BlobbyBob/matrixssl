@@ -326,6 +326,12 @@ int32_t tls13WriteSigAlgs(ssl_t *ssl,
         goto out_internal_error;
     }
 
+    psTracePrintTls13SigAlgList(INDENT_EXTENSION,
+            "signature_algorithms",
+            sigAlgs,
+            sigAlgsLen,
+            PS_TRUE);
+
     extType[0] = 0;
     extType[1] = extensionType;
 
@@ -745,6 +751,9 @@ int32_t tls13WritePskIdentity(ssl_t *ssl,
     {
         psDynBufAppendOctets(pskBuf, zero, 4);
     }
+
+    ssl->sec.tls13DidEncodePsk = PS_TRUE;
+
     return PS_SUCCESS;
 }
 
@@ -897,7 +906,7 @@ int32_t tls13WritePreSharedKey(ssl_t *ssl,
           };
       } PreSharedKeyExtension;
     */
-    if (IS_SERVER(ssl))
+    if (MATRIX_IS_SERVER(ssl))
     {
         psDynBufAppendAsBigEndianUint16(&pskBuf,
                 ssl->sec.tls13SelectedIdentityIndex);
@@ -992,7 +1001,7 @@ int32_t tls13WriteCookie(ssl_t *ssl,
     psDynBufAppendOctets(extBuf, extensionType, 2);
     psDynBufInit(ssl->hsPool, &cookieBuf, 48);
 
-    if (IS_SERVER(ssl))
+    if (MATRIX_IS_SERVER(ssl))
     {
         psAssert(isHelloRetryRequest);
 
@@ -1036,7 +1045,7 @@ int32_t tls13WriteCookie(ssl_t *ssl,
             extensionDataLen);
 
 # ifdef DEBUG_TLS_1_3_ENCODE_EXTENSIONS
-    if (IS_SERVER(ssl))
+    if (MATRIX_IS_SERVER(ssl))
     {
         psTraceBytes("Encoded HelloRetryRequest.cookie",
                 cookie,
@@ -1264,7 +1273,7 @@ int32_t tls13WriteOCSPStatusRequest(ssl_t *ssl,
 
     psDynBufAppendOctets(extBuf, extensionType, 2);
 
-    if (IS_SERVER(ssl))
+    if (MATRIX_IS_SERVER(ssl))
     {
 #  ifdef USE_SERVER_SIDE_SSL
         /* Server sends the stored OCSPResponse. */

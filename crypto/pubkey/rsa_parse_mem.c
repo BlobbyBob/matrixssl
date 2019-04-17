@@ -71,10 +71,10 @@ int32_t psRsaParseAsnPubKey(psPool_t *pool,
         Standard RSA form - SHA-1 hash of the value of the BIT STRING
         subjectPublicKey [excluding the tag, length, and number of unused
         bits] */
-    psSha1PreInit(&dc.sha1);
-    psSha1Init(&dc.sha1);
-    psSha1Update(&dc.sha1, p, keylen - 1);
-    psSha1Final(&dc.sha1, sha1KeyHash);
+    psSha1PreInit(&dc.u.sha1);
+    psSha1Init(&dc.u.sha1);
+    psSha1Update(&dc.u.sha1, p, keylen - 1);
+    psSha1Final(&dc.u.sha1, sha1KeyHash);
 # endif
 
     if (getAsnSequence(&p, keylen, &seqlen) < 0)

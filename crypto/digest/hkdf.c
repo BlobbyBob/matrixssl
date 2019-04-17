@@ -36,7 +36,6 @@
 #ifdef USE_HKDF
 
 #define HKDF_MAX_INFO_LEN 80
-#define MIN(a, b) ((a) < (b) ? (a) : (b))
 //#define DEBUG_HKDF
 
 int32_t psHkdfExpand(psCipherType_e hmacAlg,

@@ -3,6 +3,63 @@
 MATRIXSSL 4.X CHANGELOG
 
 
+Changes between 4.0.2 and 4.1.0 [April 2019]
+
+-   TLS:
+
+    -   (RoT Edition only): Added support for Inside Secure
+        VaultIP (Root-of-Trust) crypto provider.
+
+    -   Improved the separation of private and public TLS header files
+        for better private-public separation. The public headers now of
+        the form matrixsslApi*.h, while private headers are of the
+        form matrixssllib_*.h.
+
+    -   Added client-side support for X25519 in TLS 1.2.
+
+    -   Added client-side support for RSASSA-PSS signatures in TLS 1.2.
+
+    -   Added support for RSASSA-PSS key/cert pairs.
+
+    -   Fix vulnerabilities reported by Robert Święcki (discovered using
+        Hongfuzzer): a server-side heap buffer read overflow when
+        parsing maliciously crafted ClientHello extensions and a
+        segfault in TLS 1.2 GCM decryption of maliciously crafted
+        records with small ciphertext.
+
+    -   Added the simpleClient.c and simpleServer.c
+        example applications. These are intended as minimalistic
+        examples of how to use the top-level TLS API.
+
+    -   Fixed bugs in matrixSslSessOptsServerTlsVersionRange
+        and matrixSslSessOptsClientTlsVersionRange.
+
+    -   Fixed bug that caused non-insitu app data encryption to fail in
+        tls13EncodeAppData when using the matrixSslEncodeToOutdata API
+        instead of the more standard matrixSslGetWriteBuf +
+        matrixSslEncodeWritebuf pattern.
+
+    -   Added new minimal example configurations: tls12-minimal,
+        tls12-minimal-client-ecc, tls13-minimal,
+        tls13-minimal-client-ecc
+
+    -   When performing TLS 1.2 renegotiation, re-send the original
+        ClientHello cipher list.
+
+    -   Added the USE_LENIENT_TLS_RECORD_VERSION_MATCHING
+        compatibility option.
+
+
+Changes between 4.0.1 and 4.0.2 [February 2019]
+
+This version fixes a critical vulnerability in RSA signature
+verification. A maliciously crafted certificate can be used to trigger a
+stack buffer overflow, allowing potential remote code execution attacks.
+The vulnerability only affects version 4.0.1 and the standard Matrix
+Crypto provider. Other providers, such as the FIPS crypto provider, are
+not affected by the bug. Thanks to Tavis Ormandy for reporting this.
+
+
 Changes between 4.0.0 and 4.0.1 [November 2018]
 
 This version improves the security of RSA PKCS #1.5 signature

@@ -38,6 +38,9 @@
 # include "../cryptoApi.h"
 #endif /* _h_PS_CRYPTOAPI */
 
+/* Provide deprecation warnings for using deprecated functions. */
+#include "pscompilerdep.h"
+
 #ifndef _h_PS_ASN1
 # define _h_PS_ASN1
 
@@ -106,10 +109,31 @@ extern int32_t getAsnOID(const unsigned char **pp, psSizeL_t size,
 			 uint8_t checkForParams, psSize_t *paramLen);
 
 # define MAX_OID_LEN     16     /**< Maximum number of segments in OID */
+# define MAX_OID_BYTES   32     /**< Maximum number of bytes in OID. */
+# define MAX_OID_PRINTED_LEN_NAMED 64 /* Maximum length of known OID in
+                                         printed form. */
+# define MAX_OID_PRINTED_LEN_BYTES (4 * MAX_OID_BYTES) /* Maximum length of
+                                                          unknown OIDs. */
+# define MAX_OID_PRINTED_LEN                                            \
+    ((MAX_OID_PRINTED_LEN_NAMED) > (MAX_OID_PRINTED_LEN_BYTES) ?        \
+     (MAX_OID_PRINTED_LEN_NAMED) : (MAX_OID_PRINTED_LEN_BYTES))
+
+typedef uint8_t psAsnOid_t[MAX_OID_BYTES];
 
 extern uint8_t asnParseOid(const unsigned char *der, psSizeL_t derlen,
-                           uint32_t oid[MAX_OID_LEN]);
+                           uint32_t oid[MAX_OID_LEN]) PSDEPRECATED_WARN;
 
+/* Copy Oid / Store Oid for later use. */
+extern uint8_t asnCopyOid(const unsigned char *der, psSizeL_t derlen,
+                          psAsnOid_t oid);
+
+/* Get length of ASN.1 OID as an DER encoded byte sequence.
+   Will return 0 for failure. */
+extern psSizeL_t asnOidLenBytes(psAsnOid_t oid);
+
+/* Get length of ASN.1 OID as numbers (or 0 for failure).
+   Will return 0 for failure. */
+extern uint8_t asnOidLenSegments(psAsnOid_t oid);
 
 /* Format OID tag as string for printing. */
 extern char *asnFormatOid(psPool_t *pool,
@@ -123,6 +147,16 @@ extern char *asnFormatDer(psPool_t *pool,
                           size_t MaxDepth,
                           size_t MaxElementOutput,
                           unsigned char Flags);
+
+/* Format psAsnOid_t in dotted notation to provided character array.
+   Returns a pointer to the array for convenience.
+
+   The function is able to provide symbolic name for some X.509 OIDs.
+
+   Note: This function is implemented by x509.c, but described here as
+   logically the function belongs with the rest of ASN.1 decoding. */
+const char *psSprintAsnOid(psAsnOid_t oid,
+                           char out[MAX_OID_PRINTED_LEN]);
 
 /******************************************************************************/
 

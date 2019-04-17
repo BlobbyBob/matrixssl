@@ -75,7 +75,7 @@ uint16_t tls13ChooseSigAlg(ssl_t *ssl,
         {
             psTraceIntInfo("Unsupported pubkey algorithm in our cert: %d\n",
                            pubKeyAlg);
-            return PS_UNSUPPORTED_FAIL;
+            return 0;
         }
 # else
         /* If not having USE_CERT_PARSE, we'll need to have just one
@@ -153,7 +153,7 @@ uint16_t tls13ChooseSigAlg(ssl_t *ssl,
             {
                 psTraceInfo("tls13ChooseSigAlg: Priv key does not match " \
                             "the type of public key in cert\n");
-                return PS_UNSUPPORTED_FAIL;
+                return 0;
             }
 #   else
             /* We can do PSS with RSAE, but not the otherway around, so
@@ -201,7 +201,7 @@ uint16_t tls13ChooseSigAlg(ssl_t *ssl,
         /* or try the next key */
     }
     psTraceErrr("Unable to negotiate signature algorithm\n");
-    return PS_FAILURE;
+    return 0;
 }
 
 static int32_t tls13MakeTbs(psPool_t *pool,
@@ -426,58 +426,52 @@ int32_t tls13Verify(psPool_t *pool,
 
     /* Translate TLS 1.3 signature algorithm encoding to what
        our crypto layer uses. */
-#  ifdef USE_ECC
-    if (sigAlg == sigalg_ecdsa_secp256r1_sha256)
+    switch (sigAlg)
     {
+#  ifdef USE_ECC
+    case sigalg_ecdsa_secp256r1_sha256:
         cryptoLayerSigAlg = OID_SHA256_ECDSA_SIG;
         psAssert(pubKey->key.ecc.curve->curveId == IANA_SECP256R1);
-    }
-    else if (sigAlg == sigalg_ecdsa_secp384r1_sha384)
-    {
+        break;
+    case sigalg_ecdsa_secp384r1_sha384:
         cryptoLayerSigAlg = OID_SHA384_ECDSA_SIG;
         psAssert(pubKey->key.ecc.curve->curveId == IANA_SECP384R1);
-    }
-    else if (sigAlg == sigalg_ecdsa_secp521r1_sha512)
-    {
+        break;
+    case sigalg_ecdsa_secp521r1_sha512:
         cryptoLayerSigAlg = OID_SHA512_ECDSA_SIG;
         psAssert(pubKey->key.ecc.curve->curveId == IANA_SECP521R1);
-    }
+        break;
 #  endif
 #  ifdef USE_RSA
-    else if (sigAlg == sigalg_rsa_pss_pss_sha256 ||
-            sigAlg == sigalg_rsa_pss_rsae_sha256)
-    {
+    case sigalg_rsa_pss_pss_sha256:
+    case sigalg_rsa_pss_rsae_sha256:
         cryptoLayerSigAlg = OID_SHA256_RSA_SIG;
         opts.rsaPssHashAlg = PKCS1_SHA256_ID;
         opts.rsaPssSaltLen = SHA256_HASH_SIZE;
         opts.useRsaPss = PS_TRUE;
-    }
-    else if (sigAlg == sigalg_rsa_pss_pss_sha384 ||
-            sigAlg == sigalg_rsa_pss_rsae_sha384)
-    {
+        break;
+    case sigalg_rsa_pss_pss_sha384:
+    case sigalg_rsa_pss_rsae_sha384:
         cryptoLayerSigAlg = OID_SHA384_RSA_SIG;
         opts.rsaPssHashAlg = PKCS1_SHA384_ID;
         opts.rsaPssSaltLen = SHA384_HASH_SIZE;
         opts.useRsaPss = PS_TRUE;
-    }
-    else if (sigAlg == sigalg_rsa_pss_pss_sha512 ||
-            sigAlg == sigalg_rsa_pss_rsae_sha512)
-    {
+        break;
+    case sigalg_rsa_pss_pss_sha512:
+    case sigalg_rsa_pss_rsae_sha512:
         cryptoLayerSigAlg = OID_SHA512_RSA_SIG;
         opts.rsaPssHashAlg = PKCS1_SHA512_ID;
         opts.rsaPssSaltLen = SHA512_HASH_SIZE;
         opts.useRsaPss = PS_TRUE;
-    }
+        break;
 #  endif
 #ifdef USE_ED25519
-    else if (sigAlg == sigalg_ed25519)
-    {
+    case sigalg_ed25519:
         cryptoLayerSigAlg = OID_ED25519_KEY_ALG;
         psAssert(pubKey->type == PS_ED25519);
-    }
+        break;
 #endif
-    else
-    {
+    default:
         psTraceIntInfo("Unsupported sig alg in tls13Verify: %u\n",
                 sigAlg);
         psFree(tbs, pool);
@@ -580,6 +574,10 @@ psBool_t tls13RequiresPreHash(uint16_t alg)
 # ifdef USE_RSA
     else if (tls13IsRsaPssSigAlg(alg))
     {
+#  ifdef USE_ROT_RSA
+        /* crypto-rot does not support pre-hash currently. */
+        return PS_FALSE;
+#  endif
 #  ifdef USE_CL_RSA
         /* Crypto-cl cannot sign pre-hashed data with PSS.
            So we shall sign the original message instead. */
@@ -591,6 +589,10 @@ psBool_t tls13RequiresPreHash(uint16_t alg)
 # endif /* USE_RSA */
     else
     {
+#  ifdef USE_ROT_ECC
+        /* crypto-rot does not support pre-hash currently. */
+        return PS_FALSE;
+#  endif
         return PS_TRUE;
     }
 }

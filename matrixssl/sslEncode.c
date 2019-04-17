@@ -5,7 +5,7 @@
  *      Secure Sockets Layer protocol message encoding portion of MatrixSSL.
  */
 /*
- *      Copyright (c) 2013-2018 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2019 INSIDE Secure Corporation
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -33,6 +33,10 @@
 /******************************************************************************/
 
 #include "matrixsslImpl.h"
+
+#ifdef USE_ROT_CRYPTO
+#  include "../crypto-rot/rotCommon.h"
+#endif
 
 /******************************************************************************/
 
@@ -149,7 +153,7 @@ int32 matrixSslEncode(ssl_t *ssl, unsigned char *buf, uint32 size,
     if (ssl->flags & SSL_FLAGS_ERROR || ssl->hsState != SSL_HS_DONE ||
         ssl->flags & SSL_FLAGS_CLOSED)
     {
-        psTraceInfo("Bad SSL state for matrixSslEncode call attempt: ");
+        psTraceErrr("Bad SSL state for matrixSslEncode call attempt: ");
         psTracePrintSslFlags(ssl->flags);
         psTracePrintHsState(ssl->hsState, PS_TRUE);
         return MATRIXSSL_ERROR;
@@ -529,7 +533,7 @@ int accountForEcdsaSizeChange(ssl_t *ssl,
             and 3 byte offset */
         if (Memcmp(msgLenLoc, msgLenLoc + 8, 3) != 0)
         {
-            psTraceInfo("ERROR: ECDSA SKE DTLS fragmentation unsupported\n");
+            psTraceErrr("ERROR: ECDSA SKE DTLS fragmentation unsupported\n");
             return MATRIXSSL_ERROR;
         }
     }
@@ -638,6 +642,12 @@ psResSize_t calcCkeSize(ssl_t *ssl)
 #   ifdef USE_ECC_CIPHER_SUITE
         if ((ssl->flags & SSL_FLAGS_ECC_CIPHER) != 0)
         {
+#    ifdef USE_X25519
+            if (ssl->sec.peerCurveId == namedgroup_x25519)
+            {
+                return PS_DH_X25519_PUBLIC_KEY_BYTES + 1;
+            }
+#    endif
             return (ssl->sec.eccKeyPriv->curve->size * 2) + 2;
         }
 #   endif /* USE_ECC_CIPHER_SUITE */
@@ -746,6 +756,20 @@ static int32 nowDoCkePka(ssl_t *ssl)
             psAssert(pka->outbuf == ssl->sec.premaster);
             if (pka->type == PKA_AFTER_ECDH_SECRET_GEN)
             {
+#    ifdef USE_X25519
+                if (ssl->sec.peerCurveId == namedgroup_x25519)
+                {
+                    rc = psDhX25519GenSharedSecret(ssl->sec.x25519KeyPub,
+                            ssl->sec.x25519KeyPriv.priv,
+                            ssl->sec.premaster);
+                    if (rc < 0)
+                    {
+                        return rc;
+                    }
+                    ssl->sec.premasterSize = PS_DH_X25519_SHARED_SECRET_BYTES;
+                    goto gen_premaster_done;
+                }
+#    endif
                 if ((rc = psEccGenSharedSecret(ssl->sec.eccDhKeyPool,
                          ssl->sec.eccKeyPriv, ssl->sec.eccKeyPub,
                          ssl->sec.premaster, &ssl->sec.premasterSize,
@@ -1045,7 +1069,7 @@ if (g_reusePreLen == 0)
 #   endif      /* USE_DTLS */
     clearPkaAfter(ssl);
 #  else /* RSA is the 'default' so if that didn't get hit there is a problem */
-    psTraceInfo("There is no handler for writeClientKeyExchange.  ERROR\n");
+    psTraceErrr("There is no handler for writeClientKeyExchange.  ERROR\n");
     return MATRIXSSL_ERROR;
 #  endif /* USE_RSA_CIPHER_SUITE */
 
@@ -1057,6 +1081,10 @@ if (g_reusePreLen == 0)
 #  ifdef USE_DHE_CIPHER_SUITE
 }
 #  endif /* USE_DHE_CIPHER_SUITE */
+
+#  ifdef USE_X25519
+gen_premaster_done:
+#  endif
 
 /*
     Now that we've got the premaster secret, derive the various symmetric
@@ -1319,7 +1347,7 @@ ok:
                 certReqLen += 1; /* Add on ECDSA_SIGN support */
 #     endif /* USE_ECC */
 #    else
-                psTraceInfo("No server CAs loaded for client authentication\n");
+                psTraceErrr("No server CAs loaded for client authentication\n");
                 return MATRIXSSL_ERROR;
 #    endif
             }
@@ -2410,6 +2438,8 @@ resumeFlightEncryption:
                 rc = nowDoCkePka(ssl);
                 if (rc < 0)
                 {
+                    psTraceErrr("nowDoCkePka failed\n");
+                    psTraceIntInfo("nowDoCkePka returned: %d\n", rc);
                     return rc;
                 }
         }
@@ -2452,8 +2482,8 @@ int32_t processFinished(ssl_t *ssl, flightEncode_t *msg)
     {
         if (msg->hsMsg == SSL_HS_FINISHED)
         {
-            /*      Epoch is incremented and the sequence numbers are reset for
-                    this message */
+            /* Epoch is incremented and the sequence numbers are reset for
+               this message */
             incrTwoByte(ssl, ssl->epoch, 1);
             zeroSixByte(ssl->rsn);
         }
@@ -2483,7 +2513,7 @@ int32_t processFinished(ssl_t *ssl, flightEncode_t *msg)
            activate the write cipher */
         if ((rc = sslActivateWriteCipher(ssl)) < 0)
         {
-            psTraceInfo("Error Activating Write Cipher\n");
+            psTraceErrr("Error Activating Write Cipher\n");
             clearFlightList(ssl);
             return rc;
         }
@@ -2492,8 +2522,10 @@ int32_t processFinished(ssl_t *ssl, flightEncode_t *msg)
            hash because those updates are done in the encryptRecord call
            below for each message.  THAT was done because of a possible
            delay in a PKA op */
-        rc = sslSnapshotHSHash(ssl, ssl->delayHsHash,
-                ssl->flags & SSL_FLAGS_SERVER);
+        rc = sslSnapshotHSHash(ssl,
+                ssl->delayHsHash,
+                PS_TRUE,
+                PS_TRUE);
         if (rc <= 0)
         {
             psTraceErrr("Error snapshotting HS hash flight\n");
@@ -2536,13 +2568,14 @@ static int32 encryptFlight(ssl_t *ssl, unsigned char **end)
 
     /* NEGATIVE ECDSA - save the end of the flight buffer */
     origEnd = *end;
+    (void)origEnd; /* Unused on some code paths. */
+
 # ifdef USE_EXT_CERTIFICATE_VERIFY_SIGNING
     if (!ssl->extCvSigOpPending)
     {
         ssl->extCvOrigFlightEnd = origEnd;
     }
 # endif /* USE_EXT_CERTIFICATE_VERIFY_SIGNING */
-        /* PS_VARIABLE_SET_BUT_UNUSED(origEnd); */
 
     msg = ssl->flightEncode;
     while (msg)
@@ -3134,7 +3167,7 @@ static int32 encryptCompressedRecord(ssl_t *ssl, int32 type, int32 messageSize,
     Memset(ssl->zlibBuffer, 0, ptLen + MAX_ZLIB_COMPRESSED_OH);
     if (ssl->zlibBuffer == NULL)
     {
-        psTraceInfo("Error allocating compression buffer\n");
+        psTraceErrr("Error allocating compression buffer\n");
         return MATRIXSSL_ERROR;
     }
     dataToMacAndEncrypt = ssl->zlibBuffer;
@@ -4255,7 +4288,7 @@ static int32 writeNewSessionTicket(ssl_t *ssl, sslBuf_t *out)
     rc = (int32) (end - c);
     if (matrixCreateSessionTicket(ssl, c, &rc) < 0)
     {
-        psTraceInfo("Error generating session ticket\n");
+        psTraceErrr("Error generating session ticket\n");
         return MATRIXSSL_ERROR;
     }
     c += rc;
@@ -4290,7 +4323,6 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
 #   ifndef USE_ONLY_PSK_CIPHER_SUITE
     unsigned char *tbsStart;
     sslIdentity_t *chosen = ssl->chosenIdentity;
-    int32_t skeSigAlg;
 #   endif
 
 #   if defined(USE_PSK_CIPHER_SUITE) && defined(USE_ANON_DH_CIPHER_SUITE)
@@ -4508,9 +4540,12 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
 }
 #   endif /* USE_ECC_CIPHER_SUITE */
 
-# ifndef USE_ONLY_PSK_CIPHERSUITE
+# ifndef USE_ONLY_PSK_CIPHER_SUITE
     if (ssl->flags & (SSL_FLAGS_DHE_WITH_RSA | SSL_FLAGS_DHE_WITH_DSA))
     {
+        int32_t skeSigAlg;
+        psBool_t needPreHash = PS_TRUE;
+
         /* Message length been pre-computed, and we have written the public
            value and/or the PSK hint. Next we shall choose the signature
            algorithm, write the signature algorithm identifier (if (D)TLS 1.2)
@@ -4523,19 +4558,24 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
             return skeSigAlg;
         }
 
+# ifdef USE_ROT_ECC
+        needPreHash = PS_FALSE;
+# endif
+
         /* 2. Compute the hash. */
         /* 3. Setup pkaAfter_t for delayed signing op. */
         rc = tlsPrepareSkeSignature(ssl,
                 skeSigAlg,
                 tbsStart,
-                c);
+                c,
+                needPreHash);
         if (rc < 0)
         {
             return rc;
         }
         c += rc;
     }
-# endif /* USE_ONLY_PSK_CIPHERSUITE */
+# endif /* USE_ONLY_PSK_CIPHER_SUITE */
 
     rc = postponeEncryptRecord(ssl,
             SSL_RECORD_TYPE_HANDSHAKE,
@@ -4571,12 +4611,12 @@ int32 matrixSslEncodeHelloRequest(ssl_t *ssl, sslBuf_t *out,
 
     if (ssl->flags & SSL_FLAGS_ERROR || ssl->flags & SSL_FLAGS_CLOSED)
     {
-        psTraceInfo("SSL flag error in matrixSslEncodeHelloRequest\n");
+        psTraceErrr("SSL flag error in matrixSslEncodeHelloRequest\n");
         return MATRIXSSL_ERROR;
     }
     if (!(ssl->flags & SSL_FLAGS_SERVER) || (ssl->hsState != SSL_HS_DONE))
     {
-        psTraceInfo("SSL state error in matrixSslEncodeHelloRequest\n");
+        psTraceErrr("SSL state error in matrixSslEncodeHelloRequest\n");
         return MATRIXSSL_ERROR;
     }
 
@@ -5187,7 +5227,9 @@ static int32 writeFinished(ssl_t *ssl, sslBuf_t *out)
 /*
     Output the hash of messages we've been collecting so far into the buffer
  */
-    c += postponeSnapshotHSHash(ssl, c, ssl->flags & SSL_FLAGS_SERVER);
+    c += postponeSnapshotHSHash(ssl,
+            c,
+            ssl->flags & SSL_FLAGS_SERVER);
 
     rc = postponeEncryptRecord(ssl,
             SSL_RECORD_TYPE_HANDSHAKE,
@@ -5373,7 +5415,10 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
     psSize_t messageSize, cipherLen, cookieLen, addRenegotiationScsv;
     tlsExtension_t *ext;
     uint32 extLen;
-    short i, useTicket;
+#  ifdef USE_STATELESS_SESSION_TICKETS
+    short useTicket;
+#endif
+    short i;
 #  ifdef USE_TLS_1_2
     psSize_t sigHashLen, sigHashFlags;
     /* 2b len + 2b * MAX sig hash combos */
@@ -5401,14 +5446,14 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
     }
     if (ssl->flags & SSL_FLAGS_ERROR || ssl->flags & SSL_FLAGS_CLOSED)
     {
-        psTraceInfo("SSL flag error in matrixSslEncodeClientHello\n");
+        psTraceErrr("SSL flag error in matrixSslEncodeClientHello\n");
         return MATRIXSSL_ERROR;
     }
     if (ssl->flags & SSL_FLAGS_SERVER || (ssl->hsState != SSL_HS_SERVER_HELLO &&
                                           ssl->hsState != SSL_HS_DONE &&
                                           ssl->hsState != SSL_HS_HELLO_REQUEST ))
     {
-        psTraceInfo("SSL state error in matrixSslEncodeClientHello\n");
+        psTraceErrr("SSL state error in matrixSslEncodeClientHello\n");
         return MATRIXSSL_ERROR;
     }
 
@@ -5446,7 +5491,7 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
     {
         if ((cipherLen = sslGetCipherSpecListLen(ssl)) == 2)
         {
-            psTraceInfo("No cipher suites enabled (or no key material)\n");
+            psTraceErrr("No cipher suites enabled (or no key material)\n");
             return MATRIXSSL_ERROR;
         }
     }
@@ -5478,6 +5523,18 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
     {
         cipherLen += 2; /* signalling cipher id 0x00FF */
         addRenegotiationScsv = 1;
+        if (cipherSpecLen > 0)
+        {
+            /* Store the initial ClientHello cipherlist for re-sending during
+               possible server-initiated renegotiations. */
+            ssl->tlsClientCipherSuites = psMalloc(ssl->hsPool,
+                    2*cipherSpecLen);
+            for (i = 0; i < cipherSpecLen; i++)
+            {
+                ssl->tlsClientCipherSuites[i] = cipherSpecs[i];
+            }
+            ssl->tlsClientCipherSuitesLen = cipherSpecLen;
+        }
     }
 #  endif
     if (options->fallbackScsv)
@@ -5487,7 +5544,7 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
             /** If a client sets ClientHello.client_version to its highest
                supported protocol version, it MUST NOT include TLS_FALLBACK_SCSV.
                @see https://tools.ietf.org/html/rfc7507#section-4 */
-            psTraceInfo("Cannot set fallbackScsv if using maximum supported TLS version.\n");
+            psTraceErrr("Cannot set fallbackScsv if using maximum supported TLS version.\n");
             return MATRIXSSL_ERROR;
         }
         if (ssl->sessionIdLen > 0)
@@ -5496,7 +5553,7 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
                to the protocol version negotiated for that session, it MUST NOT include
                TLS_FALLBACK_SCSV.
                @see https://tools.ietf.org/html/rfc7507#section-4 */
-            psTraceInfo("Cannot set fallbackScsv if attempting to resume a connection.\n");
+            psTraceErrr("Cannot set fallbackScsv if attempting to resume a connection.\n");
             return MATRIXSSL_ERROR;
         }
         cipherLen += 2; /* signalling cipher id 0x5600 */
@@ -5548,7 +5605,7 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
         }
         else
         {
-            psTraceInfo("Unsupported maxFragLen value to session options\n");
+            psTraceErrr("Unsupported maxFragLen value to session options\n");
             return PS_ARG_FAIL;
         }
     }
@@ -5633,8 +5690,8 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
     }
 #  endif /* USE_ECC_CIPHER_SUITE */
 
-    useTicket = 0;
 #  ifdef USE_STATELESS_SESSION_TICKETS
+    useTicket = 0;
     if (options && options->ticketResumption == 1)
     {
         useTicket = 1;
@@ -6064,6 +6121,12 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
         if (curveListLen > 0)
         {
             psTracePrintExtensionCreate(ssl, EXT_ELLIPTIC_CURVE);
+            psTracePrintTls13NamedGroupList(INDENT_EXTENSION,
+                    "elliptic curves",
+                    eccCurveList,
+                    curveListLen,
+                    ssl,
+                    PS_TRUE);
             ssl->extFlags.req_elliptic_curve = 1;
             *c = (EXT_ELLIPTIC_CURVE & 0xFF00) >> 8; c++;
             *c = EXT_ELLIPTIC_CURVE & 0xFF; c++;
@@ -6095,6 +6158,11 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
         *c = sigHashLen & 0xFF; c++;
         Memcpy(c, sigHash, sigHashLen);
         c += sigHashLen;
+        psTracePrintTls13SigAlgListBigEndian(INDENT_EXTENSION,
+                "signature_algorithms",
+                (const uint16_t*)(sigHash + 2),
+                sigHashLen > 2 ? (sigHashLen - 2)/2 : 0,
+                PS_TRUE);
 #  endif
 
 #  ifdef USE_STATELESS_SESSION_TICKETS
@@ -6314,7 +6382,18 @@ static int32 writeClientKeyExchange(ssl_t *ssl, sslBuf_t *out)
 #   ifdef USE_ECC_CIPHER_SUITE
         if (ssl->flags & SSL_FLAGS_ECC_CIPHER)
         {
+#    ifdef USE_X25519
+            if (ssl->sec.peerCurveId == namedgroup_x25519)
+            {
+                keyLen = PS_DH_X25519_PUBLIC_KEY_BYTES + 1;
+            }
+            else
+            {
+#    endif
             keyLen = (ssl->sec.eccKeyPriv->curve->size * 2) + 2;
+#    ifdef USE_X25519
+            }
+#    endif
         }
         else
         {
@@ -6487,6 +6566,15 @@ static int32 writeClientKeyExchange(ssl_t *ssl, sslBuf_t *out)
         {
             keyLen--;
             *c = keyLen & 0xFF; c++;
+#    ifdef USE_X25519
+            if (ssl->sec.peerCurveId == namedgroup_x25519)
+            {
+                Memcpy(c,
+                    ssl->sec.x25519KeyPriv.pub,
+                    PS_DH_X25519_PUBLIC_KEY_BYTES);
+                goto export_done;
+            }
+#    endif /* USE_X25519 */
             if (psEccX963ExportKey(ssl->hsPool, ssl->sec.eccKeyPriv, c,
                     &keyLen) < 0)
             {
@@ -6508,11 +6596,24 @@ static int32 writeClientKeyExchange(ssl_t *ssl, sslBuf_t *out)
                 Memcpy(ssl->ckeMsg, c - 1, ssl->ckeSize);
             }
 #    endif
+#    ifdef USE_X25519
+        export_done:
+#    endif
             c += keyLen;
 /*
             Generate premaster and free ECC key material
  */
+#    ifdef USE_X25519
+            if (ssl->sec.peerCurveId == namedgroup_x25519)
+            {
+                ssl->sec.premasterSize = PS_DH_X25519_SHARED_SECRET_BYTES;
+                goto alloc_premaster;
+            }
+#    endif /* USE_X25519 */
             ssl->sec.premasterSize = ssl->sec.eccKeyPriv->curve->size;
+#    ifdef USE_X25519
+        alloc_premaster:
+#    endif
             ssl->sec.premaster = psMalloc(ssl->hsPool, ssl->sec.premasterSize);
             if (ssl->sec.premaster == NULL)
             {
@@ -6705,7 +6806,7 @@ static int32 writeClientKeyExchange(ssl_t *ssl, sslBuf_t *out)
 
     c += keyLen;
 #   else /* RSA is the 'default' so if that didn't get hit there is a problem */
-    psTraceInfo("There is no handler for writeClientKeyExchange.  ERROR\n");
+    psTraceErrr("There is no handler for writeClientKeyExchange.  ERROR\n");
     return MATRIXSSL_ERROR;
 #   endif /* USE_RSA_CIPHER_SUITE */
 #  endif  /* !USE_ONLY_PSK_CIPHER_SUITE */
@@ -6775,7 +6876,7 @@ static int32_t handleAsyncCvSigOp(ssl_t *ssl, pkaAfter_t *pka, unsigned char *ha
             ssl->extCvSigAlg = PS_ECC;
         }
 
-        if (NGTD_VER(ssl, v_tls_with_signature_algorithmts)
+        if (NGTD_VER(ssl, v_tls_with_signature_algorithms)
                 || ssl->extCvSigAlg == PS_RSA)
         {
             hash_tbs = hash;
@@ -6845,18 +6946,25 @@ static int32_t handleAsyncCvSigOp(ssl_t *ssl, pkaAfter_t *pka, unsigned char *ha
 }
 #    endif /* USE_EXT_CERTIFICATE_VERIFY_SIGNING */
 
+# ifndef USE_BUFFERED_HS_HASH
 static int32 getSnapshotHSHash(ssl_t *ssl,
     unsigned char msgHash[SHA512_HASH_SIZE],
     pkaAfter_t *pka)
 {
-    /* Does a smart default hash automatically for us */
-    if (sslSnapshotHSHash(ssl, msgHash, -1) <= 0)
+    int32_t rc;
+
+    rc = sslSnapshotHSHash(ssl,
+            msgHash,
+            PS_TRUE,
+            PS_FALSE);
+    if (rc <= 0)
     {
-        psTraceInfo("Internal error: handshake hash failed\n");
+        psTraceErrr("Internal error: handshake hash failed\n");
         return MATRIXSSL_ERROR;
     }
+
+
 #    ifdef USE_TLS_1_2
-    /* Tweak if needed */
     if (NGTD_VER(ssl, v_tls_with_signature_algorithms))
     {
         switch (pka->inlen)
@@ -6884,23 +6992,27 @@ static int32 getSnapshotHSHash(ssl_t *ssl,
 
     return PS_SUCCESS;
 }
+# endif /* USE_BUFFERED_HS_HASH */
 
 #    ifdef USE_ECC
 static int nowDoCvPkaInnerECDSA(ssl_t *ssl, pkaAfter_t *pka,
     unsigned char msgHash[SHA512_HASH_SIZE], psBuf_t *out)
 {
-    psPool_t *pkiPool = NULL;
-
     int32_t rc = PS_SUCCESS;
-    unsigned char *tmpEcdsa;
+    unsigned char *tmpEcdsa = NULL;
     psSize_t len, hashTbsLen;
     unsigned char *hashTbs;
     sslIdentity_t *chosen = ssl->chosenIdentity;
+    unsigned char *sig;
+    psSize_t sigLen;
+    int32_t sigAlg;
 
     if (chosen == NULL)
     {
         return PS_UNSUPPORTED_FAIL;
     }
+
+    sigAlg = OID_ECDSA_TLS_SIG_ALG;
 
 #     ifdef USE_EXT_CERTIFICATE_VERIFY_SIGNING
     if (ssl->extCvSigOpInUse)
@@ -6929,12 +7041,6 @@ static int nowDoCvPkaInnerECDSA(ssl_t *ssl, pkaAfter_t *pka,
          */
 #     endif /* USE_EXT_CERTIFICATE_VERIFY_SIGNING */
 
-    /* Only need to allocate 1 larger because 1 has already been added */
-    if ((tmpEcdsa = psMalloc(ssl->hsPool, pka->user + 1)) == NULL)
-    {
-        return PS_MEM_FAIL;
-    }
-
 #     ifdef USE_TLS_1_2
     if (NGTD_VER(ssl, v_tls_with_signature_algorithms))
     {
@@ -6943,6 +7049,13 @@ static int nowDoCvPkaInnerECDSA(ssl_t *ssl, pkaAfter_t *pka,
          */
         hashTbs = msgHash;
         hashTbsLen = pka->inlen;
+#      ifdef USE_ROT_ECC
+        /* With RoT, we need to provide the whole transcript to the signing
+           function. Hashing will be performed within RoT. */
+        hashTbs = ssl->hsMsgBuf.start;
+        hashTbsLen = ssl->hsMsgBuf.buf - ssl->hsMsgBuf.start;
+        sigAlg = psRotCurveToSigAlg(chosen->privKey.key.ecc.curve->curveId);
+#      endif /* USE_ROT_ECC */
     }
     else
     {
@@ -6977,12 +7090,35 @@ static int nowDoCvPkaInnerECDSA(ssl_t *ssl, pkaAfter_t *pka,
        Length of outbuf is increased by 1.
      */
     len = pka->user + 1;
-    rc = psEccDsaSign(pkiPool, &chosen->privKey.key.ecc,
-        hashTbs, hashTbsLen, tmpEcdsa, &len, 1, pka->data);
+
+# ifdef USE_ROT_ECC
+    psAssert(hashTbs == ssl->hsMsgBuf.start &&
+            hashTbsLen == ssl->hsMsgBuf.buf - ssl->hsMsgBuf.start);
+# endif
+    rc = psSign(
+            NULL,
+            &chosen->privKey,
+            sigAlg,
+            hashTbs,
+            hashTbsLen,
+            &sig,
+            &sigLen,
+            NULL);
     if (rc != PS_SUCCESS)
     {
         goto out;
     }
+    tmpEcdsa = psMalloc(ssl->hsPool, len);
+    if (tmpEcdsa == NULL)
+    {
+        return PS_MEM_FAIL;
+    }
+    tmpEcdsa[0] = (sigLen << 8) & 0xff00;
+    tmpEcdsa[1] = sigLen & 0xff;
+    Memcpy(&tmpEcdsa[2], sig, sigLen);
+    len = sigLen + 2;
+    psFree(sig, ssl->hsPool);
+
 #     ifdef USE_EXT_CERTIFICATE_VERIFY_SIGNING
 }     /* closing brace for: if (ssl->extCvSigOpInUse) { ... } else { */
 #     endif /* USE_EXT_CERTIFICATE_VERIFY_SIGNING */
@@ -7062,7 +7198,6 @@ static int nowDoCvPkaInnerECDSA(ssl_t *ssl, pkaAfter_t *pka,
 #     endif /* USE_DTLS */
 
 out:
-
 #     ifdef USE_EXT_CERTIFICATE_VERIFY_SIGNING
     if (ssl->extCvSigOpInUse)
     {
@@ -7090,7 +7225,10 @@ static int nowDoCvPkaInnerRSA(ssl_t *ssl, pkaAfter_t *pka,
     psPool_t *pkiPool = NULL;
     sslIdentity_t *chosen = ssl->chosenIdentity;
     int32_t rc;
-    int32_t using_tls_1_2;
+    int32_t sigAlg;
+    psSignOpts_t opts;
+    unsigned char *tbs, *sigBuf;
+    psSize_t tbsLen, sigLen;
 
     if (chosen == NULL)
     {
@@ -7116,64 +7254,46 @@ static int nowDoCvPkaInnerRSA(ssl_t *ssl, pkaAfter_t *pka,
     {
 #     endif /* USE_EXT_CERTIFICATE_VERIFY_SIGNING */
 
+        /* TLS 1.2 uses PKCS #1.5 RSA sigs. TLS 1.1 and below do not. */
+        sigAlg = OID_RSA_TLS_SIG_ALG; /* Override if using TLS 1.2. */
+
 #     ifdef USE_TLS_1_2
         if (NGTD_VER(ssl, v_tls_with_signature_algorithms))
         {
-            /*      RFC:  "The hash and signature algorithms used in the
-                    signature MUST be one of those present in the
-                    supported_signature_algorithms field of the
-                    CertificateRequest message.  In addition, the hash and
-                    signature algorithms MUST be compatible with the key in the
-                    client's end-entity certificate.
-
-                    We've done the above tests in the parse of the
-                    CertificateRequest message and wouldn't be here if our
-                    certs didn't match the sigAlgs.  However, we do have
-                    to test for both sig algorithm types here to find the
-                    hash strength because the sig alg might not match the
-                    pubkey alg.  This was also already confirmed in
-                    CertRequest parse so wouldn't be here if not allowed */
-            using_tls_1_2 = 1;     /* TLS 1.2 defined and used. */
+            sigAlg = OID_RSA_PKCS15_SIG_ALG;
         }
-        else
+#     endif /* USE_TLS_1_2 */
+
+        tbs = msgHash;
+        tbsLen = pka->inlen;
+#     ifdef USE_ROT_ECC
+        /* crypto-rot wants the raw handshake_messages instead of a hash. */
+        tbs = ssl->hsMsgBuf.start;
+        tbsLen = ssl->hsMsgBuf.buf - ssl->hsMsgBuf.start;
+#     endif
+
+        Memset(&opts, 0, sizeof(opts));
+
+        opts.flags |= PS_SIGN_OPTS_USE_PREALLOCATED_OUTBUF;
+        opts.userData = pka->data;
+
+        sigBuf = pka->outbuf;
+
+        rc = psSign(pkiPool,
+                &chosen->privKey,
+                sigAlg,
+                tbs,
+                tbsLen,
+                &sigBuf,
+                &sigLen,
+                &opts);
+        if (rc < 0)
         {
-            using_tls_1_2 = 0;     /* TLS 1.2 defined but not used. */
+            rc = MATRIXSSL_ERROR;
+            goto out;
         }
-#     else /* ! USE_TLS_1_2 */
-    using_tls_1_2 = 0;     /* TLS 1.2 not defined and thus not used. */
-#     endif /* USE_TLS_1_2 */
-
-    psAssert(using_tls_1_2 == 0 || using_tls_1_2 == 1);
-
-#     ifdef USE_TLS_1_2
-    /*
-       In TLS 1.2, the RSASSA-PKCS1-v1_5 signature scheme must
-       be used. In this scheme, the signed element is not the raw hash
-       but a DER-encoded DigestInfo struct. Only privRsaEncryptSignedElement
-       can handle this case.
-     */
-    if (using_tls_1_2)
-    {
-        rc = privRsaEncryptSignedElement(pkiPool, &chosen->privKey.key.rsa,
-            msgHash, pka->inlen, pka->outbuf,
-            chosen->privKey.keysize, pka->data);
-    }
-#     endif /* USE_TLS_1_2 */
-
-    if (!using_tls_1_2)
-    {
-        rc = psRsaEncryptPriv(pkiPool, &chosen->privKey.key.rsa, msgHash,
-            pka->inlen, pka->outbuf, chosen->privKey.keysize,
-            pka->data);
-    }
-
-    if (rc < 0)
-    {
-        rc = MATRIXSSL_ERROR;
-        goto out;
-    }
 #     ifdef USE_EXT_CERTIFICATE_VERIFY_SIGNING
-}     /* Closing brace for: if (ssl->extCvSigOpInUse) { } ... else { .. */
+    }     /* Closing brace for: if (ssl->extCvSigOpInUse) { } ... else { .. */
 #     endif /* USE_EXT_CERTIFICATE_VERIFY_SIGNING */
 
 #     ifdef USE_DTLS
@@ -7210,7 +7330,7 @@ static int32 nowDoCvPka(ssl_t *ssl, psBuf_t *out)
 {
     pkaAfter_t *pka;
     unsigned char msgHash[SHA512_HASH_SIZE];
-    int32_t rc;
+    int32_t rc = PS_FAILURE;
 
     pka = &ssl->pkaAfter[0];
 
@@ -7229,11 +7349,15 @@ static int32 nowDoCvPka(ssl_t *ssl, psBuf_t *out)
 
     /*
        Compute the handshake_messages hash.
+       crypto-rot needs the raw handshake_messages instead of a hash.
+       Fetch the raw handshake_messages later in the Inner function.
      */
+# ifndef USE_BUFFERED_HS_HASH
     if (getSnapshotHSHash(ssl, msgHash, pka) < 0)
     {
         return MATRIXSSL_ERROR;
     }
+# endif
 
     /*
        Sign it.
@@ -7251,21 +7375,21 @@ static int32 nowDoCvPka(ssl_t *ssl, psBuf_t *out)
         rc = nowDoCvPkaInnerRSA(ssl, pka, msgHash, out);
         break;
     default:
-        psTraceInfo("Unsupported algorithm type in nowDoCvPka\n");
+        psTraceErrr("Unsupported algorithm type in nowDoCvPka\n");
         return MATRIXSSL_ERROR;
 #    endif /* USE_RSA */
     }
 
 #    if !defined(USE_ECC) && !defined(USE_RSA)
-    psTraceInfo("Error: no algorithm support for CertificateVerify signature\n");
+    psTraceErrr("Error: no algorithm support for CertificateVerify signature\n");
     return MATRIXSSL_ERROR;
 #    endif /* !USE_ECC && !USE_RSA */
 
     if (rc < 0)
     {
         return rc; /* PS_PENDING or error. */
-
     }
+
     return PS_SUCCESS;
 }
 
@@ -7299,7 +7423,7 @@ static int32 writeCertificateVerify(ssl_t *ssl, sslBuf_t *out)
 
     if ((pkaAfter = getPkaAfterCv(ssl)) == NULL)
     {
-        psTraceInfo("getPkaAfter error for certVerify\n");
+        psTraceErrr("getPkaAfter error for certVerify\n");
         return MATRIXSSL_ERROR;
     }
 
@@ -7387,7 +7511,7 @@ static int32 writeCertificateVerify(ssl_t *ssl, sslBuf_t *out)
                 ssl->serverSigAlgs);
         if (sigAlg <= 0)
         {
-                psTraceInfo("Need more hash support for certVerify\n");
+                psTraceErrr("Need more hash support for certVerify\n");
                 return MATRIXSSL_ERROR;
         }
     }
@@ -7467,7 +7591,7 @@ static int32 writeCertificateVerify(ssl_t *ssl, sslBuf_t *out)
             if (getSignatureAndHashAlgorithmEncoding(sigAlg,
                             &b1, &b2, &hashSize) < 0)
             {
-                psTraceInfo("Need additional hash support for certVerify\n");
+                psTraceErrr("Need additional hash support for certVerify\n");
                 return MATRIXSSL_ERROR;
             }
             *c = b1; c++;
@@ -7505,7 +7629,7 @@ static int32 writeCertificateVerify(ssl_t *ssl, sslBuf_t *out)
             }
             else
             {
-                psTraceInfo("Need additional hash support for certVerify\n");
+                psTraceErrr("Need additional hash support for certVerify\n");
                 return MATRIXSSL_ERROR;
             }
             *c = 0x1; c++;     /* RSA */
@@ -7513,7 +7637,7 @@ static int32 writeCertificateVerify(ssl_t *ssl, sslBuf_t *out)
 #      endif /* USE_PKCS1_PSS */
         else
         {
-            psTraceInfo("Need additional hash support for certVerify\n");
+            psTraceErrr("Need additional hash support for certVerify\n");
             return MATRIXSSL_ERROR;
         }
 
@@ -7549,7 +7673,7 @@ static int32 writeCertificateVerify(ssl_t *ssl, sslBuf_t *out)
 #     endif
 
 #    else /* RSA is the 'default' so if that didn't get hit there is a problem */
-    psTraceInfo("There is no handler for writeCertificateVerify.  ERROR\n");
+    psTraceErrr("There is no handler for writeCertificateVerify.  ERROR\n");
     return MATRIXSSL_ERROR;
 #    endif /* USE_RSA */
 #    ifdef USE_ECC

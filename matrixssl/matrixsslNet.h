@@ -32,7 +32,7 @@
 #define INCLUDE_GUARD_MATRIXSSLNET_H
 
 #include "coreApi.h"
-#include "matrixssl/matrixsslApi.h"
+#include "matrixssl/matrixsslImpl.h"
 #include "osdep_stdbool.h"
 
 #ifdef USE_PS_NETWORKING

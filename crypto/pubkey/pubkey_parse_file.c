@@ -170,15 +170,16 @@ static int32 pkcs8parse_unknown(
 
 /******************************************************************************/
 /**
-    Parse PKCS#8 format keys (from DER formatted binary)
+    Parse PKCS #8 format keys (from DER formatted binary)
 
     'key' is dynamically allocated and must be freed with psFreePubKey() if
         no error is returned from this API
 
     Unencrypted private keys are supported if 'pass' is NULL
-    Encrypted private keys are supported if 'pass' is non-null for the
-        des-EDE3-CBC algorithm only (3DES). Other PKCS#5 symmetric algorithms
-        are not supported.
+    Encrypted private keys are supported if 'pass' is non-null only for the
+        des-ede3-cbc algorithm (3DES) with PBES2 (PKCS #8 v2.0).
+        This protection matches OpenSSL's pkcs8 option -v2 des3.
+        Other PKCS #5 symmetric algorithms are not supported.
 
     @return < 0 on error, private keysize in bytes on success.
  */
@@ -339,11 +340,16 @@ psRes_t psPkcs8ParsePrivBin(psPool_t *pool,
             psTraceCrypto("PKCS#8 padding error\n");
             return PS_FAILURE;
         }
+        /* Padding errors are considered as "PS_AUTH_FAIL",
+           because the padding is incorrect with overwhelming probability
+           if password was incorrect. The error may also be corrupt
+           bytes in PKCS #8 der encododed material. Distinguishing between
+           corrupted input and wrong password is not always possible. */
         plen = (unsigned char) p[len - 1];
         if (plen < 1 || plen > 16)
         {
             psTraceCrypto("PKCS#8 padding error\n");
-            return PS_FAILURE;
+            return PS_AUTH_FAIL;
         }
         /* coverity[dead_error_condition] */
         /* With the current value for MIN_ECC_BITS and MIN_RSA_BITS
@@ -360,7 +366,7 @@ psRes_t psPkcs8ParsePrivBin(psPool_t *pool,
             if (p[len - i - 1] != (unsigned char) plen)
             {
                 psTraceCrypto("PKCS#8 padding error\n");
-                return PS_FAILURE;
+                return PS_AUTH_FAIL;
             }
         }
 
@@ -401,13 +407,18 @@ psRes_t psPkcs8ParsePrivBin(psPool_t *pool,
         psTraceCrypto("Couldn't parse PKCS#8 algorithm identifier\n");
         return PS_FAILURE;
     }
-#  ifdef USE_ECC
-    if (oi != OID_ECDSA_KEY_ALG && oi != OID_RSA_KEY_ALG)
+
+    if (oi != OID_ECDSA_KEY_ALG
+            && oi != OID_RSA_KEY_ALG
+            && oi != OID_RSASSA_PSS)
     {
         return pkcs8parse_unknown(pool, (unsigned char *)buf, size, key);
     }
-    if (oi == OID_ECDSA_KEY_ALG)
+
+    switch (oi)
     {
+#  ifdef USE_ECC
+    case OID_ECDSA_KEY_ALG:
         /* Still a curve identifier sitting as param in the SEQUENCE */
         if ((uint32) (end - p) < 1 || *p++ != ASN_OID)
         {
@@ -431,13 +442,20 @@ psRes_t psPkcs8ParsePrivBin(psPool_t *pool,
             psTraceCrypto("Unsupported EC curve OID\n");
             return PS_UNSUPPORTED_FAIL;
         }
-    }
-#  else
-    if (oi != OID_RSA_KEY_ALG || plen != 0)
-    {
+        break;
+#  endif
+#  ifdef USE_RSA
+#   ifdef USE_PKCS1_PSS
+    case OID_RSASSA_PSS:
+        break;
+#   endif /* USE_PKCS1_PSS */
+    case OID_RSA_KEY_ALG:
+        break;
+#  endif /* USE_RSA */
+    default:
         return pkcs8parse_unknown(pool, (unsigned char *)buf, size, key);
     }
-#  endif
+
     /* PrivateKey Octet Stream */
     if ((uint32) (end - p) < 1)
     {
@@ -453,7 +471,7 @@ psRes_t psPkcs8ParsePrivBin(psPool_t *pool,
     }
     /* Note len can be zero here */
 #  ifdef USE_RSA
-    if (oi == OID_RSA_KEY_ALG)
+    if (oi == OID_RSA_KEY_ALG || oi == OID_RSASSA_PSS)
     {
         /* Create the actual key here from the octet string */
         psRsaInitKey(pool, &key->key.rsa);

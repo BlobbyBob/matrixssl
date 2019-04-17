@@ -37,6 +37,14 @@
 
 # ifndef USE_ONLY_PSK_CIPHER_SUITE
 
+# ifdef USE_ROT_CRYPTO
+#  include "../crypto-rot/rotCommon.h"
+# endif
+
+# ifndef DEBUG_TLS_SIG_VER
+/*#  define DEBUG_TLS_SIG_VER*/
+# endif
+
 uint32_t getDefaultSkeHashSize(ssl_t *ssl)
 {
     uint32_t hashSize;
@@ -74,66 +82,66 @@ int32_t computeSkeHash(ssl_t *ssl,
     {
 # ifdef USE_MD5SHA1
     case MD5SHA1_HASH_SIZE:
-        psMd5Sha1PreInit(&digestCtx->md5sha1);
-        psMd5Sha1Init(&digestCtx->md5sha1);
-        psMd5Sha1Update(&digestCtx->md5sha1, ssl->sec.clientRandom,
+        psMd5Sha1PreInit(&digestCtx->u.md5sha1);
+        psMd5Sha1Init(&digestCtx->u.md5sha1);
+        psMd5Sha1Update(&digestCtx->u.md5sha1, ssl->sec.clientRandom,
                 SSL_HS_RANDOM_SIZE);
-        psMd5Sha1Update(&digestCtx->md5sha1, ssl->sec.serverRandom,
+        psMd5Sha1Update(&digestCtx->u.md5sha1, ssl->sec.serverRandom,
                 SSL_HS_RANDOM_SIZE);
-        psMd5Sha1Update(&digestCtx->md5sha1, tbsStart,
+        psMd5Sha1Update(&digestCtx->u.md5sha1, tbsStart,
                 (uint32) (tbsStop - tbsStart));
-        psMd5Sha1Final(&digestCtx->md5sha1, hsMsgHash);
+        psMd5Sha1Final(&digestCtx->u.md5sha1, hsMsgHash);
         break;
 # endif /* USE_MD5SHA1 */
 # ifdef USE_SHA1
     case SHA1_HASH_SIZE:
-        psSha1PreInit(&digestCtx->sha1);
-        psSha1Init(&digestCtx->sha1);
-        psSha1Update(&digestCtx->sha1, ssl->sec.clientRandom,
+        psSha1PreInit(&digestCtx->u.sha1);
+        psSha1Init(&digestCtx->u.sha1);
+        psSha1Update(&digestCtx->u.sha1, ssl->sec.clientRandom,
                 SSL_HS_RANDOM_SIZE);
-        psSha1Update(&digestCtx->sha1, ssl->sec.serverRandom,
+        psSha1Update(&digestCtx->u.sha1, ssl->sec.serverRandom,
                 SSL_HS_RANDOM_SIZE);
-        psSha1Update(&digestCtx->sha1, tbsStart,
+        psSha1Update(&digestCtx->u.sha1, tbsStart,
                 (uint32) (tbsStop - tbsStart));
-        psSha1Final(&digestCtx->sha1, hsMsgHash);
+        psSha1Final(&digestCtx->u.sha1, hsMsgHash);
         break;
 # endif /* USE_SHA1 */
 # ifdef USE_TLS_1_2
     case SHA256_HASH_SIZE:
-        psSha256PreInit(&digestCtx->sha256);
-        psSha256Init(&digestCtx->sha256);
-        psSha256Update(&digestCtx->sha256, ssl->sec.clientRandom,
+        psSha256PreInit(&digestCtx->u.sha256);
+        psSha256Init(&digestCtx->u.sha256);
+        psSha256Update(&digestCtx->u.sha256, ssl->sec.clientRandom,
                 SSL_HS_RANDOM_SIZE);
-        psSha256Update(&digestCtx->sha256, ssl->sec.serverRandom,
+        psSha256Update(&digestCtx->u.sha256, ssl->sec.serverRandom,
                         SSL_HS_RANDOM_SIZE);
-        psSha256Update(&digestCtx->sha256, tbsStart,
+        psSha256Update(&digestCtx->u.sha256, tbsStart,
                 (uint32) (tbsStop - tbsStart));
-        psSha256Final(&digestCtx->sha256, hsMsgHash);
+        psSha256Final(&digestCtx->u.sha256, hsMsgHash);
         break;
 #  ifdef USE_SHA384
     case SHA384_HASH_SIZE:
-        psSha384PreInit(&digestCtx->sha384);
-        psSha384Init(&digestCtx->sha384);
-        psSha384Update(&digestCtx->sha384, ssl->sec.clientRandom,
+        psSha384PreInit(&digestCtx->u.sha384);
+        psSha384Init(&digestCtx->u.sha384);
+        psSha384Update(&digestCtx->u.sha384, ssl->sec.clientRandom,
                 SSL_HS_RANDOM_SIZE);
-        psSha384Update(&digestCtx->sha384, ssl->sec.serverRandom,
+        psSha384Update(&digestCtx->u.sha384, ssl->sec.serverRandom,
                 SSL_HS_RANDOM_SIZE);
-        psSha384Update(&digestCtx->sha384, tbsStart,
+        psSha384Update(&digestCtx->u.sha384, tbsStart,
                 (uint32) (tbsStop - tbsStart));
-        psSha384Final(&digestCtx->sha384, hsMsgHash);
+        psSha384Final(&digestCtx->u.sha384, hsMsgHash);
         break;
 #  endif /* USE_SHA384 */
 #  ifdef USE_SHA512
     case SHA512_HASH_SIZE:
-        psSha512PreInit(&digestCtx->sha512);
-        psSha512Init(&digestCtx->sha512);
-        psSha512Update(&digestCtx->sha512, ssl->sec.clientRandom,
+        psSha512PreInit(&digestCtx->u.sha512);
+        psSha512Init(&digestCtx->u.sha512);
+        psSha512Update(&digestCtx->u.sha512, ssl->sec.clientRandom,
                 SSL_HS_RANDOM_SIZE);
-        psSha512Update(&digestCtx->sha512, ssl->sec.serverRandom,
+        psSha512Update(&digestCtx->u.sha512, ssl->sec.serverRandom,
                 SSL_HS_RANDOM_SIZE);
-        psSha512Update(&digestCtx->sha512, tbsStart,
+        psSha512Update(&digestCtx->u.sha512, tbsStart,
                 (uint32) (tbsStop - tbsStart));
-        psSha512Final(&digestCtx->sha512, hsMsgHash);
+        psSha512Final(&digestCtx->u.sha512, hsMsgHash);
         break;
 #  endif /* USE_SHA512 */
 # endif /* USE_TLS_1_2 */
@@ -146,6 +154,41 @@ int32_t computeSkeHash(ssl_t *ssl,
     return PS_SUCCESS;
 }
 
+psRes_t computeSkeTbs(ssl_t *ssl,
+        const unsigned char *tbsStart,
+        const unsigned char *tbsStop,
+        unsigned char **out,
+        psSizeL_t *outLen)
+{
+    unsigned char *tbs;
+    psSize_t tbsLen;
+
+    /*
+      TBS length is 2x32 bytes for client_random || server_random
+      plus the size of signed_params.
+    */
+    tbsLen = 64 + (tbsStop - tbsStart);
+    tbs = psMalloc(ssl->hsPool, tbsLen);
+    if (tbs == NULL)
+    {
+        return PS_MEM_FAIL;
+    }
+
+    Memcpy(tbs, ssl->sec.clientRandom, 32);
+    Memcpy(tbs + 32, ssl->sec.serverRandom, 32);
+    Memcpy(tbs + 64, tbsStart, tbsStop - tbsStart);
+
+# ifdef DEBUG_TLS_SIG_VER
+    psTraceBytes("computeSkeTbs", tbs, tbsLen);
+# endif
+
+    *out = tbs;
+    *outLen = tbsLen;
+
+    return PS_SUCCESS;
+}
+
+# ifdef USE_IDENTITY_CERTIFICATES
 static inline
 int32_t chooseSkeSigAlgTls12(ssl_t *ssl, sslIdentity_t *id)
 {
@@ -194,12 +237,16 @@ int32_t chooseSkeSigAlg(ssl_t *ssl, sslIdentity_t *id)
 psRes_t tlsPrepareSkeSignature(ssl_t *ssl,
         int32_t skeSigAlg,
         unsigned char *tbsStart,
-        unsigned char *c)
+        unsigned char *c,
+        psBool_t needPreHash)
 {
     sslIdentity_t *chosen = ssl->chosenIdentity;
     unsigned char *orig = c;
     psDigestContext_t digestCtx;
-    unsigned char *hsMsgHash, *tbsStop;
+    unsigned char *hsMsgHash = NULL;
+    unsigned char *tbs = NULL;
+    psSizeL_t tbsLen = 0;
+    unsigned char *tbsStop;
     int32_t rc;
     void *pkiData = ssl->userPtr;
     pkaAfter_t *pkaAfter;
@@ -228,13 +275,6 @@ psRes_t tlsPrepareSkeSignature(ssl_t *ssl,
     /* [tbsStart, tbsStop] == signed_params. */
     tbsStop = c;
 
-    /* Reserve space for the hash of signed_params. */
-    hsMsgHash = psMalloc(ssl->hsPool, SHA512_HASH_SIZE);
-    if (hsMsgHash == NULL)
-    {
-        return PS_MEM_FAIL;
-    }
-
     hashSize = getDefaultSkeHashSize(ssl);
 
 # ifdef USE_TLS_1_2
@@ -246,7 +286,6 @@ psRes_t tlsPrepareSkeSignature(ssl_t *ssl,
                 &hashSize);
         if (rc < 0)
         {
-            psFree(hsMsgHash, ssl->hsPool);
             return rc;
         }
         *c++ = sigAlgId[0];
@@ -254,17 +293,41 @@ psRes_t tlsPrepareSkeSignature(ssl_t *ssl,
     }
 # endif
 
-    /* Compute the hash. */
-    rc = computeSkeHash(ssl,
-            &digestCtx,
-            hashSize,
-            tbsStart,
-            tbsStop,
-            hsMsgHash);
-    if (rc < 0)
+    if (needPreHash)
     {
-        psFree(hsMsgHash, ssl->hsPool);
-        return rc;
+        /* Reserve space for the hash of signed_params. */
+        hsMsgHash = psMalloc(ssl->hsPool, SHA512_HASH_SIZE);
+        if (hsMsgHash == NULL)
+        {
+            return PS_MEM_FAIL;
+        }
+
+        /* Compute the hash. */
+        rc = computeSkeHash(ssl,
+                &digestCtx,
+                hashSize,
+                tbsStart,
+                tbsStop,
+                hsMsgHash);
+        if (rc < 0)
+        {
+            psFree(hsMsgHash, ssl->hsPool);
+            return rc;
+        }
+    }
+    else
+    {
+        /* No pre-hash, but need to provide the TBS as a contiguous
+           buffer for later hashing and signing. */
+        rc = computeSkeTbs(ssl,
+                tbsStart,
+                tbsStop,
+                &tbs,
+                &tbsLen);
+        if (rc < 0)
+        {
+            return rc;
+        }
     }
 
     /* Compute the signature lengths and write the signature length
@@ -312,6 +375,10 @@ psRes_t tlsPrepareSkeSignature(ssl_t *ssl,
         psFree(hsMsgHash, ssl->hsPool);
         Memcpy(c, ssl->ckeMsg, ssl->ckeSize);
         c += ssl->ckeSize;
+        if (tbs != NULL)
+        {
+            psFree(tbs, ssl->hsPool);
+        }
         return (c - orig);
     }
 # endif /* USE_DTLS */
@@ -319,14 +386,26 @@ psRes_t tlsPrepareSkeSignature(ssl_t *ssl,
     pkaAfter = getPkaAfter(ssl);
     if (pkaAfter == NULL)
     {
-        psTraceInfo("getPkaAfter error\n");
+        psTraceErrr("getPkaAfter error\n");
         psFree(hsMsgHash, ssl->hsPool);
+        if (tbs != NULL)
+        {
+            psFree(tbs, ssl->hsPool);
+        }
         return PS_PLATFORM_FAIL;
     }
-    pkaAfter->inbuf = hsMsgHash;
+    if (needPreHash)
+    {
+        pkaAfter->inbuf = hsMsgHash;
+        pkaAfter->inlen = hashSize;
+    }
+    else
+    {
+        pkaAfter->inbuf = tbs;
+        pkaAfter->inlen = tbsLen;
+    }
     pkaAfter->outbuf = c;
     pkaAfter->data = pkiData;
-    pkaAfter->inlen = hashSize;
     pkaAfter->type = pkaType;
 
     /* Advance write pointer by the predicted size of the signature. */
@@ -364,6 +443,7 @@ psRes_t tlsPrepareSkeSignature(ssl_t *ssl,
     return (c - orig);
 }
 
+
 static
 psPool_t *getTmpPkiPool(ssl_t *ssl, pkaAfter_t *pka)
 {
@@ -379,60 +459,53 @@ psRes_t tlsMakeSkeSignature(ssl_t *ssl,
     int32_t sigAlg = OID_RSA_TLS_SIG_ALG;
     sslIdentity_t *chosen = ssl->chosenIdentity;
     psPubKey_t *privKey = &chosen->privKey;
-    unsigned char *sigBuf = pka->outbuf;
+    unsigned char *sigBuf;
     psSize_t sigLen;
     psSignOpts_t opts = {0};
-    /* New temp location for ECDSA sig which can be one len byte different
-       than what we originally calculated (pka->user is holding) */
-    unsigned char *tmpEcdsa = NULL;
 
-    /* Prepare for the call to psSign. */
+    /*
+      Prepare for the call to psSign.
+      RSA signatures are be generated straight into pka->outbuf.
+      ECDSA signatures use an intermediate temporary buffer.
+
+      For RSA, the TLS signature vector length octets have been written
+      in tlsPrepareSkeSignature. With ECDSA, we cannot completely predict
+      the signature size in advance, so we ask psSign to prepend the
+      TLS vector length (INCLUDE_SIZE option) to the signature.
+    */
     switch (pka->type)
     {
 # ifdef USE_RSA_CIPHER_SUITE
     case PKA_AFTER_RSA_SIG_GEN_ELEMENT:
         sigAlg = OID_RSA_PKCS15_SIG_ALG;
         sigLen = privKey->keysize;
+        sigBuf = pka->outbuf;
+        opts.flags |= PS_SIGN_OPTS_USE_PREALLOCATED_OUTBUF;
         break;
-
     case PKA_AFTER_RSA_SIG_GEN:
         sigAlg = OID_RSA_TLS_SIG_ALG;
         sigLen = privKey->keysize;
+        sigBuf = pka->outbuf;
+        opts.flags |= PS_SIGN_OPTS_USE_PREALLOCATED_OUTBUF;
         break;
 # endif /* USE_RSA_CIPHER_SUITE */
-
 # ifdef USE_ECC_CIPHER_SUITE
     case PKA_AFTER_ECDSA_SIG_GEN:
         sigAlg = OID_ECDSA_TLS_SIG_ALG;
-        /* pka->user is the predicted ECDSA signature size. We predicted
-           that one of the INTEGERs has a leading 0x00 octet, but there
-           may actually be 0 to 2 extra octets. So allocate 1 larger
-           than predicted. */
-        tmpEcdsa = psMalloc(ssl->hsPool, pka->user + 1);
-        if (tmpEcdsa == NULL)
-        {
-            return PS_MEM_FAIL;
-        }
 #    ifdef USE_DTLS
         ssl->ecdsaSizeChange = 0;
 #    endif
-        sigBuf = tmpEcdsa;
-        /* We did not write the signature vector length octets earlier,
-           because we cannot completely predict the signature legnth.
-           Let psSign do this. */
         opts.flags |= PS_SIGN_OPTS_ECDSA_INCLUDE_SIZE;
         break;
 # endif /* USE_ECC_CIPHER_SUITE */
-
     default:
         psTraceErrr("Unsupported type of PKA operation\n");
         return PS_UNSUPPORTED_FAIL;
     }
     opts.userData = pka->data;
-    opts.flags |= PS_SIGN_OPTS_USE_PREALLOCATED_OUTBUF;
 
     /* Compute the signature. */
-    rc = psSignHash(pkiPool,
+    rc = psSign(pkiPool,
             privKey,
             sigAlg,
             pka->inbuf,
@@ -443,24 +516,33 @@ psRes_t tlsMakeSkeSignature(ssl_t *ssl,
     if (rc == PS_PENDING)
     {
         /* Async operation launched, but not complete. */
-        /* If the result is going directly inline to the output
-           buffer we unflag 'type' so this function isn't called
-           again on the way back around. Also, we can safely
-           free inbuf because it has been copied out */
-        psFree(pka->inbuf, ssl->hsPool); pka->inbuf = NULL;
+        /*
+          If the result is going directly inline to the output
+          buffer we unflag 'type' so this function isn't called
+          again on the way back around. Also, we can safely
+          free inbuf because it has been copied out.
+        */
+        psFree(pka->inbuf, ssl->hsPool);
+        pka->inbuf = NULL;
         pka->type = 0;
-        psFree(tmpEcdsa, ssl->hsPool);
+        if (sigBuf != pka->outbuf)
+        {
+            psFree(sigBuf, ssl->pkiPool);
+        }
         return rc;
     }
     else if (rc < 0)
     {
-        psFree(tmpEcdsa, ssl->hsPool);
+        if (sigBuf != pka->outbuf)
+        {
+            psFree(sigBuf, ssl->hsPool);
+        }
         psTraceErrr("SKE signature generation failed\n");
         psTraceIntInfo("Signature return code: %d\n", rc);
         return MATRIXSSL_ERROR;
     }
 
-    /* Signature is ready, either in tmpEcdsa or in pka->outbuf. */
+    /* Signature is ready, either in sigBuf or in pka->outbuf. */
 
     /* If the signature size is different than predicted, we need to
        tweak the previously encoded flight to account for this.
@@ -477,21 +559,21 @@ psRes_t tlsMakeSkeSignature(ssl_t *ssl,
             rc = accountForEcdsaSizeChange(ssl,
                     pka,
                     sigLen,
-                    tmpEcdsa,
+                    sigBuf,
                     out,
                     SSL_HS_SERVER_KEY_EXCHANGE);
             if (rc < 0)
             {
                 clearPkaAfter(ssl);
-                psFree(tmpEcdsa, ssl->hsPool);
+                psFree(sigBuf, ssl->hsPool);
                 return MATRIXSSL_ERROR;
             }
         }
         else
         {
-            Memcpy(pka->outbuf, tmpEcdsa, pka->user);
+            Memcpy(pka->outbuf, sigBuf, pka->user);
         }
-        psFree(tmpEcdsa, ssl->hsPool);
+        psFree(sigBuf, pkiPool);
     }
 #   endif /* USE_ECC_CIPHER_SUITE */
 
@@ -506,7 +588,7 @@ psRes_t tlsMakeSkeSignature(ssl_t *ssl,
         ssl->ckeMsg = psMalloc(ssl->hsPool, ssl->ckeSize);
         if (ssl->ckeMsg == NULL)
         {
-            psTraceInfo("Memory allocation error ckeMsg\n");
+            psTraceErrr("Memory allocation error ckeMsg\n");
             return PS_MEM_FAIL;
         }
         Memcpy(ssl->ckeMsg, pka->outbuf, ssl->ckeSize);
@@ -517,6 +599,7 @@ psRes_t tlsMakeSkeSignature(ssl_t *ssl,
 
     return rc;
 }
+#endif /* USE_IDENTITY_CERTIFICATES */
 
 psBool_t tlsIsSupportedRsaSigAlg(int32_t alg)
 {
@@ -527,6 +610,11 @@ psBool_t tlsIsSupportedRsaSigAlg(int32_t alg)
     case sigalg_rsa_pkcs1_sha256:
     case sigalg_rsa_pkcs1_sha384:
     case sigalg_rsa_pkcs1_sha512:
+# ifdef USE_PKCS1_PSS
+    case sigalg_rsa_pss_rsae_sha256:
+    case sigalg_rsa_pss_rsae_sha384:
+    case sigalg_rsa_pss_rsae_sha512:
+# endif
         return PS_TRUE;
     default:
         return PS_FALSE;
@@ -550,7 +638,7 @@ psBool_t tlsIsSupportedEcdsaSigAlg(int32_t alg)
     }
 }
 
-psSize_t tlsSigAlgToHashLen(uint16_t alg)
+psResSize_t tlsSigAlgToHashLen(uint16_t alg)
 {
     /* Note: We are in TLS 1.2 context here. The sigalg_* names below
        are from TLS 1.3, but they are compatible with the TLS 1.2
@@ -563,12 +651,15 @@ psSize_t tlsSigAlgToHashLen(uint16_t alg)
     case sigalg_ecdsa_sha1:
         return SHA1_HASH_SIZE;
     case sigalg_rsa_pkcs1_sha256:
+    case sigalg_rsa_pss_rsae_sha256:
     case sigalg_ecdsa_secp256r1_sha256:
         return SHA256_HASH_SIZE;
     case sigalg_rsa_pkcs1_sha384:
+    case sigalg_rsa_pss_rsae_sha384:
     case sigalg_ecdsa_secp384r1_sha384:
         return SHA384_HASH_SIZE;
     case sigalg_rsa_pkcs1_sha512:
+    case sigalg_rsa_pss_rsae_sha512:
     case sigalg_ecdsa_secp521r1_sha512:
         return SHA512_HASH_SIZE;
     default:
@@ -588,6 +679,10 @@ int32_t tlsSigAlgToMatrix(uint16_t alg)
         return OID_SHA384_RSA_SIG;
     case sigalg_rsa_pkcs1_sha512:
         return OID_SHA512_RSA_SIG;
+    case sigalg_rsa_pss_rsae_sha256:
+    case sigalg_rsa_pss_rsae_sha384:
+    case sigalg_rsa_pss_rsae_sha512:
+        return OID_RSASSA_PSS;
     case sigalg_ecdsa_sha1:
         return OID_SHA1_ECDSA_SIG;
     case sigalg_ecdsa_secp256r1_sha256:
@@ -619,7 +714,9 @@ int32_t tlsVerify(ssl_t *ssl,
     psVerifyOptions_t defaultOpts = {0};
     psBool_t verifyResult;
     const unsigned char *orig_c = c;
-    psBool_t useRsa = PS_FALSE;;
+    psBool_t useRsa = PS_FALSE;
+    unsigned char *refTbs;
+    psSizeL_t refTbsLen;
 
     if (opts == NULL)
     {
@@ -660,6 +757,34 @@ int32_t tlsVerify(ssl_t *ssl,
         {
             goto out_decode_error;
         }
+# ifdef USE_PKCS1_PSS
+        switch (sigAlgTls)
+        {
+        case sigalg_rsa_pss_rsae_sha256:
+            opts->useRsaPss = PS_TRUE;
+            opts->rsaPssHashAlg = PKCS1_SHA256_ID;
+            opts->rsaPssSaltLen = SHA256_HASH_SIZE;
+            break;
+        case sigalg_rsa_pss_rsae_sha384:
+            opts->useRsaPss = PS_TRUE;
+            opts->rsaPssHashAlg = PKCS1_SHA384_ID;
+            opts->rsaPssSaltLen = SHA384_HASH_SIZE;
+            break;
+        case sigalg_rsa_pss_rsae_sha512:
+            opts->useRsaPss = PS_TRUE;
+            opts->rsaPssHashAlg = PKCS1_SHA512_ID;
+            opts->rsaPssSaltLen = SHA512_HASH_SIZE;
+            break;
+        }
+#  ifdef USE_CL_RSA
+        if (opts->useRsaPss)
+        {
+            /* The crypto-cl API for RSA-PSS verification does not support
+               pre-hashing. */
+            opts->noPreHash = PS_TRUE;
+        }
+#  endif /* USE_CL_RSA */
+# endif /* USE_PKCS1_PSS */
     }
 # endif /* USE_TLS_1_2 */
 
@@ -720,21 +845,39 @@ int32_t tlsVerify(ssl_t *ssl,
         goto out_decode_error;
     }
 
-    /* Now compute the reference hash. */
-
-    if (hashLen == 0)
+    if (opts == NULL || opts->noPreHash == PS_FALSE)
     {
-        hashLen = getDefaultSkeHashSize(ssl);
+        /* Compute the reference hash. */
+        if (hashLen == 0)
+        {
+            hashLen = getDefaultSkeHashSize(ssl);
+        }
+        rc = computeSkeHash(ssl,
+                &digestCtx,
+                hashLen,
+                tbs,
+                tbs + tbsLen,
+                hashBuf);
+        if (rc < 0)
+        {
+            goto out_illegal_parameter;
+        }
+        refTbs = hashBuf;
+        refTbsLen = hashLen;
     }
-    rc = computeSkeHash(ssl,
-            &digestCtx,
-            hashLen,
-            tbs,
-            tbs + tbsLen,
-            hashBuf);
-    if (rc < 0)
+    else
     {
-        goto out_illegal_parameter;
+        /* No pre-hashing before signature verification.
+           Construct the reference tbs as a contiguous block. */
+        rc = computeSkeTbs(ssl,
+                tbs,
+                tbs + tbsLen,
+                &refTbs,
+                &refTbsLen);
+        if (rc < 0)
+        {
+            return rc;
+        }
     }
 
     /* Now verify the signature. */
@@ -753,8 +896,8 @@ int32_t tlsVerify(ssl_t *ssl,
     }
 
     rc = psVerifySig(ssl->hsPool,
-            hashBuf,
-            hashLen,
+            refTbs,
+            refTbsLen,
             c,
             sigLen,
             pubKey,
@@ -764,7 +907,16 @@ int32_t tlsVerify(ssl_t *ssl,
     if (rc < 0 || verifyResult != PS_TRUE)
     {
         psTraceErrr("Can't verify serverKeyExchange sig\n");
+        if (refTbs != hashBuf)
+        {
+            psFree(refTbs, ssl->hsPool);
+        }
         goto out_decrypt_error;
+    }
+
+    if (refTbs != hashBuf)
+    {
+        psFree(refTbs, ssl->hsPool);
     }
 
     c += sigLen;
@@ -1146,6 +1298,7 @@ int32_t ecdsaToRsa(int32_t sigAlg)
   @return The signature algorithm to use.
 */
 int32_t chooseSigAlgInt(int32_t certSigAlg,
+        psPubKey_t *privKey,
         psSize_t keySize,
         int32_t keyAlgorithm,
         uint16_t peerSigAlgs)
@@ -1163,6 +1316,15 @@ int32_t chooseSigAlgInt(int32_t certSigAlg,
     if (keyAlgorithm == OID_ECDSA_KEY_ALG)
     {
         return PS_UNSUPPORTED_FAIL;
+    }
+#endif
+
+#ifdef USE_ROT_ECC
+    if (keyAlgorithm == OID_ECDSA_KEY_ALG)
+    {
+        psTraceIntInfo("keySize is %hu\n", keySize);
+        psTraceIntInfo("curve ID is %hu\n", privKey->key.ecc.curve->curveId);
+        return psRotCurveToSigAlg(privKey->key.ecc.curve->curveId);
     }
 #endif
 
@@ -1257,6 +1419,7 @@ int32_t chooseSigAlg(psX509Cert_t *cert,
 # endif /* USE_CERT_PARSE */
 
     return chooseSigAlgInt(cert->sigAlgorithm,
+            privKey,
             privKey->keysize,
             pubKeyAlg,
             peerSigAlgs);

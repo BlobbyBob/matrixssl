@@ -209,6 +209,12 @@ int32 parseClientHelloExtensions(ssl_t *ssl, unsigned char **cp, unsigned short 
 # endif
         while (c != end)
         {
+            if (end - c < 2)
+            {
+                ssl->err = SSL_ALERT_DECODE_ERROR;
+                psTraceErrr("Invalid extension header len\n");
+                return MATRIXSSL_ERROR;
+            }
             extType = *c << 8; c++; /* Individual hello ext */
             extType += *c; c++;
             if (end - c < 2)

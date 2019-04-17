@@ -37,6 +37,13 @@
 
 /******************************************************************************/
 
+# ifdef USE_ROT_CRYPTO
+#  include "../../crypto-rot/rot/include/api_val_asset.h"
+# endif
+
+# ifdef USE_ROT_CRYPTO
+# include "pubkey_rot.h"
+# endif
 # include "pubkey_matrix.h"
 # ifdef USE_OPENSSL_CRYPTO
 #  include "pubkey_openssl.h"
@@ -226,6 +233,9 @@ typedef struct
     psPool_t *pool;
     psSize_t keysize;           /* in bytes. 512 max for RSA 4096 */
     uint8_t type;               /* PS_RSA, PS_ECC, PS_DH */
+# ifdef USE_ROT_CRYPTO
+    int32_t rotSigAlg;
+# endif
 } psPubKey_t;
 
 # define PS_SIGN_OPTS_ECDSA_INCLUDE_SIZE      (1ULL << 0)
@@ -334,11 +344,14 @@ typedef struct
     int32_t rsaPssHashAlg;
     psSize_t rsaPssHashLen;
     psSize_t rsaPssSaltLen;
-    psBool_t useRsaPss;
 #  endif
+    psBool_t useRsaPss;
+
     /* The signed data was a DigestInfo structure. This is only
        relevant for RSA. */
     psBool_t msgIsDigestInfo;
+    /* Skip pre-hashing of input data before verifying the sig? */
+    psBool_t noPreHash;
 } psVerifyOptions_t;
 
 typedef psVerifyOptions_t psVerifySigOptions_t;

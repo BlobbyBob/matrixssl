@@ -48,7 +48,7 @@
 # define DEBUGF(...) do {} while (0)
 #endif
 
-#if defined(USE_PS_NETWORKING) && !defined(USE_ONLY_PSK_CIPHER_SUITE)
+#if defined(USE_PS_NETWORKING) && !defined(USE_ONLY_PSK_CIPHER_SUITE) && defined(MATRIX_USE_FILE_SYSTEM)
 
 /* The flags used by this program for TLS versions. */
 # define FLAG_TLS_1_0 (1 << 10)
@@ -942,6 +942,10 @@ int32 main(int32 argc, char **argv)
 {
 # ifndef USE_PS_NETWORKING
     Printf("USE_PS_NETWORKING must be enabled at build"
+        " time to run this application\n");
+# endif
+# ifndef MATRIX_USE_FILE_SYSTEM
+    Printf("MATRIX_USE_FILE_SYSTEM must be enabled at build"
         " time to run this application\n");
 # endif
 # ifdef USE_ONLY_PSK_CIPHER_SUITE

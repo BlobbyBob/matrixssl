@@ -5,7 +5,7 @@
  *      Header file to determine crypto algorithm provider.
  */
 /*
- *      Copyright (c) 2013-2017 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 INSIDE Secure Corporation
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -215,6 +215,63 @@
 
 
 /* Common for CL CRYPTO and FIPS CRYPTO */
+
+/******************************************************************************/
+
+# ifdef USE_ROT_CRYPTO
+/* Inside Secure Root-of-Trust (RoT) based crypto implementation. */
+
+#  ifdef USE_SHA256
+#   ifdef USE_MATRIX_SHA256
+#    define USE_ROT_SHA256
+#    define USE_ROT_HMAC_SHA256
+#    undef USE_MATRIX_SHA256
+#    undef USE_MATRIX_HMAC_SHA256
+#   endif /* USE_MATRIX_SHA256 */
+#  endif /* USE_SHA256 */
+
+#  ifdef USE_SHA384
+#   ifdef USE_MATRIX_SHA384
+#    define USE_ROT_SHA384
+#    define USE_ROT_HMAC_SHA384
+#    undef USE_MATRIX_SHA384
+#    undef USE_MATRIX_HMAC_SHA384
+#   endif /* USE_MATRIX_SHA384 */
+#  endif /* USE_SHA384 */
+
+#  ifdef USE_SHA512
+#   ifdef USE_MATRIX_SHA512
+#    define USE_ROT_SHA512
+#    define USE_ROT_HMAC_SHA512
+#    undef USE_MATRIX_SHA512
+#    undef USE_MATRIX_HMAC_SHA512
+#   endif /* USE_MATRIX_SHA512 */
+#  endif /* USE_SHA512 */
+
+#  ifdef USE_AES_GCM
+#   ifdef USE_MATRIX_AES_GCM
+#    define USE_ROT_AES_GCM
+#    define USE_ROT_AES_BLOCK
+#    define USE_ROT_AES_CBC
+#    undef USE_MATRIX_AES_GCM
+#    undef USE_MATRIX_AES_BLOCK
+#    undef USE_MATRIX_AES_CBC
+#   endif
+#  endif /* USE_GCM */
+
+#  if defined(USE_RSA)
+#   if defined(USE_ROT_RSA)
+#    undef USE_MATRIX_RSA
+#   endif /* USE_ROT_RSA */
+#  endif  /* USE_RSA */
+
+#  if defined(USE_ECC)
+#   if defined(USE_ROT_ECC)
+#    undef USE_MATRIX_ECC
+#   endif /* USE_ROT_ECC */
+#  endif  /* USE_ECC */
+
+# endif /* USE_ROT_CRYPTO */
 
 # ifdef USE_OPENSSL_CRYPTO
 /******************************************************************************/

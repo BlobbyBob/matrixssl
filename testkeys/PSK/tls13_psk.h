@@ -5,7 +5,7 @@
  *      Example Pre-Shared Key header file to use with TLS 1.3.
  */
 
-/* Test SHA-256 based PSK to use in TLS 1.3.
+/* Test SHA-256 based PSK for use in TLS 1.3.
    -psk 0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20 */
 const static unsigned char g_tls13_test_psk_256[] =
 {
@@ -14,6 +14,13 @@ const static unsigned char g_tls13_test_psk_256[] =
     0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
     0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20
 };
+const static unsigned char g_tls13_test_psk_id_sha256 [] =
+{
+    'm', 'y', 'p', 's', 'k', 's', 'h', 'a', '2', '5', '6'
+};
+
+/* Test SHA-384 based PSK for use in TLS 1.3.
+   -psk 0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f30 */
 const static unsigned char g_tls13_test_psk_384[] =
 {
     0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
@@ -23,8 +30,7 @@ const static unsigned char g_tls13_test_psk_384[] =
     0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28,
     0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x30,
 };
-
-const static unsigned char g_tls13_test_psk_id [] =
+const static unsigned char g_tls13_test_psk_id_sha384 [] =
 {
-    'm', 'y', 'p', 's', 'k'
+    'm', 'y', 'p', 's', 'k', 's', 'h', 'a', '3', '8', '4'
 };

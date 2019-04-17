@@ -112,11 +112,12 @@ char *psStrdupN(const char *string)
     {
         return NULL;
     }
-    len = psStrlen(string) + 1;
-    new_str = psMallocN(len);
+    len = psStrlen(string);
+    new_str = psMallocN(len + 1);
     if (new_str)
     {
         psMemcpy(new_str, string, len);
+        new_str[len] = 0;
     }
     return new_str;
 }

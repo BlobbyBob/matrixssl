@@ -52,6 +52,7 @@
 #define LARGE_CHUNKS    4096
 #define HUGE_CHUNKS     16 * 1024
 
+# ifdef USE_AES_CBC
 static unsigned char iv[16] = { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
                                 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f };
 
@@ -59,6 +60,7 @@ static unsigned char key[32] = { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
                                  0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
                                  0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
                                  0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f };
+# endif
 
 enum
 {
@@ -81,7 +83,7 @@ enum
     CHACHA20POLY1305IETF_ALG
 };
 
-#if defined(USE_HMAC_SHA1) || defined(USE_HMAC_SHA256)
+#if defined(USE_AES_CBC) && (defined(USE_HMAC_SHA1) || defined(USE_HMAC_SHA256))
 static void runWithHmac(psCipherContext_t *ctx, psHmac_t *hmac,
     int32 hashSize, int32 chunk, int32 alg)
 {
@@ -118,7 +120,9 @@ static void runWithHmac(psCipherContext_t *ctx, psHmac_t *hmac,
 #   else
             psHmacSha1Update(&hmac->u.sha1, dataChunk, chunk);
 #   endif
+#   ifdef USE_AES_CBC
             psAesEncryptCBC(&ctx->aes, dataChunk, dataChunk, chunk);
+#   endif
             bytesSent += chunk;
         }
         psHmacSha1Final(&hmac->u.sha1, mac);
@@ -138,7 +142,9 @@ static void runWithHmac(psCipherContext_t *ctx, psHmac_t *hmac,
 #   else
             psHmacSha256Update(&hmac->u.sha256, dataChunk, chunk);
 #   endif
+#   ifdef USE_AES_CBC
             psAesEncryptCBC(&ctx->aes, dataChunk, dataChunk, chunk);
+#   endif
             bytesSent += chunk;
         }
         psHmacSha256Final(&hmac->u.sha256, mac);
@@ -166,8 +172,9 @@ static void runWithHmac(psCipherContext_t *ctx, psHmac_t *hmac,
 # endif
     psFree(dataChunk, NULL);
 }
-#endif /* USE_HMAC */
+#endif /* USE_AES_CBC && USE_HMAC */
 
+# ifdef USE_AES_CBC
 static void runTime(psCipherContext_t *ctx, psCipherGivContext_t *ctx_giv,
     int32 chunk, int32 alg)
 {
@@ -320,6 +327,7 @@ static void runTime(psCipherContext_t *ctx, psCipherGivContext_t *ctx_giv,
 #endif
 
 }
+# endif /* USE_AES_CBC */
 
 /******************************************************************************/
 #ifdef USE_AES_CBC
@@ -636,6 +644,8 @@ void runDigestTime(psDigestContext_t *ctx, int32 chunk, int32 alg)
     int32 diffm;
 #endif
 
+    (void)rv;
+
     dataChunk = psMalloc(NULL, chunk);
     bytesToSend = (DATABYTES_AMOUNT / chunk) * chunk;
     bytesSent = 0;
@@ -644,68 +654,68 @@ void runDigestTime(psDigestContext_t *ctx, int32 chunk, int32 alg)
     {
 #ifdef USE_SHA1
     case SHA1_ALG:
-        psSha1Init(&ctx->sha1);
+        psSha1Init(&ctx->u.sha1);
         psGetTime(&start, NULL);
         while (bytesSent < bytesToSend)
         {
-            psSha1Update(&ctx->sha1, dataChunk, chunk);
+            psSha1Update(&ctx->u.sha1, dataChunk, chunk);
             bytesSent += chunk;
         }
-        psSha1Final(&ctx->sha1, hashout);
+        psSha1Final(&ctx->u.sha1, hashout);
         psGetTime(&end, NULL);
         break;
 #endif
 #ifdef USE_SHA256
     case SHA256_ALG:
-        psSha256Init(&ctx->sha256);
+        psSha256Init(&ctx->u.sha256);
         psGetTime(&start, NULL);
         while (bytesSent < bytesToSend)
         {
-            psSha256Update(&ctx->sha256, dataChunk, chunk);
+            psSha256Update(&ctx->u.sha256, dataChunk, chunk);
             bytesSent += chunk;
         }
-        psSha256Final(&ctx->sha256, hashout);
+        psSha256Final(&ctx->u.sha256, hashout);
         psGetTime(&end, NULL);
         break;
 #endif
 #ifdef USE_SHA384
     case SHA384_ALG:
-        psSha384Init(&ctx->sha384);
+        psSha384Init(&ctx->u.sha384);
         psGetTime(&start, NULL);
         while (bytesSent < bytesToSend)
         {
-            psSha384Update(&ctx->sha384, dataChunk, chunk);
+            psSha384Update(&ctx->u.sha384, dataChunk, chunk);
             bytesSent += chunk;
         }
-        psSha384Final(&ctx->sha384, hashout);
+        psSha384Final(&ctx->u.sha384, hashout);
         psGetTime(&end, NULL);
         break;
 #endif
 #ifdef USE_SHA512
     case SHA512_ALG:
-        psSha512Init(&ctx->sha512);
+        psSha512Init(&ctx->u.sha512);
         psGetTime(&start, NULL);
         while (bytesSent < bytesToSend)
         {
-            psSha512Update(&ctx->sha512, dataChunk, chunk);
+            psSha512Update(&ctx->u.sha512, dataChunk, chunk);
             bytesSent += chunk;
         }
-        psSha512Final(&ctx->sha512, hashout);
+        psSha512Final(&ctx->u.sha512, hashout);
         psGetTime(&end, NULL);
         break;
 #endif
 #ifdef USE_MD5
     case MD5_ALG:
-        rv = psMd5Init(&ctx->md5);
+        rv = psMd5Init(&ctx->u.md5);
         if (rv != PS_SUCCESS)
             goto skipped;
         psGetTime(&start, NULL);
         while (bytesSent < bytesToSend)
         {
-            psMd5Update(&ctx->md5, dataChunk, chunk);
+            psMd5Update(&ctx->u.md5, dataChunk, chunk);
             bytesSent += chunk;
         }
-        psMd5Final(&ctx->md5, hashout);
+        psMd5Final(&ctx->u.md5, hashout);
         psGetTime(&end, NULL);
         break;
 #endif
@@ -884,7 +894,7 @@ typedef struct
 } test_t;
 
 static test_t tests[] = {
-#ifdef USE_AES
+#ifdef USE_AES_CBC
     { psAesTestCBC,     "***** AES-CBC TESTS *****"                                            },
 # if defined(USE_HMAC_SHA1) || defined(USE_HMAC_SHA256)
     { psAesTestCBCHmac, "***** AES-CBC + HMAC TESTS *****"                                     },

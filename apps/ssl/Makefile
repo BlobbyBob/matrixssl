@@ -16,6 +16,21 @@ CLIENT_EXE:=client$(E)
 NET_EXE:=matrixnet$(E)
 EXE=$(SERVER_EXE) $(CLIENT_EXE)
 
+SIMPLE_CLIENT_SRC:=simpleClient.c
+SIMPLE_CLIENT_EXE:=simpleClient$(E)
+SIMPLE_SERVER_SRC:=simpleServer.c
+SIMPLE_SERVER_EXE:=simpleServer$(E)
+
+IA_CLIENT_SRC:=interactiveClient.c
+IA_CLIENT_EXE:=interactiveClient$(E)
+
+SRC+=$(SIMPLE_CLIENT_SRC)
+EXE+=$(SIMPLE_CLIENT_EXE)
+SRC+=$(SIMPLE_SERVER_SRC)
+EXE+=$(SIMPLE_SERVER_EXE)
+SRC+=$(IA_CLIENT_SRC)
+EXE+=$(IA_CLIENT_EXE)
+
 #The Mac OS X Xcode project has a target name of 'server' or 'client'
 ifneq (,$(TARGET_NAME))
  ifneq (,$(findstring server,$(TARGET_NAME)))
@@ -47,6 +62,10 @@ STATIC:=\
 	$(MATRIXSSL_ROOT)/core/libcore_s.a \
 	$(STATIC_INTERNAL)
 
+#ifdef USE_ROT_CRYPTO
+STATIC+=$(LIBDRIVER_VAL_UP_PATH)
+#endif
+
 STATIC_CLIENT:=\
 	$(MATRIXSSL_ROOT)/apps/common/client_common_s.a
 
@@ -65,6 +84,15 @@ $(SERVER_EXE): $(SERVER_SRC:.c=.o) $(STATIC)
 	$(CC) -o $@ $^ $(LDFLAGS) $(CFLAGS)
 
 $(CLIENT_EXE): $(CLIENT_SRC:.c=.o) $(STATIC) $(STATIC_CLIENT)
+	$(CC) -o $@ $^ $(LDFLAGS) $(CFLAGS)
+
+$(SIMPLE_CLIENT_EXE): $(SIMPLE_CLIENT_SRC:.c=.o) $(STATIC)
+	$(CC) -o $@ $^ $(LDFLAGS) $(CFLAGS)
+
+$(IA_CLIENT_EXE): $(IA_CLIENT_SRC:.c=.o) $(STATIC)
+	$(CC) -o $@ $^ $(LDFLAGS) $(CFLAGS)
+
+$(SIMPLE_SERVER_EXE): $(SIMPLE_SERVER_SRC:.c=.o) $(STATIC)
 	$(CC) -o $@ $^ $(LDFLAGS) $(CFLAGS)
 
 $(NET_EXE): $(NET_SRC:.c=.o) $(STATIC)

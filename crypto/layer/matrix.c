@@ -5,7 +5,7 @@
  *      Matrix Crypto Initialization and utility layer.
  */
 /*
- *      Copyright (c) 2013-2017 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 INSIDE Secure Corporation
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -33,6 +33,10 @@
 /******************************************************************************/
 
 #include "../cryptoImpl.h"
+
+#ifdef USE_ROT_CRYPTO
+# include "../../crypto-rot/rotCommon.h"
+#endif
 
 /******************************************************************************/
 /**
@@ -75,6 +79,31 @@ int32_t psCryptoOpen(const char *config)
         return PS_SELFTEST_FAILED;
     }
 #endif /* USE_FLPS_BINDING */
+#ifdef USE_ROT_ECC
+    /* Pre-allocate domain assets for all ECC curves supported by the
+       compile-time configuration. */
+# ifdef USE_SECP256R1
+    if (psRotLoadCurve(IANA_SECP256R1, NULL) != PS_SUCCESS)
+    {
+        psError("psRotLoadCurve failed during psCryptoOpen\n");
+        return PS_FAILURE;
+    }
+# endif /* USE_SECP256R1 */
+# ifdef USE_SECP384R1
+    if (psRotLoadCurve(IANA_SECP384R1, NULL) != PS_SUCCESS)
+    {
+        psError("psRotLoadCurve failed during psCryptoOpen\n");
+        return PS_FAILURE;
+    }
+# endif /* USE_SECP384R1 */
+# ifdef USE_SECP521R1
+    if (psRotLoadCurve(IANA_SECP521R1, NULL) != PS_SUCCESS)
+    {
+        psError("psRotLoadCurve failed during psCryptoOpen\n");
+        return PS_FAILURE;
+    }
+# endif /* USE_SECP521R1 */
+#endif /* USE_ROT_ECC */
 #ifdef USE_LIBSODIUM_CRYPTO
     if (sodium_init() == -1)
     {
@@ -103,6 +132,20 @@ int32_t psCryptoOpen(const char *config)
 
 void psCryptoClose(void)
 {
+#ifdef USE_ROT_ECC
+# ifdef USE_SECP256R1
+    psRotFreeCurveAsset(IANA_SECP256R1);
+# endif
+# ifdef USE_SECP384R1
+    psRotFreeCurveAsset(IANA_SECP384R1);
+# endif
+# ifdef USE_SECP521R1
+    psRotFreeCurveAsset(IANA_SECP521R1);
+# endif
+# ifdef DEBUG_ROT_ASSETS
+    psRotFreeAllAssets();
+# endif
+#endif
     if (*g_config == 'Y')
     {
         *g_config = 'N';

@@ -228,10 +228,14 @@
 #  define USE_X509/**< Enable minimal X.509 support. */
 #  define USE_CERT_PARSE/**< Enable TBSCertificate parsing. Usually required. @pre USE_X509 */
 #  define USE_FULL_CERT_PARSE/**< @pre USE_CERT_PARSE */
+/**< Support the certificatePolicy, policyMappings and policyContrainsts X.509 extensions. */
+/* #define USE_CERT_POLICY_EXTENSIONS */
 /**< Support extra distinguished name attributes that SHOULD be supported according to RFC 5280. */
 /* #define USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD */
 /**< Support extra distinguished name attributes not mentioned in RFC 5280. */
 /* #define USE_EXTRA_DN_ATTRIBUTES */
+/**< Allow ASN.1 BMPString string type in DN Attributes. */
+/* #define USE_ASN_BMPSTRING_DN_ATTRIBS */
 /* #define ENABLE_CA_CERT_HASH  *//**< Used only for TLS trusted CA ind ext. */
 /* #define ENABLE_MD5_SIGNED_CERTS  *//** @security Accept MD5 signed certs? */
 
@@ -273,13 +277,12 @@
 /* #define USE_OCSP  *//**< @pre USE_SHA1 */
 #  ifdef USE_OCSP
 #    define USE_OCSP_RESPONSE
-#    define USE_OCSP_REQUEST
 #  elif defined(USE_X509) && defined(USE_SHA1) && defined(USE_CERT_PARSE)
 /**
    Enable parsing and writing of OCSP responses. This is enough
    to support OCSP stapling.
 */
-#    define USE_OCSP_RESPONSE /**< @pre USE_SHA1 */
+#    define USE_OCSP_RESPONSE/**< @pre USE_SHA1 */
 #endif /* USE_OCSP */
 
 /******************************************************************************/
@@ -294,6 +297,12 @@
 #  define USE_PKCS12/**< @pre USE_PKCS8 */
 #  define USE_PKCS1_OAEP/* OAEP padding algorithm */
 #  define USE_PKCS1_PSS/* PSS padding algorithm */
+
+#  ifdef USE_PRIVATE_KEY_PARSING
+/* USE_PRIVATE_KEY_PARSING enables decoding of DER-encoded keys and certs. For PEM there is a separate define. */
+#   define USE_BASE64_DECODE/* Allow decoding Base64-encoded data. */
+#   define USE_PEM_DECODE/* Allow decoding PEM-encoded data. @pre USE_BASE64_DECODE. */
+#  endif
 
 #endif    /* _h_PS_CRYPTOCONFIG */
 

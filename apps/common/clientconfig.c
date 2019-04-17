@@ -36,23 +36,29 @@
 /* Identity Certs and Keys for use with Client Authentication */
 #ifdef ID_RSA
 #define EXAMPLE_RSA_KEYS
-#define EXAMPLE_FILE_KEYS
+# ifdef MATRIX_USE_FILE_SYSTEM
+#  define EXAMPLE_FILE_KEYS
 static const char rsaCertFile[] = "../../testkeys/RSA/2048_RSA.pem";
 static const char rsaPrivkeyFile[] = "../../testkeys/RSA/2048_RSA_KEY.pem";
+# endif
 #endif
 
 #ifdef ID_ECDH_ECDSA
 #define EXAMPLE_EC_KEYS
-#define EXAMPLE_FILE_KEYS
+# ifdef MATRIX_USE_FILE_SYSTEM
+#  define EXAMPLE_FILE_KEYS
 static const char ecCertFile[] = "../../testkeys/EC/384_EC.pem";
 static const char ecPrivkeyFile[] = "../../testkeys/EC/384_EC_KEY.pem";
+# endif
 #endif
 
 #ifdef ID_ECDH_RSA
 #define EXAMPLE_ECDH_RSA_KEYS
-#define EXAMPLE_FILE_KEYS
+# ifdef MATRIX_USE_FILE_SYSTEM
+#  define EXAMPLE_FILE_KEYS
 static const char ecdhRsaCertFile[] = "../../testkeys/ECDH_RSA/521_ECDH-RSA.pem";
 static const char ecdhRsaPrivkeyFile[] = "../../testkeys/ECDH_RSA/521_ECDH-RSA_KEY.pem";
+# endif
 #endif
 
 clientconfig_t g_clientconfig;
@@ -99,9 +105,14 @@ void clientconfigInitialize(void)
     g_clientconfig.default_ca_file = NULL;
     g_clientconfig.cert_file = NULL;
     g_clientconfig.privkey_file = NULL;
+# ifdef EXAMPLE_FILE_KEYS
     g_clientconfig.load_key = &loadKeysFromFile;
     g_clientconfig.loadKeysFromMemory = 0;
+# else
+    g_clientconfig.loadKeysFromMemory = 1;
+# endif
 
+# ifdef EXAMPLE_FILE_KEYS
 # ifdef EXAMPLE_RSA_KEYS
     g_clientconfig.cert_file = example_file_path(rsaCertFile);
     g_clientconfig.privkey_file = example_file_path(rsaPrivkeyFile);
@@ -126,6 +137,7 @@ void clientconfigInitialize(void)
 # elif defined(USE_PSK_CIPHER_SUITE)
     g_clientconfig.load_key = &loadPreSharedKeys;
     g_clientconfig.loadKeysFromMemory = 1;
+# endif
 # endif
 
 # ifdef USE_HEADER_KEYS

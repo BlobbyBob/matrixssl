@@ -144,9 +144,9 @@ static int32_t tls13ParseServerHello(ssl_t *ssl,
 static int32_t tls13ParseCertificateRequest(ssl_t *ssl,
         psParseBuf_t *pb);
 # endif
+# ifdef USE_CERT_VALIDATE
 static int32_t tls13ParseCertificate(ssl_t *ssl,
         psParseBuf_t *pb);
-# ifdef USE_CERT_VALIDATE
 static int32_t tls13ParseCertificateVerify(ssl_t *ssl,
         psParseBuf_t *pb);
 # endif
@@ -297,7 +297,7 @@ parse_next_record_header:
         decryptTo = pb.buf.start; /* In-situ decryption. */
         if (ssl->decrypt(ssl, pb.buf.start, decryptTo, ssl->rec.len) < 0)
         {
-            if (IS_SERVER(ssl) &&
+            if (MATRIX_IS_SERVER(ssl) &&
                     ssl->tls13ServerEarlyDataEnabled == PS_FALSE &&
                     ssl->extFlags.got_early_data == 1)
             {
@@ -659,7 +659,7 @@ static int32_t tls13CheckHsState(ssl_t *ssl,
       - SSL_HS_TLS_1_3_WAIT_FINISHED (after having sent our Finished,
       but before having received the server Finished.)
     */
-    else if (!IS_SERVER(ssl) &&
+    else if (!MATRIX_IS_SERVER(ssl) &&
             msg == SSL_HS_NEW_SESSION_TICKET &&
             (ssl->hsState == SSL_HS_DONE ||
             ssl->hsState == SSL_HS_TLS_1_3_WAIT_FINISHED))
@@ -987,7 +987,7 @@ static int32_t tls13ParseHandshakeMessage(ssl_t *ssl,
             goto exit;
         }
 
-        if (IS_SERVER(ssl))
+        if (MATRIX_IS_SERVER(ssl))
         {
             /* Transcript-Hash for ClientHello..Client Finished. */
             rc = tls13TranscriptHashSnapshot(ssl, ssl->sec.tls13TrHashSnapshot);
@@ -1452,7 +1452,7 @@ static int32_t tls13ParseCertificate(ssl_t *ssl,
           Empty certificate_list from the server:
           Always send an alert.
         */
-        if (IS_SERVER(ssl))
+        if (MATRIX_IS_SERVER(ssl))
         {
 # ifdef SERVER_WILL_ACCEPT_EMPTY_CLIENT_CERT_MSG
             psTraceInfo("Received empty client certificate\n");
@@ -1621,7 +1621,9 @@ static int32_t tls13ParseCertificateVerify(ssl_t *ssl,
 
     psTracePrintTls13SigAlg(INDENT_HS_MSG,
             "algorithm",
-            algorithm, PS_TRUE);
+            algorithm,
+            PS_FALSE,
+            PS_TRUE);
 
     ssl->sec.tls13PeerCvSigAlg = algorithm;
 
@@ -1657,8 +1659,8 @@ static int32_t tls13ParseCertificateVerify(ssl_t *ssl,
             algorithm,
             pb->buf.start, signatureLen,
             ssl->sec.tls13TrHashSnapshot, hashLen,
-            IS_SERVER(ssl) ? contextStrClient : contextStrServer,
-            IS_SERVER(ssl) ? Strlen(contextStrClient) : Strlen(contextStrServer));
+            MATRIX_IS_SERVER(ssl) ? contextStrClient : contextStrServer,
+            MATRIX_IS_SERVER(ssl) ? Strlen(contextStrClient) : Strlen(contextStrServer));
     if (rc < 0)
     {
         psTraceErrr("Could not verify peer signature\n");
@@ -1701,7 +1703,7 @@ static int32_t tls13ParseFinished(ssl_t *ssl, psParseBuf_t *pb)
     }
 
     /* Compute our version of the peer's verify_data. */
-    rc = tls13DeriveFinishedKey(ssl, !IS_SERVER(ssl));
+    rc = tls13DeriveFinishedKey(ssl, !MATRIX_IS_SERVER(ssl));
     if (rc < 0)
     {
         goto out_internal_error;

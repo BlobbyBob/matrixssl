@@ -48,6 +48,13 @@ psBool_t matrixSslTlsVersionRangeSupported(psProtocolVersion_t low,
         return PS_FALSE;
     }
 
+    if (!(low & v_tls_any) || !(high & v_tls_any))
+    {
+        psTraceInfo("matrixSslTlsVersionRangeSupported: only TLS "
+                "versions supported by this API\n");
+        return PS_FALSE;
+    }
+
     if (!COMPILED_IN_VER(low) || !COMPILED_IN_VER(high))
     {
         return PS_FALSE;
@@ -56,7 +63,7 @@ psBool_t matrixSslTlsVersionRangeSupported(psProtocolVersion_t low,
     low <<= 1;
     while (low < high)
     {
-        if (!COMPILED_IN_VER(low))
+        if ((low & v_tls_any) && !COMPILED_IN_VER(low))
         {
             return PS_FALSE;
         }
@@ -84,12 +91,11 @@ matrixSslSessOptsSetClientTlsVersionRange(sslSessOpts_t *options,
     i = 0;
     do
     {
-        if (COMPILED_IN_VER(high))
+        if ((high & v_tls_any) && COMPILED_IN_VER(high))
         {
-            versions[i] = high;
+            versions[i++] = high;
+            numVersions++;
         }
-        numVersions++;
-        i++;
         high >>= 1;
     } while (high >= low);
 
@@ -105,9 +111,6 @@ matrixSslSessOptsSetClientTlsVersions(sslSessOpts_t *options,
 {
     uint8_t i, k;
     psProtocolVersion_t highestVersion = 0;
-# ifdef USE_TLS_1_3
-    psBool_t haveTls13Draft28 = PS_FALSE;
-# endif
 
     if (options == NULL)
     {
@@ -124,15 +127,6 @@ matrixSslSessOptsSetClientTlsVersions(sslSessOpts_t *options,
                     "TLS_MAX_SUPPORTED_VERSIONS.\n");
         return PS_ARG_FAIL;
     }
-# ifdef USE_TLS_1_3
-    for (i = 0; i < versionsLen; i++)
-    {
-        if (versions[i] == v_tls_1_3_draft_28)
-        {
-            haveTls13Draft28 = PS_TRUE;
-        }
-    }
-# endif
 
     options->supportedVersionsLen = 0;
     for (i = 0, k = 0; i < versionsLen; i++)
@@ -141,6 +135,8 @@ matrixSslSessOptsSetClientTlsVersions(sslSessOpts_t *options,
         {
             psTraceErrr("Unsupported version. Please enable more " \
                         "versions in matrixsslConfig.h.\n");
+            psTraceStrInfo("Unsupported version: %s\n",
+                    VER_TO_STR(versions[i]));
             return PS_ARG_FAIL;
         }
         options->supportedVersions[k++] = versions[i];
@@ -149,15 +145,6 @@ matrixSslSessOptsSetClientTlsVersions(sslSessOpts_t *options,
         {
             highestVersion = versions[i];
         }
-# ifdef USE_TLS_1_3
-        if (versions[i] == v_tls_1_3 && !haveTls13Draft28)
-        {
-            /* Very little support in the wild for TLS 1.3 RFC version,
-               so add draft #28 as well. TODO: remove.*/
-            options->supportedVersions[k++] = v_tls_1_3_draft_28;
-            options->supportedVersionsLen++;
-        }
-# endif
     }
 
     /* Set the versionFlag always to highest version. Note that
@@ -192,12 +179,11 @@ matrixSslSessOptsSetServerTlsVersionRange(sslSessOpts_t *options,
     i = 0;
     do
     {
-        if (COMPILED_IN_VER(high))
+        if ((high & v_tls_any) && COMPILED_IN_VER(high))
         {
-            versions[i] = high;
+            versions[i++] = high;
+            numVersions++;
         }
-        numVersions++;
-        i++;
         high >>= 1;
     } while (high >= low);
 
@@ -212,9 +198,6 @@ matrixSslSessOptsSetServerTlsVersions(sslSessOpts_t *options,
         int32_t versionsLen)
 {
     uint8_t i, k;
-# ifdef USE_TLS_1_3
-    psBool_t haveTls13Draft28 = PS_FALSE;
-# endif
 
     /*
       On the server side the version handling goes either of two
@@ -240,15 +223,6 @@ matrixSslSessOptsSetServerTlsVersions(sslSessOpts_t *options,
         return PS_ARG_FAIL;
     }
 
-# ifdef USE_TLS_1_3
-    for (i = 0; i < versionsLen; i++)
-    {
-        if (versions[i] == v_tls_1_3_draft_28)
-        {
-            haveTls13Draft28 = PS_TRUE;
-        }
-    }
-# endif
     for (i = 0, k = 0; i < versionsLen; i++)
     {
         if (!matrixSslTlsVersionRangeSupported(versions[i], versions[i]))
@@ -263,15 +237,6 @@ matrixSslSessOptsSetServerTlsVersions(sslSessOpts_t *options,
         }
         options->supportedVersions[k++] = versions[i];
         options->supportedVersionsLen++;
-# ifdef USE_TLS_1_3
-        if (versions[i] == v_tls_1_3 && !haveTls13Draft28)
-        {
-            /* Very little support in the wild for TLS 1.3 RFC version,
-               so add draft #28 as well. TODO: remove.*/
-            options->supportedVersions[k++] = v_tls_1_3_draft_28;
-            options->supportedVersionsLen++;
-        }
-# endif
     }
 
     if (versionsLen == 1)
@@ -313,7 +278,7 @@ void addVersion(ssl_t *ssl, psProtocolVersion_t ver)
       causing handshake failure.
     */
     if ((ver & v_tls_1_3_any)
-            && IS_CLIENT(ssl)
+            && MATRIX_IS_CLIENT(ssl)
             && !ssl->tls13CiphersuitesEnabledClient)
     {
         psTraceInfo("Warning: tried to enable TLS 1.3 without enabling " \
@@ -361,63 +326,63 @@ int32 initSupportedVersions(ssl_t *ssl, sslSessOpts_t *options)
         flags = options->versionFlag;
         if (flags & SSL_FLAGS_DTLS)
         {
-            addVersion(ssl, v_dtls_1_0);
             highestSupported = v_dtls_1_0;
             if (flags & SSL_FLAGS_TLS_1_2)
             {
                 addVersion(ssl, v_dtls_1_2);
                 highestSupported = v_dtls_1_2;
             }
+            addVersion(ssl, v_dtls_1_0);
         }
         else
         {
-            if ((flags & SSL_FLAGS_TLS_1_0)
-                    && !SUPP_VER(ssl, v_tls_1_0))
-            {
-                addVersion(ssl, v_tls_1_0);
-            }
-            if ((flags & SSL_FLAGS_TLS_1_1)
-                    && !SUPP_VER(ssl, v_tls_1_1))
-            {
-                addVersion(ssl, v_tls_1_1);
-            }
-            if ((flags & SSL_FLAGS_TLS_1_2)
-                    && !SUPP_VER(ssl, v_tls_1_2))
-            {
-                addVersion(ssl, v_tls_1_2);
-            }
 #ifdef USE_TLS_1_3
             if ((flags & SSL_FLAGS_TLS_1_3)
                     && !SUPP_VER(ssl, v_tls_1_3))
             {
                 addVersion(ssl, v_tls_1_3);
             }
-            if ((flags & SSL_FLAGS_TLS_1_3_DRAFT_22)
-                    && !SUPP_VER(ssl, v_tls_1_3_draft_22))
+            if ((flags & SSL_FLAGS_TLS_1_3_DRAFT_28) &&
+                    !SUPP_VER(ssl, v_tls_1_3_draft_28))
             {
-                addVersion(ssl, v_tls_1_3_draft_22);
-            }
-            if ((flags & SSL_FLAGS_TLS_1_3_DRAFT_23) &&
-                    !SUPP_VER(ssl, v_tls_1_3_draft_23))
-            {
-                addVersion(ssl, v_tls_1_3_draft_23);
-            }
-            if ((flags & SSL_FLAGS_TLS_1_3_DRAFT_24) &&
-                    !SUPP_VER(ssl, v_tls_1_3_draft_24))
-            {
-                addVersion(ssl, v_tls_1_3_draft_24);
+                addVersion(ssl, v_tls_1_3_draft_28);
             }
             if ((flags & SSL_FLAGS_TLS_1_3_DRAFT_26) &&
                     !SUPP_VER(ssl, v_tls_1_3_draft_26))
             {
                 addVersion(ssl, v_tls_1_3_draft_26);
             }
-            if ((flags & SSL_FLAGS_TLS_1_3_DRAFT_28) &&
-                    !SUPP_VER(ssl, v_tls_1_3_draft_28))
+            if ((flags & SSL_FLAGS_TLS_1_3_DRAFT_24) &&
+                    !SUPP_VER(ssl, v_tls_1_3_draft_24))
             {
-                addVersion(ssl, v_tls_1_3_draft_28);
+                addVersion(ssl, v_tls_1_3_draft_24);
+            }
+            if ((flags & SSL_FLAGS_TLS_1_3_DRAFT_23) &&
+                    !SUPP_VER(ssl, v_tls_1_3_draft_23))
+            {
+                addVersion(ssl, v_tls_1_3_draft_23);
+            }
+            if ((flags & SSL_FLAGS_TLS_1_3_DRAFT_22)
+                    && !SUPP_VER(ssl, v_tls_1_3_draft_22))
+            {
+                addVersion(ssl, v_tls_1_3_draft_22);
             }
 #endif
+            if ((flags & SSL_FLAGS_TLS_1_2)
+                    && !SUPP_VER(ssl, v_tls_1_2))
+            {
+                addVersion(ssl, v_tls_1_2);
+            }
+            if ((flags & SSL_FLAGS_TLS_1_1)
+                    && !SUPP_VER(ssl, v_tls_1_1))
+            {
+                addVersion(ssl, v_tls_1_1);
+            }
+            if ((flags & SSL_FLAGS_TLS_1_0)
+                    && !SUPP_VER(ssl, v_tls_1_0))
+            {
+                addVersion(ssl, v_tls_1_0);
+            }
         }
     }
 
@@ -446,7 +411,7 @@ int32 initSupportedVersions(ssl_t *ssl, sslSessOpts_t *options)
       - If client, we shall encode the first ClientHello according
         in the TLS 1.3 ClientHello format.
     */
-    if (IS_CLIENT(ssl))
+    if (MATRIX_IS_CLIENT(ssl))
     {
         if (highestSupported == v_undefined)
         {

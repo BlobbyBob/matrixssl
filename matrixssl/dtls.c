@@ -553,7 +553,7 @@ int32 dtlsEncryptFragRecord(ssl_t *ssl, flightEncode_t *msg,
     if (ssl->encrypt(ssl, encryptStart, encryptStart,
             (int32) (*c - encryptStart)) < 0)
     {
-        psTraceInfo("Error encrypting message for write\n");
+        psTraceErrr("Error encrypting message for write\n");
         return PS_FAILURE;
     }
 
@@ -664,7 +664,7 @@ int32 dtlsChkReplayWindow(ssl_t *ssl, unsigned char *seq64)
             ssl->dtlsBitmap = 0;
             return 1; /* initial one */
         }
-        if (dtlsCompareEpoch(ssl->rec.epoch, ssl->resendEpoch) == 1 &&
+        if (dtlsCompareEpoch(ssl->rec.epoch, ssl->expectedEpoch) >= 0 &&
             lastSeq > 0)
         {
             ssl->dtlsBitmap = 0;
@@ -856,7 +856,8 @@ static int32 dtlsRevertWriteCipher(ssl_t *ssl)
     ssl->nativeEnMacSize = ssl->oenNativeHmacSize;
     ssl->enIvSize = ssl->oenIvSize;
     ssl->enBlockSize = ssl->oenBlockSize;
-    Memcpy(ssl->sec.writeIV, ssl->owriteIV, ssl->oenIvSize);
+    Memcpy(ssl->sec.writeIV, ssl->owriteIV, sizeof(ssl->owriteIV));
+    Memcpy(ssl->sec.writeKey, ssl->owriteKey, sizeof(ssl->owriteKey));
 # ifdef USE_NATIVE_TLS_ALGS
     Memcpy(ssl->sec.writeMAC, ssl->owriteMAC, ssl->oenMacSize);
     Memcpy(&ssl->sec.encryptCtx, &ssl->oencryptCtx,
@@ -1036,6 +1037,78 @@ static int32 dtlsGetNextRecordLen(ssl_t *ssl, int32 pmtu, sslBuf_t *out,
 }
 
 /******************************************************************************/
+
+static bool canResend(ssl_t *ssl)
+{
+    bool canSend = false;
+
+    if (ssl->flags & SSL_FLAGS_SERVER)
+    {
+        if (ssl->hsState == SSL_HS_FINISHED)
+            canSend = 1;
+
+        if (ssl->hsState == SSL_HS_CLIENT_HELLO)
+        {
+            canSend = 1; /* any handshake type */
+        }
+        if (!(ssl->flags & SSL_FLAGS_RESUMED))
+        {
+            if (ssl->hsState == SSL_HS_DONE)
+            {
+                canSend = 1; /* DONE set on parse of peer FINISHED */
+            }
+        }
+
+        /* Different client auth boundary for second flight */
+        if (ssl->flags & SSL_FLAGS_CLIENT_AUTH)
+        {
+            if (ssl->hsState == SSL_HS_CERTIFICATE)
+            {
+                canSend = 1;
+            }
+        }
+        else
+        {
+            if (ssl->hsState == SSL_HS_CLIENT_KEY_EXCHANGE)
+            {
+                canSend = 1;
+            }
+        }
+
+        if (ssl->flags & SSL_FLAGS_RESUMED)
+        {
+            if (ssl->hsState == SSL_HS_FINISHED)
+            {
+                canSend = 1;
+            }
+        }
+    }
+    else
+    {
+#if 0
+        /* Client tests */
+        if (ssl->hsState == SSL_HS_SERVER_HELLO)
+        {
+            canSend = 1;
+        }
+        if (!(ssl->flags & SSL_FLAGS_RESUMED))
+        {
+            if (ssl->hsState == SSL_HS_FINISHED)
+            {
+                canSend = 1;
+            }
+        }
+        if (ssl->hsState == SSL_HS_DONE)
+        {
+            canSend = 1; /* Done is set on parse of peer FINISHED */
+        }
+#else
+        canSend = 1;  /* Why wouldnt't it be safe to resend aways when in doubt */
+#endif
+    }
+    return canSend;
+}
+
 /*
     Manages the DTLS flight buffer to make sure each call will return data
     that is less than the PMTU (dtlsGetNextRecordLen).  Also, plays a role
@@ -1080,7 +1153,7 @@ int32 matrixDtlsGetOutdata(ssl_t *ssl, unsigned char **buf)
     0 and flag the flight as needing a resend for the cases in which we
     come back in here with a zero buffer (a timeout happen and resend needed)
  */
-    if ((tmp.end == tmp.start) && (ssl->flightDone == 1))
+    if (ssl->outlen == 0 && ssl->flightDone == 1)
     {
         ssl->flightDone = 0;
         *buf = NULL;
@@ -1090,7 +1163,7 @@ int32 matrixDtlsGetOutdata(ssl_t *ssl, unsigned char **buf)
 /*
     If ssl->outbuf is empty and not in appDataExch mode this is a flight resend
  */
-    if ((tmp.end == tmp.start) && (ssl->appDataExch == 0))
+    if (ssl->outlen == 0 && ssl->appDataExch == 0)
     {
 
         /* And now the ugly part.  If we have been receiving records that
@@ -1105,71 +1178,7 @@ int32 matrixDtlsGetOutdata(ssl_t *ssl, unsigned char **buf)
            The state is always the handshake message you expect to be receiving
            from the peer.
          */
-        safeToResend = 0;
-
-        if (ssl->flags & SSL_FLAGS_SERVER)
-        {
-            if (ssl->hsState == SSL_HS_CLIENT_HELLO)
-            {
-                safeToResend = 1; /* any handshake type */
-            }
-            if (!(ssl->flags & SSL_FLAGS_RESUMED))
-            {
-                if (ssl->hsState == SSL_HS_DONE)
-                {
-                    safeToResend = 1; /* DONE set on parse of peer FINISHED */
-                }
-            }
-
-# ifdef USE_CLIENT_AUTH
-            /* Different client auth boundary for second flight */
-            if (ssl->flags & SSL_FLAGS_CLIENT_AUTH)
-            {
-                if (ssl->hsState == SSL_HS_CERTIFICATE)
-                {
-                    safeToResend = 1;
-                }
-            }
-            else
-            {
-# endif     /* USE_CLIENT_AUTH */
-            if (ssl->hsState == SSL_HS_CLIENT_KEY_EXCHANGE)
-            {
-                safeToResend = 1;
-            }
-# ifdef USE_CLIENT_AUTH
-        }
-# endif     /* USE_CLIENT_AUTH */
-
-            if (ssl->flags & SSL_FLAGS_RESUMED)
-            {
-                if (ssl->hsState == SSL_HS_FINISHED)
-                {
-                    safeToResend = 1;
-                }
-            }
-
-        }
-        else
-        {
-            /* Client tests */
-            if (ssl->hsState == SSL_HS_SERVER_HELLO)
-            {
-                safeToResend = 1;
-            }
-            if (!(ssl->flags & SSL_FLAGS_RESUMED))
-            {
-                if (ssl->hsState == SSL_HS_FINISHED)
-                {
-                    safeToResend = 1;
-                }
-            }
-            if (ssl->hsState == SSL_HS_DONE)
-            {
-                safeToResend = 1; /* Done is set on parse of peer FINISHED */
-            }
-
-        }
+        safeToResend = canResend(ssl);
 
         if (safeToResend == 0)
         {
@@ -1221,10 +1230,9 @@ int32 matrixDtlsSentData(ssl_t *ssl, uint32 bytes)
 {
     int32 rc;
 
+    /* tis decrements bytes from length of constructed output */
     rc = matrixSslSentData(ssl, bytes);
-/*
-    NOTE: appDataExch only gets set on the receipt of an application data
- */
+
     if (ssl->outlen == 0 && ssl->appDataExch == 0)
     {
         ssl->flightDone = 1;

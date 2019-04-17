@@ -66,6 +66,10 @@ OPT=
 endif
 endif
 
+ifneq '$(MATRIX_OPTIMIZE_FOOTPRINT)' ''
+OPT=-Os
+endif
+
 #Override CFLAGS_OPTIMIZE with OPT if specified
 ifneq '$(filter file override command automatic,$(origin OPT))' ''
 CFLAGS_OPTIMIZE=$(OPT)

@@ -53,32 +53,28 @@
   sigalg_ecdsa_secp256r1_sha256 (0x0403) means sha256_ecdsa in TLS 1.2
   (TLS 1.2 does not specify the curve to use.)
 */
-static const uint16_t tls12SigAlgs[] = {
-
+static const uint16_t tls12SigAlgs[] =
+{
     sigalg_rsa_pkcs1_sha256,
     sigalg_rsa_pkcs1_sha384,
     sigalg_rsa_pkcs1_sha512,
     sigalg_ecdsa_secp256r1_sha256,
     sigalg_ecdsa_secp384r1_sha384,
     sigalg_ecdsa_secp521r1_sha512,
-#if 0
-    /* this this is a lie - code to verify such signature; fails on client side SKE decode that can't handle
-       PSS. */
+    sigalg_rsa_pkcs1_sha1,
+    sigalg_ecdsa_sha1,
+# ifdef USE_PKCS1_PSS
     sigalg_rsa_pss_rsae_sha256,
     sigalg_rsa_pss_rsae_sha384,
     sigalg_rsa_pss_rsae_sha512,
-    sigalg_rsa_pss_pss_sha256,
-    sigalg_rsa_pss_pss_sha384,
-    sigalg_rsa_pss_pss_sha512,
-#endif
-    sigalg_rsa_pkcs1_sha1,
-    sigalg_ecdsa_sha1,
+# endif
     0
 };
 
 /* TLS1.3 uses separate lists for certificates and CertificateVerify.
    This list is for the TLS1.3 SIGNATURE_ALGORITHMS. */
-static const uint16_t tls13SigAlgs[] = {
+static const uint16_t tls13SigAlgs[] =
+{
     sigalg_ecdsa_secp256r1_sha256,
     sigalg_ecdsa_secp384r1_sha384,
     sigalg_ecdsa_secp521r1_sha512,
@@ -96,7 +92,8 @@ static const uint16_t tls13SigAlgs[] = {
 
 /* This list is used for TLS1.3 SIGNATURE_ALGORITHMS_CERT and
    case where both TLS1.2 and TLS1.3 are enabled */
-static const uint16_t allSigAlgs[] = {
+static const uint16_t allSigAlgs[] =
+{
     sigalg_rsa_pkcs1_sha256,
     sigalg_rsa_pkcs1_sha384,
     sigalg_rsa_pkcs1_sha512,
@@ -106,12 +103,14 @@ static const uint16_t allSigAlgs[] = {
 # ifdef USE_ED25519
     sigalg_ed25519,
 # endif
+# ifdef USE_PKCS1_PSS
     sigalg_rsa_pss_rsae_sha256,
     sigalg_rsa_pss_rsae_sha384,
     sigalg_rsa_pss_rsae_sha512,
     sigalg_rsa_pss_pss_sha256,
     sigalg_rsa_pss_pss_sha384,
     sigalg_rsa_pss_pss_sha512,
+# endif
     sigalg_rsa_pkcs1_sha1,
     sigalg_ecdsa_sha1,
     0

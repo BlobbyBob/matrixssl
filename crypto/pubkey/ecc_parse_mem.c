@@ -113,10 +113,10 @@ int32_t getEcPubKey(psPool_t *pool, const unsigned char **pp, psSize_t len,
         Standard form - SHA-1 hash of the value of the BIT STRING
         subjectPublicKey [excluding the tag, length, and number of unused
         bits] */
-    psSha1PreInit(&dc.sha1);
-    psSha1Init(&dc.sha1);
-    psSha1Update(&dc.sha1, p, arcLen);
-    psSha1Final(&dc.sha1, sha1KeyHash);
+    psSha1PreInit(&dc.u.sha1);
+    psSha1Init(&dc.u.sha1);
+    psSha1Update(&dc.u.sha1, p, arcLen);
+    psSha1Final(&dc.u.sha1, sha1KeyHash);
 # endif
 
     /* Note arcLen could again be zero here */

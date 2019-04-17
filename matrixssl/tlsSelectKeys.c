@@ -66,12 +66,43 @@ const sslKeySelectInfo_t *matrixSslGetClientKeySelectInfo(ssl_t *ssl)
     return &ssl->sec.keySelect;
 }
 
+static
+int32_t checkSigAlg(ssl_t *ssl,
+        sslKeySelectInfo_t *keySelect,
+        uint32_t certSigAlg)
+{
+    uint32_t check = 0;
+
+    if (USING_TLS_1_3(ssl))
+    {
+        check = keySelect->peerCertSigAlgMask;
+    }
+    else
+    {
+        check = keySelect->peerSigAlgMask;
+    }
+
+    if (check != 0 && !peerSupportsSigAlg(certSigAlg, check))
+    {
+# ifdef DEBUG_TLS_SELECT_KEYS
+        psTraceIntInfo("identityCb: invalid cert sig algorithm %x ",
+                cert->sigAlgorithm);
+        psTraceIntInfo("Not found in list: %x\n", check);
+# endif /* DEBUG_TLS_SELECT_KEYS */
+        return PS_FAILURE;
+    }
+
+    return PS_SUCCESS;
+}
+
 /* Choose a client cert and key from the ssl->keys->identity list. */
 static
 int32_t chooseFromLoadedKeys(ssl_t *ssl, sslKeySelectInfo_t *keySelect)
 {
-    psBool_t found;
+    psBool_t found = PS_FALSE;
     int i;
+    int32_t rc;
+    sslIdentity_t *id;
 
     /* RFC 5246, section 7.4.4: "Any certificates provided by the
        client MUST be signed using a hash/signature algorithm pair
@@ -80,76 +111,83 @@ int32_t chooseFromLoadedKeys(ssl_t *ssl, sslKeySelectInfo_t *keySelect)
        cert is found. */
     if (keySelect->nCas == 0)
     {
-        /* server did not specify CA's. Use the first key */
-        ssl->chosenIdentity = ssl->keys->identity;
-# ifdef USE_CLIENT_SIDE_SSL
-        ssl->sec.certMatch = 1;
-# endif
-        psTraceInfo("no CA's from peer: using first given\n");
-    }
-
-    for (found = PS_FALSE, i = 0; !found && i < keySelect->nCas; i++)
-    {
-# ifdef USE_CERT_PARSE
-      sslIdentity_t *has;
-      psX509Cert_t *cert;
-
-        for (has = ssl->keys->identity; !found && has; has = has->next)
+        /*
+          Server did not specify CA's. Use the first key that can
+          is compatible with the server's supported_signature_algorithms.
+        */
+        id = ssl->keys->identity;
+        do
         {
-            /* traverse up chains to find accepted issuer */
-            for (cert = has->cert; cert; cert = cert->next)
+            rc = checkSigAlg(ssl,
+                    keySelect,
+                    id->cert->sigAlgorithm);
+            if (rc == PS_SUCCESS)
             {
-                if (cert->issuer.dnencLen == keySelect->caNameLens[i]
-                        && Memcmp(cert->issuer.dnenc,
-                                keySelect->caNames[i],
-                                keySelect->caNameLens[i]) == 0)
-                {
-                    uint32_t check = 0;
+                ssl->chosenIdentity = id;
+# ifdef USE_CLIENT_SIDE_SSL
+                ssl->sec.certMatch = 1;
+# endif
+                found = PS_TRUE;
+                break;
+            }
+            id = id->next;
+        }
+        while (id != NULL);
+    }
+    else
+    {
+        for (found = PS_FALSE, i = 0; !found && i < keySelect->nCas; i++)
+        {
+# ifdef USE_CERT_PARSE
+            sslIdentity_t *has;
+            psX509Cert_t *cert;
 
-                    if (USING_TLS_1_3(ssl))
+            for (has = ssl->keys->identity; !found && has; has = has->next)
+            {
+                /* traverse up chains to find accepted issuer */
+                for (cert = has->cert; cert; cert = cert->next)
+                {
+                    if (cert->issuer.dnencLen == keySelect->caNameLens[i]
+                            && Memcmp(cert->issuer.dnenc,
+                                    keySelect->caNames[i],
+                                    keySelect->caNameLens[i]) == 0)
                     {
-                        check = keySelect->peerCertSigAlgMask;
+                        rc = checkSigAlg(ssl,
+                                keySelect,
+                                cert->sigAlgorithm);
+                        if (rc != PS_SUCCESS)
+                        {
+                            continue;
+                        }
+
+                        /* This chain was found to be fruitful -
+                           issuer is withing the path, and algorithms
+                           are fine. */
+                        ssl->chosenIdentity = has;
+# ifdef USE_CLIENT_SIDE_SSL
+                        ssl->sec.certMatch = 1;
+# endif
+                        found = PS_TRUE;
+                        break;
                     }
                     else
                     {
-                        check = keySelect->peerSigAlgMask;
-                    }
-
-                    if (check != 0 && !peerSupportsSigAlg(cert->sigAlgorithm, check))
-                    {
 # ifdef DEBUG_TLS_SELECT_KEYS
-                        psTraceIntInfo("identityCb: invalid cert sig algorithm %x ",
-                                cert->sigAlgorithm);
-                        psTraceIntInfo("Not found in list: %x\n", check);
+                        psTraceInfo("identityCb: issuer name mismatch\n");
+                        psTraceBytes("has: ",
+                                (const unsigned char*)cert->issuer.dnenc,
+                                cert->issuer.dnencLen);
+                        psTraceBytes("req: ",
+                                keySelect->caNames[i],
+                                keySelect->caNameLens[i]);
 # endif /* DEBUG_TLS_SELECT_KEYS */
-                        continue;
                     }
-
-                    /* This chain was found to be fruitful -
-                       issuer is withing the path, and algorithms are fine. */
-                    ssl->chosenIdentity = has;
-# ifdef USE_CLIENT_SIDE_SSL
-                    ssl->sec.certMatch = 1;
-# endif
-                    found = PS_TRUE;
-                    break;
-                }
-                else
-                {
-# ifdef DEBUG_TLS_SELECT_KEYS
-                    psTraceInfo("identityCb: issuer name mismatch\n");
-                    psTraceBytes("has: ",
-                            (const unsigned char*)cert->issuer.dnenc,
-                            cert->issuer.dnencLen);
-                    psTraceBytes("req: ",
-                            keySelect->caNames[i],
-                            keySelect->caNameLens[i]);
-# endif /* DEBUG_TLS_SELECT_KEYS */
                 }
             }
-        }
 #endif /* USE_CERT_PARSE */
+        }
     }
+
     if (ssl->chosenIdentity == NULL)
     {
         psTraceInfo("identityCb: no keys matched\n");
@@ -165,6 +203,8 @@ int32_t chooseFromLoadedKeys(ssl_t *ssl, sslKeySelectInfo_t *keySelect)
     if (found)
     {
         psAssert(ssl->chosenIdentity != NULL);
+        psTraceInfo("Chosen client auth key:\n  ");
+        psTracePrintPubKeyTypeAndSize(ssl, &ssl->chosenIdentity->privKey);
         return PS_SUCCESS;
     }
     return PS_FAILURE;

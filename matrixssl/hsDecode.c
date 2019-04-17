@@ -563,47 +563,22 @@ int32 parseClientHello(ssl_t *ssl, unsigned char **cp, unsigned char *end)
         else
         {
             ssl->flags &= ~SSL_FLAGS_RESUMED;
+# ifdef USE_MATRIXSSL_STATS
+            matrixsslUpdateStat(ssl, FAILED_RESUMPTIONS_STAT, 1);
+# endif
+
+            /*
+              Failed to resume (both via Session ID and ticket).
+
+              Clear the Session ID, unless we are using TLS 1.3,
+              in which case we MUST echo the client's Session ID.
+            */
             if (!NGTD_VER(ssl, v_tls_1_3_any))
             {
-# ifdef USE_STATELESS_SESSION_TICKETS
-                /*
-                  Client MAY generate and include a  Session ID in the
-                  TLS ClientHello.  If the server accepts the ticket
-                  and the Session ID is not empty, then it MUST respond
-                  with the same Session ID present in the ClientHello. Check
-                  if client is even using the mechanism though.
-
-                  In TLS 1.3, the server MUST echo the client's Session ID
-                  back, but otherwise ignore it. Make sure we don't clear it.
-                */
-                if (ssl->sid)
-                {
-                    if (ssl->sid->sessionTicketState == SESS_TICKET_STATE_INIT)
-                    {
-                        Memset(ssl->sessionId, 0, SSL_MAX_SESSION_ID_SIZE);
-                        ssl->sessionIdLen = 0;
-                    }
-                    else
-                    {
-                        /* This flag means we received a session we can't resume
-                           but we have to send it back if we also get a ticket
-                           later that we like */
-                        ssl->extFlags.session_id = 1;
-                    }
-                }
-                else
-                {
-                    Memset(ssl->sessionId, 0, SSL_MAX_SESSION_ID_SIZE);
-                    ssl->sessionIdLen = 0;
-                }
-# else
                 Memset(ssl->sessionId, 0, SSL_MAX_SESSION_ID_SIZE);
                 ssl->sessionIdLen = 0;
-#  ifdef USE_MATRIXSSL_STATS
-                matrixsslUpdateStat(ssl, FAILED_RESUMPTIONS_STAT, 1);
-#  endif
-# endif
-            } /* !NGTD_VER(ssl, v_tls_1_3_any) */
+            }
+
         }
     }
 
@@ -955,6 +930,9 @@ int32 parseClientKeyExchange(ssl_t *ssl, int32 hsLen, unsigned char **cp,
             {
                 return SSL_MEM_ERROR;
             }
+# ifdef USE_ROT_ECC
+            ssl->sec.eccKeyPub->rotKeyType = ps_ecc_key_type_ecdhe;
+# endif
             if (psEccX963ImportKey(ssl->hsPool, c, pubKeyLen,
                     ssl->sec.eccKeyPub, ssl->sec.eccKeyPriv->curve) < 0)
             {
@@ -1147,6 +1125,9 @@ int32 parseClientKeyExchange(ssl_t *ssl, int32 hsLen, unsigned char **cp,
         {
             return SSL_MEM_ERROR;
         }
+# ifdef USE_ROT_ECC
+            ssl->sec.eccKeyPub->rotKeyType = ps_ecc_key_type_ecdhe;
+# endif
         if (psEccX963ImportKey(ssl->hsPool,
                                c, pubKeyLen, ssl->sec.eccKeyPub, ecc->curve) < 0)
         {
@@ -1368,78 +1349,134 @@ int32 parseClientKeyExchange(ssl_t *ssl, int32 hsLen, unsigned char **cp,
 # ifndef USE_ONLY_PSK_CIPHER_SUITE
 #  ifdef USE_CLIENT_AUTH
 int32 parseCertificateVerify(ssl_t *ssl,
-    unsigned char hsMsgHash[SHA512_HASH_SIZE],
-    unsigned char **cp, unsigned char *end)
+        unsigned char hsMsgHash[SHA512_HASH_SIZE],
+        unsigned char **cp,
+        unsigned char *end)
 {
-    uint32 certVerifyLen, pubKeyLen;
-    int32 rc, i;
-
-#   ifdef USE_RSA
-    unsigned char certVerify[SHA512_HASH_SIZE];
-#   endif /* USE_RSA */
+    uint16_t sigAlg;
+    unsigned char hashAlg;
+    uint32_t hashSigAlg;
+    psSize_t sigLen;
+    unsigned char *refMsg = hsMsgHash;
+    psSize_t refMsgLen;
+    int32 rc;
     unsigned char *c;
-    psPool_t *cvpkiPool = NULL;
-    void *pkiData = ssl->userPtr;
+    psBool_t verifyResult;
+    psVerifyOptions_t opts;
+    psBool_t useEcdsa = PS_FALSE;
 
     psTracePrintHsMessageParse(ssl, SSL_HS_CERTIFICATE_VERIFY);
 
     c = *cp;
     rc = 0;
     PS_VARIABLE_SET_BUT_UNUSED(rc); /* Note: Only used ifdef USE_ECC. */
+    Memset(&opts, 0, sizeof(opts));
+    if (ssl->sec.cert->pubKeyAlgorithm == OID_ECDSA_KEY_ALG)
+    {
+        useEcdsa = PS_TRUE;
+    }
+
+    /*
+      TLS 1.2:
+
+      struct {
+           digitally-signed struct {
+               opaque handshake_messages[handshake_messages_length];
+           }
+      } CertificateVerify;
+
+      struct {
+         SignatureAndHashAlgorithm algorithm;
+         opaque signature<0..2^16-1>;
+      } DigitallySigned;
+
+      TLS 1.1 and below:
+
+      struct {
+           Signature signature;
+      } CertificateVerify;
+      Where signature is an opaque vector <0..2^16-1>
+    */
+
+    /*
+      In TLS 1.2, we can just parse the signature algorithm ID.
+      For TLS 1.1 and below, we need to use the defaults:
+      RSA-MD5-SHA1 or ECDSA-SHA1.
+    */
+    sigAlg = OID_RSA_TLS_SIG_ALG;
+    refMsgLen = MD5_HASH_SIZE + SHA1_HASH_SIZE;
+    if (ssl->sec.cert->pubKeyAlgorithm == OID_ECDSA_KEY_ALG)
+    {
+        /*
+          SHA-1 is default for ECDSA. When using TLS 1.1 or below,
+          hsMsgHash contains the MD5-SHA1 handshake hash. So use the
+          last 20 bytes from that.
+        */
+        refMsg = hsMsgHash + MD5_HASH_SIZE;
+        refMsgLen = SHA1_HASH_SIZE;
+        sigAlg = OID_ECDSA_TLS_SIG_ALG;
+    }
 
 #   ifdef USE_TLS_1_2
     if (NGTD_VER(ssl, v_tls_with_signature_algorithms))
     {
-        uint32_t hashSigAlg;
-
         if ((uint32) (end - c) < 2)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceErrr("Invalid Certificate Verify message\n");
+            psTraceErrr("Invalid Certificate Verify message 1\n");
             return MATRIXSSL_ERROR;
         }
-        hashSigAlg = HASH_SIG_MASK(c[0], c[1]);
 
-# ifdef USE_SSL_INFORMATIONAL_TRACE_VERBOSE
-        psTracePrintSigAlgs(hashSigAlg, "Peer CertificateVerify\n");
-# endif
-        /* The server-sent algorithms has to be one of the ones we sent in
-           our ClientHello extension */
+        hashAlg = c[0];
+        sigAlg = (uint16_t)((c[0] << 8) | c[1]);
+        /* Convert from official SignatureAndHashAlgorithm ID to MatrixSSL
+           internal "OID". The "OID" format is expected by psVerifySig. */
+        sigAlg = tlsSigAlgToMatrix(sigAlg);
+        hashSigAlg = HASH_SIG_MASK(c[0], c[1]);
+        refMsg = hsMsgHash;
+
+        psTracePrintSigAlgs(INDENT_HS_MSG,
+                "Peer CertificateVerify sig alg",
+                hashSigAlg,
+                PS_TRUE);
+
+        if (!useEcdsa)
+        {
+            /* TLS 1.2 uses DigestInfos with RSA. */
+            opts.msgIsDigestInfo = PS_TRUE;
+        }
+
         if (!(ssl->hashSigAlg & hashSigAlg))
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceErrr("Invalid SigHash\n");
+            psTraceErrr("Invalid sig alg in parseCertificateVerify\n");
             return MATRIXSSL_ERROR;
         }
 
-        switch (c[0])
+        /* The SHA-256 handshake hash is passed into this function in the
+           hsMsgHash buffer. If we need to use a different algorithm,
+           we retrieve the hash separately. */
+        switch (hashAlg)
         {
-
-        case HASH_SIG_SHA256:
-            certVerifyLen = SHA256_HASH_SIZE;
-            break;
-
-#    ifdef USE_SHA384
-        case HASH_SIG_SHA384:
-            /* The one-off grab of SHA-384 handshake hash */
-            sslSha384RetrieveHSHash(ssl, hsMsgHash);
-            certVerifyLen = SHA384_HASH_SIZE;
-            break;
-#    endif
-
-#    ifdef USE_SHA512
-        case HASH_SIG_SHA512:
-            /* The one-off grab of SHA-512 handshake hash */
-            sslSha512RetrieveHSHash(ssl, hsMsgHash);
-            certVerifyLen = SHA512_HASH_SIZE;
-            break;
-#    endif
-
 #    ifdef USE_SHA1
         case HASH_SIG_SHA1:
-            /* The one-off grab of SHA-1 handshake hash */
             sslSha1RetrieveHSHash(ssl, hsMsgHash);
-            certVerifyLen = SHA1_HASH_SIZE;
+            refMsgLen = SHA1_HASH_SIZE;
+            break;
+#    endif
+        case HASH_SIG_SHA256:
+            refMsgLen = SHA256_HASH_SIZE;
+            break;
+#    ifdef USE_SHA384
+        case HASH_SIG_SHA384:
+            sslSha384RetrieveHSHash(ssl, hsMsgHash);
+            refMsgLen = SHA384_HASH_SIZE;
+            break;
+#    endif
+#    ifdef USE_SHA512
+        case HASH_SIG_SHA512:
+            sslSha512RetrieveHSHash(ssl, hsMsgHash);
+            refMsgLen = SHA512_HASH_SIZE;
             break;
 #    endif
         default:
@@ -1447,141 +1484,52 @@ int32 parseCertificateVerify(ssl_t *ssl,
             psTraceErrr("Invalid Certificate Verify message\n");
             return MATRIXSSL_ERROR;
         }
-        c += 2;
+
+        c += 2; /* SignatureAndHashAlgorithm parse complete. */
     }
-    else
-    {
-        certVerifyLen =  MD5_HASH_SIZE + SHA1_HASH_SIZE;
-    }
-#   else
-    certVerifyLen =  MD5_HASH_SIZE + SHA1_HASH_SIZE;
+#   endif /* USE_TLS_1_2 */
+
+#   ifdef USE_ROT_CRYPTO
+        /* The crypto-rot implementation of psVerifySig needs the full
+           TBS reference data, not just the hash. The HS hash is over
+           ClientHello..ClientKeyExchange. */
+        refMsg = ssl->hsMsgBuf.start;
+        refMsgLen = ssl->hsMsgCHtoCKELen;
 #   endif /* USE_TLS_1_2 */
 
     if ((uint32) (end - c) < 2)
     {
         ssl->err = SSL_ALERT_DECODE_ERROR;
-        psTraceErrr("Invalid Certificate Verify message\n");
+        psTraceErrr("Invalid Certificate Verify message 2\n");
         return MATRIXSSL_ERROR;
     }
-    pubKeyLen = *c << 8; c++;
-    pubKeyLen |= *c; c++;
-    if ((uint32) (end - c) < pubKeyLen)
+    sigLen = *c << 8; c++;
+    sigLen |= *c; c++;
+    if ((uint32) (end - c) < sigLen)
     {
         ssl->err = SSL_ALERT_DECODE_ERROR;
-        psTraceErrr("Invalid Certificate Verify message\n");
+        psTraceErrr("Invalid Certificate Verify message 3\n");
         return MATRIXSSL_ERROR;
     }
-    /*  The server side verification of client identity.  If we can match
-        the signature we know the client has possesion of the private key. */
-#   ifdef USE_ECC
-    /* Need to read sig algorithm type out of cert itself */
-    if (ssl->sec.cert->pubKeyAlgorithm == OID_ECDSA_KEY_ALG)
-    {
-        rc = 0;
 
-#    ifdef USE_TLS_1_2
-        if (NGTD_VER(ssl, v_tls_with_signature_algorithms))
-        {
-            i = psEccDsaVerify(cvpkiPool,
-                               &ssl->sec.cert->publicKey.key.ecc,
-                               hsMsgHash, certVerifyLen,
-                               c, pubKeyLen, &rc, pkiData);
-            if (i != PS_SUCCESS)
-            {
-                psTraceErrr("ECDSA signature validation failed\n");
-                ssl->err = SSL_ALERT_BAD_CERTIFICATE;
-                return MATRIXSSL_ERROR;
-            }
-        }
-        else
-        {
-            certVerifyLen = SHA1_HASH_SIZE; /* per spec */
-            i = psEccDsaVerify(cvpkiPool,
-                               &ssl->sec.cert->publicKey.key.ecc,
-                               hsMsgHash + MD5_HASH_SIZE, certVerifyLen,
-                               c, pubKeyLen,
-                               &rc, pkiData);
-            if (i != PS_SUCCESS)
-            {
-                psTraceErrr("ECDSA signature validation failed\n");
-                ssl->err = SSL_ALERT_BAD_CERTIFICATE;
-                return MATRIXSSL_ERROR;
-            }
-        }
-#    else
-        certVerifyLen = SHA1_HASH_SIZE; /* per spec */
-        i = psEccDsaVerify(cvpkiPool,
-                           &ssl->sec.cert->publicKey.key.ecc,
-                           hsMsgHash + MD5_HASH_SIZE, certVerifyLen,
-                           c, pubKeyLen,
-                           &rc, pkiData);
-        if (i != PS_SUCCESS)
-        {
-            psTraceErrr("ECDSA signature validation failed\n");
-            ssl->err = SSL_ALERT_BAD_CERTIFICATE;
-            return MATRIXSSL_ERROR;
-        }
-#    endif
-        if (rc != 1)
-        {
-            psTraceErrr("Can't verify certVerify sig\n");
-            ssl->err = SSL_ALERT_BAD_CERTIFICATE;
-            return MATRIXSSL_ERROR;
-        }
-        rc = MATRIXSSL_SUCCESS; /* done using rc as a temp */
-    }
-    else
+    rc = psVerifySig(ssl->hsPool,
+            refMsg,
+            refMsgLen,
+            c,
+            sigLen,
+            &ssl->sec.cert->publicKey,
+            sigAlg,
+            &verifyResult,
+            &opts);
+    if (rc != PS_SUCCESS || verifyResult != PS_TRUE)
     {
-#   endif /* USE_ECC */
-#   ifdef USE_RSA
-
-#    ifdef USE_TLS_1_2
-    if (NGTD_VER(ssl, v_tls_with_pkcs15_auth))
-    {
-        i = pubRsaDecryptSignedElement(cvpkiPool,
-                                       &ssl->sec.cert->publicKey.key.rsa,
-                                       c, pubKeyLen, certVerify,
-                                       certVerifyLen, pkiData);
-        if (i < 0)
-        {
-            psTraceErrr("Unable to decrypt CertVerify digital element\n");
-            return MATRIXSSL_ERROR;
-        }
-    }
-    else
-    {
-        i = psRsaDecryptPub(cvpkiPool, &ssl->sec.cert->publicKey.key.rsa, c,
-                            pubKeyLen, certVerify, certVerifyLen, pkiData);
-        if (i < 0)
-        {
-            psTraceErrr("Unable to publicly decrypt Certificate Verify message\n");
-            return MATRIXSSL_ERROR;
-        }
-    }
-#    else /* !USE_TLS_1_2 */
-    i = psRsaDecryptPub(cvpkiPool, &ssl->sec.cert->publicKey.key.rsa, c,
-                        pubKeyLen, certVerify, certVerifyLen, pkiData);
-    if (i < 0)
-    {
-        psTraceErrr("Unable to publicly decrypt Certificate Verify message\n");
+        psTraceErrr("CertificateVerify signature validation failed\n");
+        psTraceIntInfo("psVerifySig: %d\n", rc);
+        ssl->err = SSL_ALERT_DECRYPT_ERROR;
         return MATRIXSSL_ERROR;
     }
-#    endif /* USE_TLS_1_2 */
 
-    if (memcmpct(certVerify, hsMsgHash, certVerifyLen) != 0)
-    {
-        psTraceErrr("Unable to verify client certificate signature\n");
-        return MATRIXSSL_ERROR;
-    }
-#   else /* RSA is 'default' so if that didn't get hit there is a problem */
-    psTraceErrr("There is no handler for CertificateVerify parse. ERROR\n");
-    return MATRIXSSL_ERROR;
-#   endif /* USE_RSA */
-#   ifdef USE_ECC
-}
-#   endif /* USE_ECC*/
-
-    c += pubKeyLen;
+    c += sigLen;
     ssl->hsState = SSL_HS_FINISHED;
 
     *cp = c;
@@ -1975,7 +1923,9 @@ int32 parseServerKeyExchange(ssl_t *ssl,
 
 # ifdef USE_DHE_CIPHER_SUITE
     int32_t rc, i;
+#  ifdef REQUIRE_DH_PARAMS
     uint32 pubDhLen;
+#  endif
 #  ifndef USE_ONLY_PSK_CIPHER_SUITE
     unsigned char *sigStart = NULL, *sigStop = NULL;
 #  endif /* USE_ONLY_PSK_CIPHER_SUITE */
@@ -2062,6 +2012,43 @@ int32 parseServerKeyExchange(ssl_t *ssl,
             /* Next is curveId */
             i = *c << 8; c++;
             i |= *c; c++;
+            if (!psIsEcdheGroup(i))
+            {
+                ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
+                psTraceErrr("Unsupported ECDHE group in SKE\n");
+                psTraceIntInfo("Group ID: %d\n", i);
+            }
+            ssl->sec.peerCurveId = i;
+
+#   ifdef USE_X25519
+            if (i == namedgroup_x25519)
+            {
+                /* Next is length octet of opaque point <1..2^8-1>; */
+                i = *c;
+                c++;
+                if ((end - c < i) || (i != PS_DH_X25519_PUBLIC_KEY_BYTES))
+                {
+                    ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
+                    return MATRIXSSL_ERROR;
+                }
+                if (ssl->sec.x25519KeyPub != NULL)
+                {
+                    psFree(ssl->sec.x25519KeyPub, ssl->sec.eccDhKeyPool);
+                }
+                ssl->sec.x25519KeyPub = psMalloc(ssl->sec.eccDhKeyPool,
+                        PS_DH_X25519_PUBLIC_KEY_BYTES);
+                Memcpy(ssl->sec.x25519KeyPub,
+                        c,
+                        PS_DH_X25519_PUBLIC_KEY_BYTES);
+                c += PS_DH_X25519_PUBLIC_KEY_BYTES;
+                sigStop = c;
+#     ifdef USE_SSL_INFORMATIONAL_TRACE
+                ssl->peerKeyExKeyType = PS_X25519;
+                ssl->peerKeyExKeyNBits = 256;
+#     endif
+                goto verify_sig;
+            }
+#   endif /* USE_X25519 */
 
             /* Return -1 if this isn't a curve we specified in client hello */
             if (getEccParamById(i, &curve) < 0)
@@ -2105,6 +2092,9 @@ int32 parseServerKeyExchange(ssl_t *ssl,
             {
                 return SSL_MEM_ERROR;
             }
+# ifdef USE_ROT_ECC
+            ssl->sec.eccKeyPub->rotKeyType = ps_ecc_key_type_ecdhe;
+# endif
             if (psEccX963ImportKey(ssl->hsPool, c, i,
                     ssl->sec.eccKeyPub, curve) < 0)
             {
@@ -2259,26 +2249,38 @@ int32 parseServerKeyExchange(ssl_t *ssl,
 #  endif /* USE_ECC_CIPHER_SUITE */
 
         /* We are still within if (ssl->flags & SSL_FLAGS_DHE_KEY_EX). */
-
+# ifdef USE_X25519
+    verify_sig:
+# endif
+# ifndef USE_ONLY_PSK_CIPHER_SUITE
         /*
           This layer of authentation is at the key exchange level.
           The server has sent a signature of the key material that
           the client can validate here.
         */
-        rc = tlsVerify(ssl,
-                sigStart,
-                sigStop - sigStart,
-                c,
-                end,
-                &ssl->sec.cert->publicKey,
-                NULL);
-        if (rc < 0)
         {
-            return rc;
+            psVerifyOptions_t opts = {0};
+
+#  ifdef USE_ROT_ECC
+            opts.noPreHash = PS_TRUE;
+#  endif
+            rc = tlsVerify(ssl,
+                    sigStart,
+                    sigStop - sigStart,
+                    c,
+                    end,
+                    &ssl->sec.cert->publicKey,
+                    &opts);
+            if (rc < 0)
+            {
+                psTraceErrr("ServerKeyExchange sig verification failed\n");
+                return rc;
+            }
         }
         /* Signature OK. */
         c += rc; /* tlsVerify returns number of consumed octets. */
         ssl->hsState = SSL_HS_SERVER_HELLO_DONE;
+# endif /* USE_ONLY_PSK_CIPHER_SUITE */
     } /* endif (ssl->flags & SSL_FLAGS_DHE_KEY_EX) */
 # endif /* USE_DHE_CIPHER_SUITE */
 
@@ -2446,6 +2448,20 @@ int32 parseServerHelloDone(ssl_t *ssl, int32 hsLen, unsigned char **cp,
         {
             /*  Set up our private side of the ECC key based on the agreed
                 upon curve */
+#    ifdef USE_X25519
+            if (ssl->sec.peerCurveId == namedgroup_x25519)
+            {
+                psRes_t res;
+
+                res = psDhX25519GenKey(ssl->sec.x25519KeyPriv.priv,
+                        ssl->sec.x25519KeyPriv.pub);
+                if (res < 0)
+                {
+                    return PS_FAILURE;
+                }
+                goto keygen_done;
+            }
+#    endif
             if (psEccNewKey(ssl->sec.eccDhKeyPool, &ssl->sec.eccKeyPriv,
                     ssl->sec.eccKeyPub->curve) < 0)
             {
@@ -2493,6 +2509,10 @@ int32 parseServerHelloDone(ssl_t *ssl, int32 hsLen, unsigned char **cp,
 #   endif /* USE_ECC_CIPHER_SUITE */
     }
 #  endif  /* USE_DHE_CIPHER_SUITE */
+
+# ifdef USE_X25519
+keygen_done:
+# endif
 
     ssl->hsState = SSL_HS_FINISHED;
 
@@ -2561,14 +2581,16 @@ int32 parseCertificateRequest(ssl_t *ssl,
         if (end - c < 2)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceErrr("Invalid SigHash in Certificate Request message (short header)\n");
+            psTraceErrr("Invalid SigHash in Certificate Request message "\
+                    "(short header)\n");
             return MATRIXSSL_ERROR;
         }
         len = GETSHORT(c); c += 2;
         if (end - c < len)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceErrr("Invalid SigHash in Certificate Request message (short message)\n");
+            psTraceErrr("Invalid SigHash in Certificate Request message " \
+                    "(short message)\n");
             return MATRIXSSL_ERROR;
         }
         /* Parse supported_signature_algorithms list. */
@@ -2584,9 +2606,10 @@ int32 parseCertificateRequest(ssl_t *ssl,
         keySelect->peerSigAlgsLen = nSigAlg;
         keySelect->peerSigAlgMask = ssl->serverSigAlgs;
         c += len;
-# ifdef USE_SSL_INFORMATIONAL_TRACE_VERBOSE
-        psTracePrintSigAlgs(ssl->serverSigAlgs, "Peer CertificateRequest");
-# endif
+        psTracePrintSigAlgs(INDENT_HS_MSG,
+                "supported_signature_algorithms",
+                ssl->serverSigAlgs,
+                PS_TRUE);
     }
     else
     {
@@ -2604,7 +2627,8 @@ int32 parseCertificateRequest(ssl_t *ssl,
         if (end - c < len)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceErrr("Invalid Certificate Request message (short CA's header)\n");
+            psTraceErrr("Invalid Certificate Request message " \
+                    "(short CA's header)\n");
             return MATRIXSSL_ERROR;
         }
         /* Count the number of CA's */
@@ -2615,7 +2639,8 @@ int32 parseCertificateRequest(ssl_t *ssl,
             if (certLen == 0 || (end - c) < certLen || certLen > len)
             {
                 ssl->err = SSL_ALERT_DECODE_ERROR;
-                psTraceErrr("Invalid CertificateRequest message (short CA data)\n");
+                psTraceErrr("Invalid CertificateRequest message " \
+                        "(short CA data)\n");
                 return MATRIXSSL_ERROR;
             }
             c += certLen;
@@ -2623,24 +2648,36 @@ int32 parseCertificateRequest(ssl_t *ssl,
             nCas++;
         }
 
-        /* Fill in keySelect - we have now checked the data, so taking the easy path. */
+        /* Fill in keySelect - we have now checked the data,
+           so taking the easy path. */
         keySelect->nCas = nCas;
-        keySelect->caNames = psCalloc(ssl->hsPool, nCas, sizeof(keySelect->caNames[0]));
-        keySelect->caNameLens = psCalloc(ssl->hsPool, nCas, sizeof(keySelect->caNameLens[0]));
-        if (keySelect->caNames == NULL || keySelect->caNameLens == NULL)
+        keySelect->caNames = psCalloc(
+                ssl->hsPool,
+                nCas,
+                sizeof(keySelect->caNames[0]));
+        keySelect->caNameLens = psCalloc(
+                ssl->hsPool,
+                nCas,
+                sizeof(keySelect->caNameLens[0]));
+        if (nCas > 0)
         {
-            psFree(keySelect->caNames, ssl->hsPool);
-            psFree(keySelect->caNameLens, ssl->hsPool);
-            ssl->err = SSL_ALERT_INTERNAL_ERROR;
-            return MATRIXSSL_ERROR;
+            if (keySelect->caNames == NULL || keySelect->caNameLens == NULL)
+            {
+                psFree(keySelect->caNames, ssl->hsPool);
+                psFree(keySelect->caNameLens, ssl->hsPool);
+                ssl->err = SSL_ALERT_INTERNAL_ERROR;
+                return MATRIXSSL_ERROR;
+            }
         }
         for (nCas = 0; nCas < keySelect->nCas; nCas++)
         {
             /* NOTE: caNames points to the original TLS record data,
                and pointers are valid only as long as the packet is
                valid. */
-            keySelect->caNameLens[nCas] = GETSHORT(c0); c0 += 2;
-            keySelect->caNames[nCas] = c0; c0 += keySelect->caNameLens[nCas];
+            keySelect->caNameLens[nCas] = GETSHORT(c0);
+            c0 += 2;
+            keySelect->caNames[nCas] = c0;
+            c0 += keySelect->caNameLens[nCas];
         }
     }
 
@@ -2730,6 +2767,8 @@ int32 parseFinished(ssl_t *ssl, int32 hsLen,
     {
         ssl->err = SSL_ALERT_DECRYPT_ERROR;
         psTraceErrr("Invalid handshake msg hash\n");
+        psTraceBytes("recv", c, hsLen);
+        psTraceBytes("have", hsMsgHash, hsLen);
         return MATRIXSSL_ERROR;
     }
 #ifdef ENABLE_SECURE_REHANDSHAKES
@@ -2761,6 +2800,7 @@ int32 parseFinished(ssl_t *ssl, int32 hsLen,
             /* Server side resumed completion */
             matrixSslPrintHSDetails(ssl);
 #endif
+            sslFreeHSHash(ssl);
         }
     }
     else /* We are the client. */
@@ -2789,6 +2829,7 @@ int32 parseFinished(ssl_t *ssl, int32 hsLen,
             /* Client side standard completion */
             matrixSslPrintHSDetails(ssl);
 #endif
+            sslFreeHSHash(ssl);
         }
     }
 #ifndef USE_ONLY_PSK_CIPHER_SUITE
@@ -3192,14 +3233,18 @@ RESUME_VALIDATE_CERTS:
        so store information about the public key, to be logged
        later in matrixSslPrintHSDetails. */
     ssl->peerAuthKeyType = ssl->sec.cert->publicKey.type;
+#ifdef USE_RSA
     if (ssl->peerAuthKeyType == PS_RSA)
     {
         ssl->peerAuthKeyNBits = ssl->sec.cert->publicKey.keysize * 8;
     }
-    else
+#endif
+#ifdef USE_ECC
+    if (ssl->peerAuthKeyType == PS_ECC || ssl->peerAuthKeyType == PS_ED25519)
     {
         ssl->peerAuthKeyNBits = ssl->sec.cert->publicKey.key.ecc.curve->size * 8;
     }
+#endif
 #  endif /* USE_SSL_INFORMATIONAL_TRACE */
 
     /*  The last thing we want to check before passing the certificates to

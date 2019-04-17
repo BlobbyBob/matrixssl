@@ -2,7 +2,8 @@
  *      @file    hsHash.c
  *      @version $Format:%h%d$
  *
- *      "Native" handshake hash for SSL 3.0 and TLS 1.0/1.1/1.2.
+ *      Standard handshake hash for implementation for SSL 3.0 and
+ *      TLS 1.0/1.1/1.2.
  */
 /*
  *      Copyright (c) 2013-2018 INSIDE Secure Corporation
@@ -32,6 +33,8 @@
  */
 
 #include "matrixsslImpl.h"
+
+#ifndef USE_BUFFERED_HS_HASH
 
 #ifdef USE_NATIVE_TLS_HS_HASH
 
@@ -330,7 +333,7 @@ static int32_t tlsGenerateFinishedHash(ssl_t *ssl,
     else
     {
         /* Overloading this function to handle the client auth needs of
-            handshake hashing. */
+            handshake hashing. TODO: use a separate function! */
 #  ifdef USE_TLS_1_2
         if (ACTV_VER(ssl, v_tls_sha2))
         {
@@ -465,9 +468,29 @@ int32_t extMasterSecretSnapshotHSHash(ssl_t *ssl, unsigned char *out,
     a hash of the preceeding handshake messages for comparison to incoming
     message.
  */
-int32_t sslSnapshotHSHash(ssl_t *ssl, unsigned char *out, int32 senderFlag)
+int32_t sslSnapshotHSHash(ssl_t *ssl,
+        unsigned char *out,
+        psBool_t sender,
+        psBool_t isFinishedHash)
 {
     int32 len = PS_FAILURE;
+    int32_t senderFlag;
+
+    /* Fill senderFlag for compability. The old tlsGenerateFinishedHash
+       and sslGenerateFinishedHash APIs still use the senderFlag param
+       with confusing semantics. */
+    if (sender)
+    {
+        senderFlag = (ssl->flags & SSL_FLAGS_SERVER);
+    }
+    else
+    {
+        senderFlag = (ssl->flags & SSL_FLAGS_SERVER) ? 0 : SSL_FLAGS_SERVER;
+    }
+    if (!isFinishedHash)
+    {
+        senderFlag = -1;
+    }
 
 # ifdef USE_DTLS
     if (ACTV_VER(ssl, v_dtls_any))
@@ -527,6 +550,14 @@ int32_t sslSnapshotHSHash(ssl_t *ssl, unsigned char *out, int32 senderFlag)
     return len;
 }
 
+void sslFreeHSHash(ssl_t *ssl)
+{
+    /* Standard HS hash implementation does not need to free anything here. */
+    (void)ssl;
+}
+
 #endif /* USE_NATIVE_TLS_HS_HASH */
+
+#endif /* USE_BUFFERED_HS_HASH */
 
 /******************************************************************************/

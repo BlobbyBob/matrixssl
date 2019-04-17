@@ -357,7 +357,6 @@ psRes_t psPemCertBufToList(psPool_t *pool,
         else
         {
             psFreeList(front, pool);
-            psTraceCrypto("File buffer does not look to be X.509 PEM format\n");
             return PS_PARSE_FAIL;
         }
         current->item = psMalloc(pool, current->len);

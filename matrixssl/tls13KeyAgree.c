@@ -685,7 +685,7 @@ int32_t tls13GenerateEphemeralKeys(ssl_t *ssl)
     uint16_t group;
     int32_t rc;
 
-    if (IS_SERVER(ssl))
+    if (MATRIX_IS_SERVER(ssl))
     {
         group = ssl->tls13NegotiatedGroup;
         rc = tls13GenerateKeyForGroup(ssl, group);

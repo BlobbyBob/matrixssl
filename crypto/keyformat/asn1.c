@@ -427,6 +427,10 @@ int32_t getAsnAlgorithmIdentifier(const unsigned char **pp, psSizeL_t size,
     @param[out] oid Caller allocated array to receive OID, of
     at least MAX_OID_LEN elements.
     @return Number of OID elements written to 'oid', 0 on error.
+
+    @note This function has been deprecated, prefer asnCopyOid(), which
+    is not limited to to format x.y.z(1).z(2).z(3) ...;
+    where y <= 2 and x <= 39, and z(n) is less than 2**28.
  */
 uint8_t asnParseOid(const unsigned char *der, psSizeL_t derlen,
     uint32_t oid[MAX_OID_LEN])
@@ -485,6 +489,112 @@ uint8_t asnParseOid(const unsigned char *der, psSizeL_t derlen,
     {
         return n;
     }
+    return 0;
+}
+
+/******************************************************************************/
+/**
+    Copy ASN.1 DER encoded OBJECT bytes into an OID array.
+    @param[in] der Pointer to start of OBJECT encoding.
+    @param[in] derlen Number of bytes pointed to by 'der'.
+    @param[out] oid Caller allocated array to receive OID, of
+    at least MAX_OID_BYTES bytes. (Represented as psAsnOid_t type.)
+    @return Number of OID elements written to 'oid', 0 on error.
+
+    @note The return value is the number of segments in OID presented as a
+          string, not number of bytes. This is for compatibility with
+          asnParseOid().
+          It is not recommended to rely on return value, except for
+          determining an error. asn1.h defines MAX_OID_BYTES, which
+          sets limit on how long OID can be decoded.
+ */
+uint8_t asnCopyOid(const unsigned char *der, psSizeL_t derlen,
+                   psAsnOid_t oid)
+{
+    int len;
+    psSizeL_t i;
+    unsigned char ch = 0;
+
+    /* Check input is not too short or too long. */
+    if (derlen < 1 || derlen > MAX_OID_BYTES - 2)
+    {
+        oid[0] = 0; /* zeroize identifier. */
+        oid[1] = 0; /* and length. */
+        return 0;
+    }
+
+    oid[0] = (unsigned char) ASN_OID;
+    oid[1] = (unsigned char) derlen;
+
+    /* First encoding produces two numbers. Therefore start with len=1. */
+    len = 1;
+
+    for(i = 0; i < derlen; i++)
+    {
+        /* Copy and count non-continuation bytes. */
+        ch = der[i];
+        len += (ch >> 7) ^ 1; /* Increment count for all bytes 0...0x7f. */
+        oid[2 + i] = ch;
+    }
+
+    /* fail if the last sequence was not properly terminated. */
+    if (ch >= 0x80)
+    {
+        return 0;
+    }
+
+    return len;
+}
+
+psSizeL_t asnOidLenBytes(psAsnOid_t oid)
+{
+    uint8_t id;
+    uint8_t len_encoded;
+    unsigned int len;
+
+    id = oid[0];
+    len_encoded = oid[1];
+    len = len_encoded + 2;
+
+    if (id != ASN_OID || len > MAX_OID_BYTES)
+    {
+        return (uint8_t) 0;
+    }
+
+    return len;
+}
+
+psSizeL_t psAsnWriteOid(psAsnOid_t oid,
+                        unsigned char *der, psSizeL_t dermaxlen)
+{
+    psSizeL_t len = asnOidLenBytes(oid);
+
+    if (len > 0)
+    {
+        if (dermaxlen >= len)
+        {
+            Memcpy(der, oid, len);
+        }
+        else
+        {
+            len = 0;
+        }
+    }
+    return len;
+}
+
+uint8_t asnOidLenSegments(psAsnOid_t oid)
+{
+    psAsnOid_t oid_copy;
+    psSizeL_t oid_len;
+
+    oid_len = asnOidLenBytes(oid);
+
+    if (oid_len > 1)
+    {
+        return asnCopyOid(&oid[2], oid_len - 2, oid_copy);
+    }
+
     return 0;
 }
 
@@ -583,7 +693,7 @@ static void checkAsnOidDatabase(int32_t *oi,
         case OID_MQVSINGLEPASS_SHA1KDF_SCHEME: oid_hex = OID_MQVSINGLEPASS_SHA1KDF_SCHEME_HEX; break;
         case OID_DHSINGLEPASS_STDDH_SHA256KDF_SCHEME: oid_hex = OID_DHSINGLEPASS_STDDH_SHA256KDF_SCHEME_HEX; break;
         case OID_DHSINGLEPASS_STDDH_SHA384KDF_SCHEME: oid_hex = OID_DHSINGLEPASS_STDDH_SHA384KDF_SCHEME_HEX; break;
-        case OID_DHSINGLEPASS_STDDH_SHA512KDF_SCHEME: oid_hex = OID_DHSINGLEPASS_STDDH_SHA512KDF_SCHEME_HEX; break;   
+        case OID_DHSINGLEPASS_STDDH_SHA512KDF_SCHEME: oid_hex = OID_DHSINGLEPASS_STDDH_SHA512KDF_SCHEME_HEX; break;
         default:
             /* No possible matches: bitwise-add not found constant to OID. */
             *oi |= OID_NOT_FOUND;

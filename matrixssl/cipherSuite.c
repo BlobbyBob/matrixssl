@@ -260,6 +260,16 @@ int32 csAesGcmDecrypt(void *ssl, unsigned char *ct,
     unsigned char nonce[12];
     unsigned char aad[TLS_GCM_AAD_LEN];
 
+    /*
+      Minimum GCM ciphertext length in TLS 1.2:
+      25 = 1 + 16 (tag) + 8 (nonce_explicit).
+    */
+    if (len < 25)
+    {
+        psTraceErrr("Invalid GCM ciphertext length\n");
+        psTraceIntInfo("(%u)\n", len);
+        return PS_FAILURE;
+    }
     ctx = &lssl->sec.decryptCtx.aesgcm;
 
     seqNotDone = 1;
@@ -2780,6 +2790,7 @@ int32 chooseCipherSuite(ssl_t *ssl, unsigned char *listStart, int32 listLen)
 
 #ifndef USE_ONLY_PSK_CIPHER_SUITE
 # ifdef USE_ECC_CIPHER_SUITE
+
 /*
     See if any of the EC suites are supported.  Needed by client very early on
     to know whether or not to add the EC client hello extensions
@@ -2791,35 +2802,91 @@ int32_t eccSuitesSupported(const ssl_t *ssl,
 
     if (cipherSpecLen == 0)
     {
-        if (sslGetCipherSpec(ssl, TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA) ||
-            sslGetCipherSpec(ssl, TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA) ||
-            sslGetCipherSpec(ssl, TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA) ||
-            sslGetCipherSpec(ssl, TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA) ||
-            sslGetCipherSpec(ssl, TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA) ||
-            sslGetCipherSpec(ssl, TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA) ||
-            sslGetCipherSpec(ssl, TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA) ||
-            sslGetCipherSpec(ssl, TLS_ECDH_RSA_WITH_AES_256_CBC_SHA) ||
-#  ifdef USE_TLS_1_2
-            sslGetCipherSpec(ssl, TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256) ||
-            sslGetCipherSpec(ssl, TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384) ||
-            sslGetCipherSpec(ssl, TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA256) ||
-            sslGetCipherSpec(ssl, TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA384) ||
-            sslGetCipherSpec(ssl, TLS_ECDH_ECDSA_WITH_AES_128_GCM_SHA256) ||
-            sslGetCipherSpec(ssl, TLS_ECDH_ECDSA_WITH_AES_256_GCM_SHA384) ||
-            sslGetCipherSpec(ssl, TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256) ||
-            sslGetCipherSpec(ssl, TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384) ||
-            sslGetCipherSpec(ssl, TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256) ||
-            sslGetCipherSpec(ssl, TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384) ||
-            sslGetCipherSpec(ssl, TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256) ||
-            sslGetCipherSpec(ssl, TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384) ||
-            sslGetCipherSpec(ssl, TLS_ECDH_RSA_WITH_AES_128_CBC_SHA256) ||
-            sslGetCipherSpec(ssl, TLS_ECDH_RSA_WITH_AES_256_CBC_SHA384) ||
-            sslGetCipherSpec(ssl, TLS_ECDH_RSA_WITH_AES_128_GCM_SHA256) ||
-            sslGetCipherSpec(ssl, TLS_ECDH_RSA_WITH_AES_256_GCM_SHA384) ||
-            sslGetCipherSpec(ssl, TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256) ||
-            sslGetCipherSpec(ssl, TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256) ||
-#  endif
-            sslGetCipherSpec(ssl, TLS_ECDH_RSA_WITH_AES_128_CBC_SHA))
+        if (0
+#ifdef USE_TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA
+                || sslGetCipherSpec(ssl, TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA)
+#endif
+#ifdef USE_TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA
+                || sslGetCipherSpec(ssl, TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA)
+#endif
+#ifdef USE_TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA
+                || sslGetCipherSpec(ssl, TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA)
+#endif
+#ifdef USE_TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA
+                || sslGetCipherSpec(ssl, TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA)
+#endif
+#ifdef USE_TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA
+                || sslGetCipherSpec(ssl, TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA)
+#endif
+#ifdef USE_TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA
+                || sslGetCipherSpec(ssl, TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA)
+#endif
+#ifdef USE_TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA
+                || sslGetCipherSpec(ssl, TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA)
+#endif
+#ifdef USE_TLS_ECDH_RSA_WITH_AES_256_CBC_SHA
+                || sslGetCipherSpec(ssl, TLS_ECDH_RSA_WITH_AES_256_CBC_SHA)
+#endif
+#ifdef USE_TLS_ECDH_RSA_WITH_AES_128_CBC_SHA
+                || sslGetCipherSpec(ssl, TLS_ECDH_RSA_WITH_AES_128_CBC_SHA)
+#endif
+#ifdef USE_TLS_1_2
+# ifdef USE_TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256
+                || sslGetCipherSpec(ssl, TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256)
+# endif
+# ifdef USE_TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384
+                || sslGetCipherSpec(ssl, TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384)
+# endif
+# ifdef USE_TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA256
+                || sslGetCipherSpec(ssl, TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA256)
+# endif
+# ifdef USE_TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA384
+                || sslGetCipherSpec(ssl, TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA384)
+# endif
+# ifdef USE_TLS_ECDH_ECDSA_WITH_AES_128_GCM_SHA256
+                || sslGetCipherSpec(ssl, TLS_ECDH_ECDSA_WITH_AES_128_GCM_SHA256)
+# endif
+# ifdef USE_TLS_ECDH_ECDSA_WITH_AES_256_GCM_SHA384
+                || sslGetCipherSpec(ssl, TLS_ECDH_ECDSA_WITH_AES_256_GCM_SHA384)
+# endif
+# ifdef USE_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+                || sslGetCipherSpec(ssl, TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256)
+# endif
+# ifdef USE_TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+                || sslGetCipherSpec(ssl, TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384)
+# endif
+# ifdef USE_TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256
+                || sslGetCipherSpec(ssl, TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256)
+# endif
+# ifdef USE_TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384
+                || sslGetCipherSpec(ssl, TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384)
+# endif
+# ifdef USE_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+                || sslGetCipherSpec(ssl, TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256)
+# endif
+# ifdef USE_TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+                || sslGetCipherSpec(ssl, TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384)
+# endif
+# ifdef USE_TLS_ECDH_RSA_WITH_AES_128_CBC_SHA256
+                || sslGetCipherSpec(ssl, TLS_ECDH_RSA_WITH_AES_128_CBC_SHA256)
+# endif
+# ifdef USE_TLS_ECDH_RSA_WITH_AES_256_CBC_SHA384
+                || sslGetCipherSpec(ssl, TLS_ECDH_RSA_WITH_AES_256_CBC_SHA384)
+# endif
+# ifdef USE_TLS_ECDH_RSA_WITH_AES_128_GCM_SHA256
+                || sslGetCipherSpec(ssl, TLS_ECDH_RSA_WITH_AES_128_GCM_SHA256)
+# endif
+# ifdef USE_TLS_ECDH_RSA_WITH_AES_256_GCM_SHA384
+                || sslGetCipherSpec(ssl, TLS_ECDH_RSA_WITH_AES_256_GCM_SHA384)
+# endif
+# ifdef USE_TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256
+                || sslGetCipherSpec(ssl, TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256)
+# endif
+# ifdef USE_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
+                || sslGetCipherSpec(ssl, TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256)
+# endif
+# endif /* USE_TLS_1_2 */
+            )
         {
             return 1;
         }
@@ -2828,35 +2895,91 @@ int32_t eccSuitesSupported(const ssl_t *ssl,
     {
         while (i < cipherSpecLen)
         {
-            if (cipherSpecs[i] == TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA ||
-                cipherSpecs[i] == TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA ||
-                cipherSpecs[i] == TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA ||
-                cipherSpecs[i] == TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA ||
-                cipherSpecs[i] == TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA ||
-                cipherSpecs[i] == TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA ||
-                cipherSpecs[i] == TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA ||
-                cipherSpecs[i] == TLS_ECDH_RSA_WITH_AES_256_CBC_SHA ||
-#  ifdef USE_TLS_1_2
-                cipherSpecs[i] == TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256 ||
-                cipherSpecs[i] == TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384 ||
-                cipherSpecs[i] == TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA256 ||
-                cipherSpecs[i] == TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA384 ||
-                cipherSpecs[i] == TLS_ECDH_ECDSA_WITH_AES_128_GCM_SHA256 ||
-                cipherSpecs[i] == TLS_ECDH_ECDSA_WITH_AES_256_GCM_SHA384 ||
-                cipherSpecs[i] == TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 ||
-                cipherSpecs[i] == TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384 ||
-                cipherSpecs[i] == TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256 ||
-                cipherSpecs[i] == TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384 ||
-                cipherSpecs[i] == TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 ||
-                cipherSpecs[i] == TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384 ||
-                cipherSpecs[i] == TLS_ECDH_RSA_WITH_AES_128_CBC_SHA256 ||
-                cipherSpecs[i] == TLS_ECDH_RSA_WITH_AES_256_CBC_SHA384 ||
-                cipherSpecs[i] == TLS_ECDH_RSA_WITH_AES_128_GCM_SHA256 ||
-                cipherSpecs[i] == TLS_ECDH_RSA_WITH_AES_256_GCM_SHA384 ||
-                cipherSpecs[i] == TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256 ||
-                cipherSpecs[i] == TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256 ||
-#  endif
-                cipherSpecs[i] == TLS_ECDH_RSA_WITH_AES_128_CBC_SHA)
+            if (0
+#ifdef USE_TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA
+                    || cipherSpecs[i] == TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA
+#endif
+#ifdef USE_TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA
+                    || cipherSpecs[i] == TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA
+#endif
+#ifdef USE_TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA
+                    || cipherSpecs[i] == TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA
+#endif
+#ifdef USE_TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA
+                    || cipherSpecs[i] == TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA
+#endif
+#ifdef USE_TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA
+                    || cipherSpecs[i] == TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA
+#endif
+#ifdef USE_TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA
+                    || cipherSpecs[i] == TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA
+#endif
+#ifdef USE_TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA
+                    || cipherSpecs[i] == TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA
+#endif
+#ifdef USE_TLS_ECDH_RSA_WITH_AES_256_CBC_SHA
+                    || cipherSpecs[i] == TLS_ECDH_RSA_WITH_AES_256_CBC_SHA
+#endif
+#ifdef USE_TLS_ECDH_RSA_WITH_AES_128_CBC_SHA
+                    || cipherSpecs[i] == TLS_ECDH_RSA_WITH_AES_128_CBC_SHA
+#endif
+#ifdef USE_TLS_1_2
+# ifdef USE_TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256
+                    || cipherSpecs[i] == TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256
+# endif
+# ifdef USE_TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384
+                    || cipherSpecs[i] == TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384
+# endif
+# ifdef USE_TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA256
+                    || cipherSpecs[i] == TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA256
+# endif
+# ifdef USE_TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA384
+                    || cipherSpecs[i] == TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA384
+# endif
+# ifdef USE_TLS_ECDH_ECDSA_WITH_AES_128_GCM_SHA256
+                    || cipherSpecs[i] == TLS_ECDH_ECDSA_WITH_AES_128_GCM_SHA256
+# endif
+# ifdef USE_TLS_ECDH_ECDSA_WITH_AES_256_GCM_SHA384
+                    || cipherSpecs[i] == TLS_ECDH_ECDSA_WITH_AES_256_GCM_SHA384
+# endif
+# ifdef USE_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+                    || cipherSpecs[i] == TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+# endif
+# ifdef USE_TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+                    || cipherSpecs[i] == TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+# endif
+# ifdef USE_TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256
+                    || cipherSpecs[i] == TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256
+# endif
+# ifdef USE_TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384
+                    || cipherSpecs[i] == TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384
+# endif
+# ifdef USE_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+                    || cipherSpecs[i] == TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+# endif
+# ifdef USE_TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+                    || cipherSpecs[i] == TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+# endif
+# ifdef USE_TLS_ECDH_RSA_WITH_AES_128_CBC_SHA256
+                    || cipherSpecs[i] == TLS_ECDH_RSA_WITH_AES_128_CBC_SHA256
+# endif
+# ifdef USE_TLS_ECDH_RSA_WITH_AES_256_CBC_SHA384
+                    || cipherSpecs[i] == TLS_ECDH_RSA_WITH_AES_256_CBC_SHA384
+# endif
+# ifdef USE_TLS_ECDH_RSA_WITH_AES_128_GCM_SHA256
+                    || cipherSpecs[i] == TLS_ECDH_RSA_WITH_AES_128_GCM_SHA256
+# endif
+# ifdef USE_TLS_ECDH_RSA_WITH_AES_256_GCM_SHA384
+                    || cipherSpecs[i] == TLS_ECDH_RSA_WITH_AES_256_GCM_SHA384
+# endif
+# ifdef USE_TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256
+                    || cipherSpecs[i] == TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256
+# endif
+# ifdef USE_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
+                    || cipherSpecs[i] == TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
+# endif
+#endif /* USE_TLS_1_2 */
+                )
             {
                 return 1;
             }
@@ -3037,7 +3160,6 @@ const sslCipherSpec_t *sslGetCipherSpec(const ssl_t *ssl, uint16_t id)
             return NULL;
         }
 #endif
-
 #ifdef USE_SEC_CONFIG
         if (!ciphersuiteAllowedBySecConfig(ssl, id))
         {
@@ -3106,7 +3228,7 @@ const sslCipherSpec_t *sslGetCipherSpec(const ssl_t *ssl, uint16_t id)
             }
             /* The server should reject TLS 1.3 cipher suites if TLS 1.3
                is not enabled. */
-            if (IS_SERVER(ssl) && !SUPP_VER(ssl, v_tls_1_3_any))
+            if (MATRIX_IS_SERVER(ssl) && !SUPP_VER(ssl, v_tls_1_3_any))
             {
                 if (supportedCiphers[i].type == CS_TLS13)
                 {
@@ -3210,13 +3332,15 @@ int32_t sslGetCipherSpecListExt(const ssl_t *ssl,
     unsigned short i;
     int32 ignored;
 
+    p = c; /* assigned always to silence gcc 4.7 */
+    end = c + len;
+
     if (encodeList)
     {
         if (len < 4)
         {
             return -1;
         }
-        end = c + len;
         p = c; c += 2;
     }
 

@@ -891,6 +891,7 @@ static int32 psAesTestBlock(void)
     return 0;
 }
 
+# ifdef USE_AES_CBC
 /*
     Known vector test - AES-CBC
  */
@@ -988,6 +989,7 @@ static int32 psAesTestCBC(void)
     }
     return 0;
 }
+# endif /* USE_AES_CBC */
 
 # ifdef USE_AES_GCM
 int32 psAesTestGCM2(void)
@@ -4145,6 +4147,7 @@ static int32 psRsaSignTest(void)
     return psRsaSignE3Test();
 }
 
+# if defined(USE_RSA) && defined(USE_PEM_DECODE)
 static int32 psRsaKeyFormatTests(void)
 {
     unsigned char tbs[] = { 'm', 'y', 't', 'b', 's' };
@@ -4278,8 +4281,10 @@ static int32 psRsaKeyFormatTests(void)
     }
     if (Memcmp(sig1, expectedSig1, sigLen1))
     {
+# ifdef DEBUG_ALGORITHM_TEST
         psTraceBytes("Got: ", sig1, sigLen1);
         psTraceBytes("Expected: ", expectedSig1, sigLen1);
+# endif
         _psTrace("psSign output sig1 is wrong\n");
         goto out_fail;
     }
@@ -4305,8 +4310,10 @@ static int32 psRsaKeyFormatTests(void)
     }
     if (Memcmp(sig2, expectedSig2, sigLen2))
     {
+#ifdef DEBUG_ALGORITHM_TEST
         psTraceBytes("Got: ", sig2, sigLen2);
         psTraceBytes("Expected: ", expectedSig2, sigLen2);
+#endif
         _psTrace("psSign output sig2 is wrong\n");
         goto out_fail;
     }
@@ -4388,6 +4395,7 @@ out_fail:
     psFree(sig2, NULL);
     return PS_FAILURE;
 }
+# endif /* USE_RSA && USE_PEM_DECODE */
 # endif /* USE_PRIVATE_KEY_PARSING */
 
 /******************************************************************************/
@@ -4648,6 +4656,7 @@ LBL_ERR:
 /******************************************************************************/
 #  ifdef USE_PKCS1_PSS
 #   ifndef USE_CL_RSA /* crypto-cl doesn't support the used API. */
+#    ifdef USE_SHA1 /* Test uses SHA-1. */
 /* PSS-VEC.TXT from RSA PKCS#1 web page */
 static unsigned char key2N[] = {
     0xa5, 0x6e, 0x4a, 0x0e, 0x70, 0x10, 0x17, 0x58, 0x9a, 0x51, 0x87, 0xdc,
@@ -4766,6 +4775,10 @@ static unsigned char key2sig[] = {
 
 static int32 psRsaPssVectorTest(void)
 {
+# ifdef USE_ROT_RSA
+    _psTrace("SKIPPED\n");
+    return PS_SUCCESS;
+# else
     psPool_t *pool = NULL;
     psRsaKey_t key1;
     pstm_int mpN, mpe, mpd, mpp, mpq, mpdP, mpdQ, mpqP;
@@ -4905,7 +4918,9 @@ LBL_ERR:
     psFree(outPss, pool);
     psFree(outRsaE, pool);
     return ret;
+#  endif /* USE_ROT_RSA */
 }
+#   endif /* USE_SHA1 */
 #   endif /* USE_CL_RSA */
 #  endif  /* USE_PKCS1_PSS */
 
@@ -6372,8 +6387,10 @@ static int32_t psEccPairwiseTest(void)
     if (memcmpct(sk1k2, sk2k1, curve->size) != 0)
     {
         _psTrace("Shared secret doesn't match.");
+#ifdef DEBUG_ALGORITHM_TEST
         psTraceBytes("K1K2 Secret", sk1k2, secretlen);
         psTraceBytes("K2K1 Secret", sk2k1, secretlen);
+#endif
         goto L_FAIL;
     }
     _psTrace(" PASSED\n");
@@ -7062,7 +7079,7 @@ static int32 psEd25519Test(void)
             sizeof(myPrivKeyBuf2),
             NULL,
             &myPrivKey);
-    FAIL_IF(rc != 3);
+    FAIL_IF(rc != PS_ED25519);
     FAIL_IF(myPrivKey.type != PS_ED25519);
     _psTrace(" PASSED\n");
 
@@ -7295,7 +7312,7 @@ static test_t tests[] = {
 #endif
       , "***** RSA RSAES_OAEP TESTS *****" },
 
-#if defined(USE_PKCS1_PSS) && !defined(USE_CL_RSA) && !defined(USE_HARDWARE_CRYPTO_PKA)
+#if defined(USE_PKCS1_PSS) && defined(USE_SHA1) && !defined(USE_CL_RSA) && !defined(USE_HARDWARE_CRYPTO_PKA)
     { psRsaPssVectorTest
 #else
     { NULL

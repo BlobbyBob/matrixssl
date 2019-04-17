@@ -4,8 +4,7 @@
  *
  *      Simple logging and tracing functions for TLS.
  *      These functions should be called via the corresponding psTrace* macros
- *      defined in matrixssllib.h, when USE_SSL_HANDSHAKE_MSG_TRACE and/or
- *      USE_SSL_USE_SSL_INFORMATIONAL_TRACE is off.
+ *      defined in matrixssllib.h.
  */
 /*
  *      Copyright (c) 2013-2018 INSIDE Secure Corporation
@@ -349,7 +348,7 @@ void psPrintAlertReceiveInfo(ssl_t *ssl, unsigned char alertType)
 
 void psPrintHsMessageCreate(ssl_t *ssl, unsigned char hsMsgType)
 {
-    if (IS_SERVER(ssl))
+    if (MATRIX_IS_SERVER(ssl))
     {
         tlsTrace("<<< Server creating ");
     }
@@ -380,7 +379,7 @@ psBool_t isTls13ClientHello(ssl_t *ssl, unsigned char hsMsgType)
     {
         return PS_FALSE;
     }
-    if (!IS_SERVER(ssl))
+    if (!MATRIX_IS_SERVER(ssl))
     {
         return PS_TRUE;
     }
@@ -389,7 +388,7 @@ psBool_t isTls13ClientHello(ssl_t *ssl, unsigned char hsMsgType)
 
 void psPrintHsMessageParse(ssl_t *ssl, unsigned char hsMsgType)
 {
-    if (IS_SERVER(ssl))
+    if (MATRIX_IS_SERVER(ssl))
     {
         tlsTrace(">>> Server parsing ");
     }
@@ -408,7 +407,7 @@ void psPrintHsMessageParse(ssl_t *ssl, unsigned char hsMsgType)
 
 void psPrintChangeCipherSpecParse(ssl_t *ssl)
 {
-    if (IS_SERVER(ssl))
+    if (MATRIX_IS_SERVER(ssl))
     {
         tlsTrace(">>> Server parsing ");
     }
@@ -421,7 +420,7 @@ void psPrintChangeCipherSpecParse(ssl_t *ssl)
 
 void psPrintChangeCipherSpecCreate(ssl_t *ssl)
 {
-    if (IS_SERVER(ssl))
+    if (MATRIX_IS_SERVER(ssl))
     {
         tlsTrace("<<< Server creating ");
     }
@@ -443,7 +442,7 @@ void psPrintChangeCipherSpecCreate(ssl_t *ssl)
 */
 void psPrintExtensionParse(ssl_t *ssl, uint16_t extType)
 {
-    if (IS_SERVER(ssl))
+    if (MATRIX_IS_SERVER(ssl))
     {
         tlsTrace(">>>  Server parsing ");
     }
@@ -461,7 +460,7 @@ void psPrintExtensionParse(ssl_t *ssl, uint16_t extType)
 
 void psPrintExtensionCreate(ssl_t *ssl, uint16_t extType)
 {
-    if (IS_SERVER(ssl))
+    if (MATRIX_IS_SERVER(ssl))
     {
         tlsTrace(">>>  Server adding ");
     }
@@ -558,6 +557,7 @@ void psPrintSigAlgs(psSize_t indentLevel,
 void psPrintTls13SigAlg(psSize_t indentLevel,
         const char *where,
         uint16_t alg,
+        psBool_t bigEndian,
         psBool_t addNewline)
 {
     tlsTraceIndent(indentLevel, NULL);
@@ -565,6 +565,11 @@ void psPrintTls13SigAlg(psSize_t indentLevel,
     if (where)
     {
         tlsTraceStr("%s: ", where);
+    }
+
+    if (bigEndian)
+    {
+        alg = ((alg & 0xff) << 8) | ((alg & 0xff00) >> 8);
     }
 
     if (alg == sigalg_rsa_pkcs1_sha256)
@@ -642,10 +647,12 @@ void psPrintTls13SigAlg(psSize_t indentLevel,
     }
 }
 
-void psPrintTls13SigAlgList(psSize_t indentLevel,
+static
+void psPrintTls13SigAlgListInner(psSize_t indentLevel,
         const char *where,
-        uint16_t *algs,
+        const uint16_t *algs,
         psSize_t numAlgs,
+        psBool_t bigEndian,
         psBool_t addNewline)
 {
     psSize_t i;
@@ -659,9 +666,41 @@ void psPrintTls13SigAlgList(psSize_t indentLevel,
 
     for (i = 0; i < numAlgs; i++)
     {
-        psPrintTls13SigAlg(indentLevel, NULL, algs[i], PS_TRUE);
+        psPrintTls13SigAlg(indentLevel,
+                NULL,
+                algs[i],
+                bigEndian,
+                PS_TRUE);
     }
     tlsTrace("\n");
+}
+
+void psPrintTls13SigAlgList(psSize_t indentLevel,
+        const char *where,
+        const uint16_t *algs,
+        psSize_t numAlgs,
+        psBool_t addNewline)
+{
+    return psPrintTls13SigAlgListInner(indentLevel,
+            where,
+            algs,
+            numAlgs,
+            PS_FALSE,
+            PS_TRUE);
+}
+
+void psPrintTls13SigAlgListBigEndian(psSize_t indentLevel,
+        const char *where,
+        const uint16_t *algs,
+        psSize_t numAlgs,
+        psBool_t addNewline)
+{
+    return psPrintTls13SigAlgListInner(indentLevel,
+            where,
+            algs,
+            numAlgs,
+            PS_TRUE,
+            PS_TRUE);
 }
 
 void psPrintVer(psProtocolVersion_t ver)
@@ -953,6 +992,50 @@ void psPrintTls13NamedGroupList(psSize_t indentLevel,
                     (uint16_t)((list[i] << 8) + list[i + 1]),
                     PS_TRUE);
         }
+    }
+}
+
+void psPrintEcFlags(psSize_t indentLevel,
+        const char *where,
+        uint32_t ecFlags,
+        ssl_t *ssl,
+        psBool_t addNewline)
+{
+    tlsTraceIndent(indentLevel, NULL);
+    if (where)
+    {
+        tlsTraceIndent(indentLevel, NULL);
+        tlsTraceStr("%s :\n", where);
+        indentLevel++;
+    }
+# ifdef USE_ECC
+    if (ecFlags & IS_SECP192R1)
+    {
+        tlsTrace("P-192\n");
+    }
+    else if (ecFlags & IS_SECP224R1)
+    {
+        tlsTrace("P-224\n");
+    }
+    else if (ecFlags & IS_SECP256R1)
+    {
+        tlsTrace("P-256\n");
+    }
+    else if (ecFlags & IS_SECP384R1)
+    {
+        tlsTrace("P-384\n");
+    }
+    else if (ecFlags & IS_SECP521R1)
+    {
+        tlsTrace("P-521\n");
+    }
+# else
+    tlsTrace("Need USE_ECC for this\n");
+# endif
+
+    if (addNewline)
+    {
+        tlsTrace("\n");
     }
 }
 
@@ -1398,7 +1481,7 @@ void psPrintTranscriptHashUpdate(ssl_t *ssl,
         psSizeL_t inLen,
         int32_t hashAlg)
 {
-    if (IS_SERVER(ssl))
+    if (MATRIX_IS_SERVER(ssl))
     {
         tlsTrace("Server ");
     }
@@ -1408,15 +1491,15 @@ void psPrintTranscriptHashUpdate(ssl_t *ssl,
     }
     if (hashAlg == OID_SHA384_ALG)
     {
-        tlsTrace("SHA-384:");
+        tlsTrace("SHA-384");
     }
     else if (hashAlg == OID_SHA256_ALG)
     {
-        tlsTrace("SHA-256:");
+        tlsTrace("SHA-256");
     }
     else
     {
-        tlsTrace("Unknown digest:");
+        tlsTrace("Unknown digest");
     }
     tlsTrace(":\n");
     psTraceBytes("Tr-Hash input", in, inLen);
@@ -1737,6 +1820,7 @@ void psPrintPubKeyTypeAndSize(ssl_t *ssl,
     }
 }
 
+# ifndef USE_ONLY_PSK_CIPHER_SUITE
 static
 void psPrintPubKeyTypeAndSizeRaw(ssl_t *ssl,
         uint8_t keyType,
@@ -1766,13 +1850,13 @@ void psPrintPubKeyTypeAndSizeRaw(ssl_t *ssl,
         tlsTrace("DHE");
         break;
     case PS_DSA:
-        tlsTrace("DSA\n");
+        tlsTrace("DSA");
         break;
     case PS_X25519:
-        tlsTrace("X25519\n");
+        tlsTrace("X25519");
         break;
     case PS_ED25519:
-        tlsTrace("Ed25519\n");
+        tlsTrace("Ed25519");
         break;
     default:
         tlsTraceInt("Unknown/unsupported key type: %hhu", keyType);
@@ -1780,6 +1864,7 @@ void psPrintPubKeyTypeAndSizeRaw(ssl_t *ssl,
 
     tlsTraceInt(" (%hu-bit)\n", keyNBits);
 }
+# endif /* USE_ONLY_PSK_CIPHER_SUITE */
 
 /* Print out information about a completed handshake. */
 void matrixSslPrintHSDetails(ssl_t *ssl)
@@ -1793,7 +1878,7 @@ void matrixSslPrintHSDetails(ssl_t *ssl)
         psTracePrintCiphersuiteName(INDENT_CONN_ESTABLISHED,
                 NULL, ssl->cipher->ident, PS_TRUE);
 
-        if (IS_SERVER(ssl))
+        if (MATRIX_IS_SERVER(ssl))
         {
             tlsTrace("  MatrixSSL server\n");
         }
@@ -1804,11 +1889,15 @@ void matrixSslPrintHSDetails(ssl_t *ssl)
         if (RESUMED_HANDSHAKE(ssl))
         {
             tlsTrace("  Resumed session\n");
+            /*
+              In resumed handshakes, neither authentication nor key exchange
+              is performed, and don't keep the previous keys in memory.
+              So no sig alg or key ex information to print here.
+            */
+            return;
         }
-        else
-        {
-            tlsTrace("  New session\n");
-        }
+
+        tlsTrace("  New session\n");
 # ifdef USE_TLS_1_3
         if (NGTD_VER(ssl, v_tls_1_3_any))
         {
@@ -1843,7 +1932,7 @@ void matrixSslPrintHSDetails(ssl_t *ssl)
 #  ifndef USE_ONLY_PSK_CIPHER_SUITE
                 if (ssl->sec.tls13CvSigAlg != 0)
                 {
-                    if (IS_SERVER(ssl))
+                    if (MATRIX_IS_SERVER(ssl))
                     {
                         tlsTrace("  Server sig alg: ");
                     }
@@ -1854,8 +1943,9 @@ void matrixSslPrintHSDetails(ssl_t *ssl)
                     psTracePrintTls13SigAlg(INDENT_CONN_ESTABLISHED,
                             NULL,
                             ssl->sec.tls13CvSigAlg,
+                            PS_FALSE,
                             PS_TRUE);
-                    if (IS_SERVER(ssl))
+                    if (MATRIX_IS_SERVER(ssl))
                     {
                         tlsTrace("  Server key: ");
                     }
@@ -1868,7 +1958,7 @@ void matrixSslPrintHSDetails(ssl_t *ssl)
                 }
                 if (ssl->sec.tls13PeerCvSigAlg != 0)
                 {
-                    if (IS_SERVER(ssl))
+                    if (MATRIX_IS_SERVER(ssl))
                     {
                         tlsTrace("  Client sig alg: ");
                     }
@@ -1879,9 +1969,10 @@ void matrixSslPrintHSDetails(ssl_t *ssl)
                     psTracePrintTls13SigAlg(INDENT_CONN_ESTABLISHED,
                             NULL,
                             ssl->sec.tls13PeerCvSigAlg,
+                            PS_FALSE,
                             PS_TRUE);
 #   ifdef USE_CERT_PARSE
-                    if (IS_SERVER(ssl))
+                    if (MATRIX_IS_SERVER(ssl))
                     {
                         tlsTrace("  Client key: ");
                     }
@@ -1895,7 +1986,7 @@ void matrixSslPrintHSDetails(ssl_t *ssl)
                 }
                 else
                 {
-                    if (IS_SERVER(ssl))
+                    if (MATRIX_IS_SERVER(ssl))
                     {
                         tlsTrace("  No client authentication\n");
                     }
@@ -1904,7 +1995,7 @@ void matrixSslPrintHSDetails(ssl_t *ssl)
             }
         } /* endif(TLS 1.3) */
 # endif
-# ifndef USE_ONLY_PSK_CIPHERSUITE
+# ifndef USE_ONLY_PSK_CIPHER_SUITE
         if (!NGTD_VER(ssl, v_tls_1_3_any))
         {
             if (ssl->flags & SSL_FLAGS_CLIENT_AUTH)
@@ -1915,56 +2006,65 @@ void matrixSslPrintHSDetails(ssl_t *ssl)
             {
                 tlsTrace("  No client authentication\n");
             }
-            if (IS_SERVER(ssl))
+# ifdef USE_IDENTITY_CERTIFICATES
+            if (!RESUMED_HANDSHAKE(ssl))
             {
-                if (ssl->keys && ssl->chosenIdentity)
+                if (MATRIX_IS_SERVER(ssl))
                 {
-                    tlsTrace("  Server key: ");
-                    psTracePrintPubKeyTypeAndSize(ssl,
-                            &ssl->chosenIdentity->privKey);
+                    if (ssl->keys && ssl->chosenIdentity)
+                    {
+                        tlsTrace("  Server key: ");
+                        psTracePrintPubKeyTypeAndSize(ssl,
+                                &ssl->chosenIdentity->privKey);
+                    }
+                    if (ssl->flags & SSL_FLAGS_CLIENT_AUTH)
+                    {
+                        tlsTrace("  Client key: ");
+                        psPrintPubKeyTypeAndSizeRaw(ssl,
+                                ssl->peerAuthKeyType,
+                                ssl->peerAuthKeyNBits,
+                                PS_FALSE);
+                    }
                 }
-                if (ssl->flags & SSL_FLAGS_CLIENT_AUTH)
+                else /* We are client. */
                 {
-                    tlsTrace("  Client key: ");
+                    if ((ssl->flags & SSL_FLAGS_CLIENT_AUTH)
+                            && ssl->chosenIdentity)
+                    {
+                        tlsTrace("  Client key: ");
+                        psTracePrintPubKeyTypeAndSize(ssl,
+                                &ssl->chosenIdentity->privKey);
+                    }
+                    tlsTrace("  Server key: ");
                     psPrintPubKeyTypeAndSizeRaw(ssl,
                             ssl->peerAuthKeyType,
                             ssl->peerAuthKeyNBits,
                             PS_FALSE);
                 }
             }
-            else /* We are client. */
+# endif /* USE_IDENTITY_CERTIFICATES */
+            if (!RESUMED_HANDSHAKE(ssl))
             {
-                if ((ssl->flags & SSL_FLAGS_CLIENT_AUTH) && ssl->chosenIdentity)
+                tlsTrace("  Key exchange: ");
+                if (ssl->flags & SSL_FLAGS_PSK_CIPHER)
                 {
-                    tlsTrace("  Client key: ");
-                    psTracePrintPubKeyTypeAndSize(ssl,
-                            &ssl->chosenIdentity->privKey);
-                }
-                tlsTrace("  Server key: ");
-                psPrintPubKeyTypeAndSizeRaw(ssl,
-                        ssl->peerAuthKeyType,
-                        ssl->peerAuthKeyNBits,
-                        PS_FALSE);
-            }
-            tlsTrace("  Key exchange: ");
-            if (ssl->flags & SSL_FLAGS_PSK_CIPHER)
-            {
-                tlsTrace("PSK\n");
-            }
-            else
-            {
-                /* We are not using PSK and we only filled
-                   ssl->peerKeyExKeyType if we used (EC)DH. */
-                if (ssl->peerKeyExKeyType == 0)
-                {
-                    tlsTrace("RSA key transport\n");
+                    tlsTrace("PSK\n");
                 }
                 else
                 {
-                    psPrintPubKeyTypeAndSizeRaw(ssl,
-                            ssl->peerKeyExKeyType,
-                            ssl->peerKeyExKeyNBits,
-                            PS_TRUE);
+                    /* We are not using PSK and we only filled
+                       ssl->peerKeyExKeyType if we used (EC)DH. */
+                    if (ssl->peerKeyExKeyType == 0)
+                    {
+                        tlsTrace("RSA key transport\n");
+                    }
+                    else
+                    {
+                        psPrintPubKeyTypeAndSizeRaw(ssl,
+                                ssl->peerKeyExKeyType,
+                                ssl->peerKeyExKeyNBits,
+                                PS_TRUE);
+                    }
                 }
             }
         }

@@ -261,17 +261,35 @@ static char *oid_to_string(const unsigned char *oid, size_t oidlen,
     {
         return NULL;
     }
-    if (oid[2] < 120)
+    if (oid[2] < 128)
     {
-        /* Simple case, [012].x where x < 40. */
-        Sprintf(s, "%d.%d", oid[2] / 40, oid[2] % 40);
+        unsigned char root_arc, arc1;
+
+        /* Single byte case, [01].x or 2.y, where x < 40 or y < 48. */        
+        arc1 = oid[2];
+        if (arc1 >= 80)
+        {
+            root_arc = 2;
+            arc1 -= 80;
+        }
+        else if (arc1 >= 40)
+        {
+            root_arc = 1;
+            arc1 -= 40;
+        }
+        else
+        {
+            root_arc = 0;
+        }
+
+        Sprintf(s, "%d.%d", root_arc, arc1);
         s += Strlen(s);
         oid += 3;
         oidlen -= 3;
     }
     else
     {
-        /* Process 2.xxx, where xxx is arbitrary length number >= 40. */
+        /* Process 2.xxx, where xxx is arbitrary length number >= 48. */
         size_t bytes = oid_part_append(s + 1, oid + 2, oidlen - 2);
         int i;
 

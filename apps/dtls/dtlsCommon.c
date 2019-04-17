@@ -76,7 +76,7 @@ int32 udpSend(SOCKET s, unsigned char *buf, int len,
             )
         {
             *drop_rehandshake_cipher_spec = 0;
-            psTraceIntDtls("Didn't send (CHANGE_CIPHER_SPEC flight): %d\n", len);
+            psTraceInt("Didn't send (CHANGE_CIPHER_SPEC flight): %d\n", len);
             ++num_dropped;
         }
         else
@@ -85,7 +85,7 @@ int32 udpSend(SOCKET s, unsigned char *buf, int len,
             {
                 return -1;
             }
-            psTraceIntDtls("Sent %d bytes\n", sent);
+            psTraceInt("Sent %d bytes\n", sent);
         }
     }
     else
@@ -102,7 +102,7 @@ int32 udpSend(SOCKET s, unsigned char *buf, int len,
         {
             return -1;
         }
-        psTraceIntDtls("Sent %d bytes\n", sent);
+        psTraceInt("Sent %d bytes\n", sent);
     }
     else
     {
@@ -114,11 +114,11 @@ int32 udpSend(SOCKET s, unsigned char *buf, int len,
             {
                 return -1;
             }
-            psTraceIntDtls("Sent %d bytes\n", sent);
+            psTraceInt("Sent %d bytes\n", sent);
         }
         else
         {
-            psTraceIntDtls("Didn't send: %d\n", len);
+            psTraceInt("Didn't send: %d\n", len);
             ++num_dropped;
         }
     }
@@ -130,10 +130,10 @@ int32 udpSend(SOCKET s, unsigned char *buf, int len,
     {
         return -1;
     }
-    psTraceIntDtls("Sent %d bytes\n", sent);
+    psTraceInt("Sent %d bytes\n", sent);
 # endif /* DTLS_PACKET_LOSS_TEST */
 # ifdef DTLS_PACKET_LOSS_TEST
-    psTraceIntDtls("%d packets dropped so far\n",
+    psTraceInt("%d packets dropped so far\n",
         num_dropped);
 # endif /* DTLS_PACKET_LOSS_TEST */
     return len;

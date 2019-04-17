@@ -36,7 +36,7 @@
 
 #include "../cryptoImpl.h"
 
-#ifdef USE_MATRIX_ECC
+#if defined(USE_MATRIX_ECC) || defined(USE_ROT_ECC)
 
 int32_t getEccParamById(psCurve16_t curveId, const psEccCurve_t **curve)
 {
@@ -64,18 +64,18 @@ int32_t getEccParamById(psCurve16_t curveId, const psEccCurve_t **curve)
 
 /**
     User set list of curves they want to support.
-    This method will put the largest bit strength first in the list.
-    @param[in] curves Flags indicating which curves to use.
  */
 void userSuppliedEccList(unsigned char *curveList, uint8_t *len, uint32_t curves)
 {
     const psEccCurve_t *curve;
     uint8_t listLen = 0;
 
-# ifdef USE_SECP521R1
-    if (curves & IS_SECP521R1)
+    /* Prefer 256-bit and 384-bit curves over 521-bit ones.
+       They are secure enough, and faster. */
+# ifdef USE_SECP256R1
+    if (curves & IS_SECP256R1)
     {
-        if (getEccParamById(IANA_SECP521R1, &curve) == 0)
+        if (getEccParamById(IANA_SECP256R1, &curve) == 0)
         {
             if (listLen < (*len - 2))
             {
@@ -85,10 +85,10 @@ void userSuppliedEccList(unsigned char *curveList, uint8_t *len, uint32_t curves
         }
     }
 # endif
-# ifdef USE_BRAIN512R1
-    if (curves & IS_BRAIN512R1)
+# ifdef USE_BRAIN256R1
+    if (curves & IS_BRAIN256R1)
     {
-        if (getEccParamById(IANA_BRAIN512R1, &curve) == 0)
+        if (getEccParamById(IANA_BRAIN256R1, &curve) == 0)
         {
             if (listLen < (*len - 2))
             {
@@ -124,10 +124,10 @@ void userSuppliedEccList(unsigned char *curveList, uint8_t *len, uint32_t curves
         }
     }
 # endif
-# ifdef USE_SECP256R1
-    if (curves & IS_SECP256R1)
+# ifdef USE_SECP521R1
+    if (curves & IS_SECP521R1)
     {
-        if (getEccParamById(IANA_SECP256R1, &curve) == 0)
+        if (getEccParamById(IANA_SECP521R1, &curve) == 0)
         {
             if (listLen < (*len - 2))
             {
@@ -137,10 +137,10 @@ void userSuppliedEccList(unsigned char *curveList, uint8_t *len, uint32_t curves
         }
     }
 # endif
-# ifdef USE_BRAIN256R1
-    if (curves & IS_BRAIN256R1)
+# ifdef USE_BRAIN512R1
+    if (curves & IS_BRAIN512R1)
     {
-        if (getEccParamById(IANA_BRAIN256R1, &curve) == 0)
+        if (getEccParamById(IANA_BRAIN512R1, &curve) == 0)
         {
             if (listLen < (*len - 2))
             {
@@ -228,5 +228,5 @@ uint32_t compiledInEcFlags(void)
     return ecFlags;
 }
 
-#endif  /* USE_MATRIX_ECC */
+#endif  /* USE_MATRIX_ECC || USE_ROT_ECC */
 

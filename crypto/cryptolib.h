@@ -89,23 +89,6 @@ extern const psEccCurve_t eccCurves[];
 /*
     Crypto trace
  */
-# ifdef USE_PS_LOGF_COMMON
-#   define psTraceCrypto(x) PS_LOGF_COMMON(Log_Trace, PS_CRYPTO, PS_LOGF_FMT, \
-                                           PS_LOGF_FILELINE, "%s", x)
-#   define psTraceIntCrypto(x, i) PS_LOGF_COMMON(Log_Trace, PS_CRYPTO, \
-                                                 PS_LOGF_FMT,          \
-                                                 PS_LOGF_FILELINE, x, i)
-#   define psTraceStrCrypto(x, s) PS_LOGF_COMMON(Log_Trace, PS_CRYPTO, \
-                                                 PS_LOGF_FMT,          \
-                                                 PS_LOGF_FILELINE, x, s)
-#   define psTracePtrCrypto(x, p) PS_LOGF_COMMON(Log_Trace, PS_CRYPTO, \
-                                                 PS_LOGF_FMT,          \
-                                                 PS_LOGF_FILELINE, x, p)
-#   define psTracefCrypto(x, ...) PS_LOGF_COMMON(Log_Trace, PS_CRYPTO, \
-                                                 PS_LOGF_FMT,          \
-                                                 PS_LOGF_FILELINE, x,  \
-                                                 __VA_ARGS__)
-# else
 #  ifndef USE_CRYPTO_TRACE
 #   define psTraceCrypto(x)
 #   define psTraceStrCrypto(x, y)
@@ -117,9 +100,8 @@ extern const psEccCurve_t eccCurves[];
 #   define psTraceStrCrypto(x, y) _psTraceStr(x, y)
 #   define psTraceIntCrypto(x, y) _psTraceInt(x, y)
 #   define psTracePtrCrypto(x, y) _psTracePtr(x, y)
-#   define psTracefCrypto(x, y) /* Only available via PS_LOGF_COMMON. */
+#   define psTracefCrypto(x, y)
 #  endif /* USE_CRYPTO_TRACE */
-# endif /* PS_LOGF_COMMON */
 
 /******************************************************************************/
 /*
@@ -454,9 +436,14 @@ extern int32_t psGetPrngLocked(unsigned char *bytes, psSize_t size,
 #  define sigalg_ecdsa_sha1             0x0203
 
 /* TLS 1.3 NamedGroup values. */
+#  define namedgroup_secp192r1   0x0013
+#  define namedgroup_secp224r1   0x0015
 #  define namedgroup_secp256r1   0x0017
 #  define namedgroup_secp384r1   0x0018
 #  define namedgroup_secp521r1   0x0019
+#  define namedgroup_brain256r1  0x001a
+#  define namedgroup_brain384r1  0x001b
+#  define namedgroup_brain521r1  0x001c
 #  define namedgroup_x25519      0x001d
 #  define namedgroup_x448        0x001e
 #  define namedgroup_ffdhe2048   0x0100

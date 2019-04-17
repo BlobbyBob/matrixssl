@@ -265,7 +265,7 @@ void SNIcallback(void *ssl, char *hostname, int32 hostnameLen,
     }
     else
     {
-        *newKeys = lssl->keys;
+        *newKeys = matrixSslGetKeys(lssl);
     }
 
     Free(str);
@@ -285,7 +285,8 @@ int32 setProtocolVersions(sslSessOpts_t *options)
         while (supportedVersion)
         {
             supportedVersions[i] = atoi((char* )supportedVersion->item);
-            supportedVersions[i] = DIGIT_TO_VER(supportedVersions[i]);
+            supportedVersions[i] = matrixSslVersionFromMinorDigit(
+                    supportedVersions[i]);
             supportedVersion = supportedVersion->next;
             i++;
         }
@@ -888,7 +889,7 @@ PROCESS_MORE:
                 /* The second byte is the description */
                 if (*buf == SSL_ALERT_LEVEL_FATAL)
                 {
-                    psTraceIntInfo("Fatal alert: %d, closing connection.\n",
+                    psTraceInt("Fatal alert: %d, closing connection.\n",
                         *(buf + 1));
                     closeConn(cp, PS_PROTOCOL_FAIL);
                     continue;     /* Next connection */
@@ -899,7 +900,7 @@ PROCESS_MORE:
                     closeConn(cp, PS_SUCCESS);
                     continue;     /* Next connection */
                 }
-                psTraceIntInfo("Warning alert: %d\n", *(buf + 1));
+                psTraceInt("Warning alert: %d\n", *(buf + 1));
                 if ((rc = matrixSslProcessedData(cp->ssl, &buf, (uint32 *) &len)) == 0)
                 {
                     /* No more data in buffer. Might as well read for more. */
@@ -993,7 +994,7 @@ static int32 httpWriteResponse(httpConn_t *cp)
     }
 
 # ifdef USE_TLS_1_3
-    if (ssl->flags & SSL_FLAGS_TLS_1_3_NEGOTIATED)
+    if (matrixSslGetNegotiatedVersion(ssl) & v_tls_1_3_any)
     {
         rc = sendHtmlResponseTls13(ssl);
     }
@@ -1337,7 +1338,7 @@ static int32 process_cmd_options(int32 argc, char **argv)
 
         case 'v':
             /* Single version. */
-            version = DIGIT_TO_VER(atoi(optarg));
+            version = matrixSslVersionFromMinorDigit(atoi(optarg));
             if (!matrixSslTlsVersionRangeSupported(version,
                             version))
             {
@@ -1356,8 +1357,10 @@ static int32 process_cmd_options(int32 argc, char **argv)
                 psFreeList(versionRangeList, NULL);
                 return -1;
             }
-            g_min_version = DIGIT_TO_VER(atoi((char *)versionRangeList->item));
-            g_max_version = DIGIT_TO_VER(atoi((char *)versionRangeList->next->item));
+            g_min_version = matrixSslVersionFromMinorDigit(
+                    atoi((char *)versionRangeList->item));
+            g_max_version = matrixSslVersionFromMinorDigit(
+                    atoi((char *)versionRangeList->next->item));
             psFreeList(versionRangeList, NULL);
             if (!matrixSslTlsVersionRangeSupported(g_min_version,
                             g_max_version))
@@ -1557,18 +1560,32 @@ int32 main(int32 argc, char **argv)
 # ifdef USE_TLS_1_3
     if (g_use_psk)
     {
-        /* Load the TLS 1.3 test PSK. */
+        /* Load the TLS 1.3 test SHA-256 based PSK. */
         rc = matrixSslLoadTls13Psk(keys,
                 g_tls13_test_psk_256,
                 sizeof(g_tls13_test_psk_256),
-                g_tls13_test_psk_id,
-                sizeof(g_tls13_test_psk_id),
+                g_tls13_test_psk_id_sha256,
+                sizeof(g_tls13_test_psk_id_sha256),
                 NULL);
         if (rc < 0)
         {
             psTrace("Unable to load PSK keys.\n");
             return rc;
         }
+#  ifdef USE_TLS_AES_256_GCM_SHA384
+        /* Add the SHA-384 PSK. */
+        rc = matrixSslLoadTls13Psk(keys,
+                g_tls13_test_psk_384,
+                sizeof(g_tls13_test_psk_384),
+                g_tls13_test_psk_id_sha384,
+                sizeof(g_tls13_test_psk_id_sha384),
+                NULL);
+        if (rc < 0)
+        {
+            psTrace("Unable to load PSK keys.\n");
+            return rc;
+        }
+#  endif
     }
 # endif
 

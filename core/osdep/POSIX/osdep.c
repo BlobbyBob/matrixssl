@@ -496,6 +496,9 @@ void osdepTraceClose(void)
 
 FILE *_psGetTraceFile(void)
 {
+#ifndef USE_TRACE_FILE
+    return stdout;
+#else
     static FILE *tracefile = NULL;
 #ifdef USE_MULTITHREADING
     static pthread_mutex_t tracefile_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -563,6 +566,7 @@ FILE *_psGetTraceFile(void)
 #endif /* USE_MULTITHREADING */
     }
     return tracefile;
+#endif /* USE_TRACE_FILE */
 }
 
 void _psTrace(const char *msg)

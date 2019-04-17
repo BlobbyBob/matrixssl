@@ -475,7 +475,7 @@ psBool_t matrixSslClientCertUpdated(ssl_t *ssl)
     if (ssl->extClientCertKeyStateFlags !=
             EXT_CLIENT_CERT_KEY_STATE_WAIT_FOR_CERT_KEY_UPDATE)
     {
-        psTraceInfo("Error: wrong state for client cert update\n");
+        psTraceErrr("Error: wrong state for client cert update\n");
         return PS_FALSE;
     }
     else
@@ -502,7 +502,7 @@ psBool_t matrixSslClientPrivKeyUpdated(ssl_t *ssl)
     if (ssl->extClientCertKeyStateFlags !=
             EXT_CLIENT_CERT_KEY_STATE_WAIT_FOR_CERT_KEY_UPDATE)
     {
-        psTraceInfo("Error: wrong state for client key update\n");
+        psTraceErrr("Error: wrong state for client key update\n");
         return PS_FALSE;
     }
     else
@@ -696,28 +696,6 @@ int32_t matrixSslSetCvSignature(ssl_t *ssl, const unsigned char *sig, const size
     Return      MATRIXSSL_SUCCESS on success
             < 0 on error
  */
-
-int32 matrixSslNewServer(ssl_t **ssl,
-    pubkeyCb_t pubkeyCb,
-    pskCb_t pskCb,
-    sslCertCb_t certCb,
-    sslSessOpts_t *options)
-{
-    int32 rc;
-
-    if ((rc = matrixSslNewServerSession(ssl, NULL,
-                                        certCb,
-                                        options)) < 0)
-    {
-        return rc;
-    }
-
-    (*ssl)->sec.pskCb = (pskCb_t) pskCb;
-# ifndef USE_ONLY_PSK_CIPHER_SUITE
-    (*ssl)->sec.pubkeyCb = (pubkeyCb_t) pubkeyCb;
-# endif
-    return MATRIXSSL_SUCCESS;
-}
 
 int32 matrixSslNewServerSession(ssl_t **ssl, const sslKeys_t *keys,
     sslCertCb_t certCb,
@@ -1991,7 +1969,7 @@ int32_t matrixSslEncodeRehandshake(ssl_t *ssl, sslKeys_t *keys,
         /* Resend epoch should be brought up-to-date with new epoch */
         ssl->resendEpoch[0] = ssl->epoch[0];
         ssl->resendEpoch[1] = ssl->epoch[1];
-
+        ssl->appDataExch = 0;
         ssl->msn = ssl->resendMsn = 0;
     }
 #  endif /* USE_DTLS */
@@ -2044,7 +2022,7 @@ L_REHANDSHAKE:
         }
 
         if ((rc = matrixSslEncodeClientHello(ssl, &sbuf, cipherSpec,
-                 cipherSpecLen, &reqLen, NULL, &options)) < 0)
+                 cipherSpecLen, &reqLen, ssl->userExt, &options)) < 0)
         {
             if (rc == SSL_FULL && newLen == 0)
             {
@@ -2217,6 +2195,7 @@ int32 matrixSslSentData(ssl_t *ssl, uint32 bytes)
         /* Client side resumed completion or server standard completion */
         matrixSslPrintHSDetails(ssl);
 # endif
+        sslFreeHSHash(ssl);
     }
     return rc;
 }
@@ -2241,7 +2220,7 @@ int32_t matrixSslSetTls13BlockPadding(ssl_t *ssl, psSizeL_t blockSize)
     }
     if (blockSize > TLS_1_3_MAX_PLAINTEXT_FRAGMENT_LEN)
     {
-        psTraceInfo("Error: cannot pad to larger than max plaintext size\n");
+        psTraceErrr("Error: cannot pad to larger than max plaintext size\n");
         return PS_ARG_FAIL;
     }
     ssl->tls13BlockSize = blockSize;
@@ -2253,4 +2232,37 @@ int32_t matrixSslSetTls13BlockPadding(ssl_t *ssl, psSizeL_t blockSize)
 }
 # endif /* USE_TLS_1_3 */
 
+sslKeys_t *matrixSslGetKeys(ssl_t *ssl)
+{
+    return ssl->keys;
+}
+
+psProtocolVersion_t matrixSslGetNegotiatedVersion(ssl_t *ssl)
+{
+    return GET_NGTD_VER(ssl);
+}
+
+psProtocolVersion_t matrixSslVersionFromMinorDigit(uint16_t digit)
+{
+    return DIGIT_TO_VER(digit);
+}
+
+psBool_t matrixSslHandshakeIsComplete(const ssl_t *ssl)
+{
+    return (ssl->hsState == SSL_HS_DONE) ? PS_TRUE : PS_FALSE;
+}
+
+psX509Cert_t* sslKeysGetCACerts(const sslKeys_t *keys)
+{
+# ifdef USE_ONLY_PSK_CIPHER_SUITE
+    return NULL;
+# else
+    return keys->CAcerts;
+# endif
+}
+
+char *matrixSslGetExpectedName(const ssl_t *ssl)
+{
+    return ssl->expectedName;
+}
 /******************************************************************************/

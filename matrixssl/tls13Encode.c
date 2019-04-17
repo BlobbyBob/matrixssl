@@ -969,8 +969,8 @@ static int32 tls13WriteCertificate(ssl_t *ssl, sslBuf_t *out)
     /* certificate_request_context<0..2^8-1>; */
     psDynBufAppendTlsVector(&certBuf,
             0, (1 << 8) - 1,
-            IS_SERVER(ssl) ? NULL : ssl->tls13CertRequestContext,
-            IS_SERVER(ssl) ? 0 : ssl->tls13CertRequestContextLen);
+            MATRIX_IS_SERVER(ssl) ? NULL : ssl->tls13CertRequestContext,
+            MATRIX_IS_SERVER(ssl) ? 0 : ssl->tls13CertRequestContextLen);
 
     psDynBufInit(ssl->hsPool, &certListBuf, 4096);
 
@@ -987,7 +987,7 @@ static int32 tls13WriteCertificate(ssl_t *ssl, sslBuf_t *out)
        Also note, that on client the code that selects client identity
        key pair should have already performed this check as part of
        the process. */
-    if (!IS_SERVER(ssl))
+    if (!MATRIX_IS_SERVER(ssl))
     {
         if (c != NULL)
         {
@@ -1146,7 +1146,9 @@ static int32 tls13WriteCertificateVerify(ssl_t *ssl, sslBuf_t *out)
     }
     psTracePrintTls13SigAlg(INDENT_HS_MSG,
             "Signing CertificateVerify with",
-            chosenSigAlg, PS_TRUE);
+            chosenSigAlg,
+            PS_FALSE,
+            PS_TRUE);
     ssl->sec.tls13CvSigAlg = chosenSigAlg;
 
     /* SignatureScheme algorithm; */
@@ -1180,7 +1182,7 @@ static int32 tls13WriteCertificateVerify(ssl_t *ssl, sslBuf_t *out)
                 &ssl->chosenIdentity->privKey,
                 chosenSigAlg,
                 trHash, hmacLen,
-                IS_SERVER(ssl) ? contextStrServer : contextStrClient,
+                MATRIX_IS_SERVER(ssl) ? contextStrServer : contextStrClient,
                 contextStrLen,
                 &ssl->sec.tls13CvSig,
                 &ssl->sec.tls13CvSigLen);
@@ -1205,9 +1207,10 @@ static int32 tls13WriteCertificateVerify(ssl_t *ssl, sslBuf_t *out)
               (see C.3. in the draft spec.)
 
               When using crypto-cl, the self-verification has already
-              been done within CL/SL (CL_HashSafeSign).
+              been done within CL/SL (CL_HashSafeSign)
+              Same goes for RoT - self-verify is done within the RoT.
             */
-#  ifndef USE_CL_RSA
+#  if !defined(USE_CL_RSA) && !defined(USE_ROT_RSA)
             verifyOwnSig = PS_TRUE;
 #  endif
         }
@@ -1224,7 +1227,7 @@ static int32 tls13WriteCertificateVerify(ssl_t *ssl, sslBuf_t *out)
                     ssl->sec.tls13CvSig,
                     ssl->sec.tls13CvSigLen,
                     trHash, hmacLen,
-                    IS_SERVER(ssl) ? contextStrServer : contextStrClient,
+                    MATRIX_IS_SERVER(ssl) ? contextStrServer : contextStrClient,
                     contextStrLen);
             if (rc < 0)
             {
@@ -1307,7 +1310,7 @@ static int32 tls13WriteFinished(ssl_t *ssl, sslBuf_t *out)
           opaque verify_data[Hash.length];
       } Finished;
     */
-    rc = tls13DeriveFinishedKey(ssl, IS_SERVER(ssl));
+    rc = tls13DeriveFinishedKey(ssl, MATRIX_IS_SERVER(ssl));
     if (rc < 0 || hmacLen < 0)
     {
         return rc;
@@ -1928,7 +1931,7 @@ int32 tls13EncodeResponseClient(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
 
 int32 tls13EncodeResponse(ssl_t *ssl, psBuf_t *out, uint32 *requiredLen)
 {
-    switch(IS_SERVER(ssl))
+    switch(MATRIX_IS_SERVER(ssl))
     {
 #ifdef USE_SERVER_SIDE_SSL
     case PS_TRUE:
@@ -2074,7 +2077,7 @@ int32_t tls13EncryptMessage(ssl_t *ssl,
         {
             return rc;
         }
-        if (IS_SERVER(ssl))
+        if (MATRIX_IS_SERVER(ssl))
         {
             /* Set-up HS read keys for the client's Finished message if
                early data is not expected to be received */
@@ -2178,7 +2181,7 @@ int32_t tls13EncodeAppData(ssl_t *ssl,
     recLen = (encryptEnd - encryptStart) + TLS_GCM_TAG_LEN;
 
     rc = tls13Encrypt(ssl,
-            ptBuf,
+            encryptStart,
             buf + TLS_REC_HDR_LEN,
             encryptEnd - encryptStart,
             SSL_RECORD_TYPE_APPLICATION_DATA,
@@ -2429,22 +2432,33 @@ int32 tls13WriteClientHello(ssl_t *ssl, sslBuf_t *out,
     {
         /* Only use those cipher suites that were provided */
         psDynBufInit(ssl->hsPool, &ciphersBuf, 32);
-        ssl->tls13ClientCipherSuitesLen = 0;
-        ssl->tls13ClientCipherSuites = psMalloc(ssl->hsPool,
-                cipherSpecsLen * sizeof(*ssl->tls13ClientCipherSuites));
-        if (ssl->tls13ClientCipherSuites == NULL)
+
+        /*
+          Save the supplied cipher suite set. It is needed in case
+          ClientHello needs to be resent because of HelloRetryRequest.
+          Skip the backup if already in the middle of a HRR handshake.
+        */
+        if (!ssl->tls13IncorrectDheKeyShare ||
+                ssl->tls13ClientCipherSuitesLen == 0)
         {
-            psTraceErrr("Out of mem in tls13WriteClientHello\n");
-            goto out_internal_error;
+            ssl->tls13ClientCipherSuitesLen = 0;
+            ssl->tls13ClientCipherSuites = psMalloc(ssl->hsPool,
+                    cipherSpecsLen * sizeof(*ssl->tls13ClientCipherSuites));
+            if (ssl->tls13ClientCipherSuites == NULL)
+            {
+                psTraceErrr("Out of mem in tls13WriteClientHello\n");
+                goto out_internal_error;
+            }
+            for (i = 0; i < cipherSpecsLen; i++)
+            {
+                ssl->tls13ClientCipherSuites[i] = cipherSpecs[i];
+                ssl->tls13ClientCipherSuitesLen++;
+            }
         }
+
         for (i = 0; i < cipherSpecsLen; i++)
         {
             psDynBufAppendAsBigEndianUint16(&ciphersBuf, cipherSpecs[i]);
-
-            /* Save the supplied cipher suite set. It is needed in case
-             * ClientHello needs to be resent because of HelloRetryRequest */
-            ssl->tls13ClientCipherSuites[i] = cipherSpecs[i];
-            ssl->tls13ClientCipherSuitesLen++;
         }
         psTracePrintCipherList(INDENT_HS_MSG,
                 "cipher_suites",

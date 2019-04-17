@@ -323,7 +323,7 @@ int32_t matrixSslGetMaxEarlyData(ssl_t *ssl)
         return PS_ARG_FAIL;
     }
 
-    if (IS_SERVER(ssl))
+    if (MATRIX_IS_SERVER(ssl))
     {
         /* For server this is not really relevant but return the global
            maximum */
@@ -541,7 +541,7 @@ int32 matrixSslNewSession(ssl_t **ssl, const sslKeys_t *keys,
         lssl->userDataPtr = options->userDataPtr;
     }
 
-#ifdef USE_ECC
+#if defined(USE_ECC)
     /* If user specified EC curves they support, let's check that against
         the key material they provided so there are no conflicts.  Don't
         need to test against default compiled-in curves because the keys
@@ -843,6 +843,8 @@ void matrixSslDeleteSession(ssl_t *ssl)
     psSha1Sync(NULL, 1);
 #endif /* USE_TLS_1_2 */
 
+    sslFreeHSHash(ssl);
+
 /*
     If we have a sessionId, for servers we need to clear the inUse flag in
     the session cache so the ID can be replaced if needed.  In the client case
@@ -877,6 +879,17 @@ void matrixSslDeleteSession(ssl_t *ssl)
     {
         matrixSslDeleteHelloExtension(ssl->userExt);
     }
+# ifdef ENABLE_SECURE_REHANDSHAKES
+    if (!(ssl->flags & SSL_FLAGS_SERVER))
+    {
+        if (ssl->tlsClientCipherSuites != NULL)
+        {
+            psFree(ssl->tlsClientCipherSuites, ssl->hsPool);
+            ssl->tlsClientCipherSuites = NULL;
+            ssl->tlsClientCipherSuitesLen = 0;
+        }
+    }
+# endif
 #endif
 
 #if defined(USE_IDENTITY_CERTIFICATES)
@@ -1083,14 +1096,6 @@ void matrixSslGetAnonStatus(ssl_t *ssl, int32 *certArg)
     *certArg = ssl->sec.anon;
 }
 
-/******************************************************************************/
-/**
-    @return PS_TRUE if we've completed the SSL handshake. PS_FALSE otherwise.
- */
-int32_t matrixSslHandshakeIsComplete(const ssl_t *ssl)
-{
-    return (ssl->hsState == SSL_HS_DONE) ? PS_TRUE : PS_FALSE;
-}
 
 # ifdef ENABLE_SECURE_REHANDSHAKES
 /**

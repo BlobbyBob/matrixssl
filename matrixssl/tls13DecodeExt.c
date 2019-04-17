@@ -38,7 +38,7 @@
 #  ifndef DEBUG_TLS_1_3_DECODE_EXTENSIONS
 /* #   define DEBUG_TLS_1_3_DECODE_EXTENSIONS */
 #  endif
-#  ifdef DEBUG_TLS_1_3_ENCODE_EXTENSIONS
+#  ifdef DEBUG_TLS_1_3_DECODE_EXTENSIONS
 #   warning "DEBUG_TLS_1_3_DECODE_EXTENSIONS will leak secrets into logs!"
 #  endif
 
@@ -158,7 +158,7 @@ int32_t tls13ParseStatusRequest(ssl_t *ssl,
 
     psTracePrintExtensionParse(ssl, EXT_STATUS_REQUEST);
 
-    if (IS_SERVER(ssl))
+    if (MATRIX_IS_SERVER(ssl))
     {
         /*
           Server parses the client request:
@@ -448,8 +448,11 @@ psSize_t tls13ParseSupportedVersions(ssl_t *ssl,
         len -= 2;
         ver = psVerFromEncodingMajMin(majVer, minVer);
 
-        ADD_PEER_SUPP_VER(ssl, ver);
-        ADD_PEER_SUPP_VER_PRIORITY(ssl, ver);
+        if (ver != v_undefined)
+        {
+            ADD_PEER_SUPP_VER(ssl, ver);
+            ADD_PEER_SUPP_VER_PRIORITY(ssl, ver);
+        }
         i++;
 
         if (i >= TLS_MAX_SUPPORTED_VERSIONS)
@@ -847,7 +850,15 @@ int32_t tls13ParsePreSharedKey(ssl_t *ssl,
       } PreSharedKeyExtension;
     */
 
-    if (IS_SERVER(ssl))
+    if (!SUPP_VER(ssl, v_tls_1_3_any))
+    {
+        tlsTraceIndent(INDENT_EXTENSION,
+                "Ignoring this TLS 1.3 specific extension, "   \
+                "since TLS 1.3 not enabled\n");
+        return MATRIXSSL_SUCCESS;
+    }
+
+    if (MATRIX_IS_SERVER(ssl))
     {
         /* PskIdentity identities<7..2^16-1>; */
         rc = psParseBufParseTlsVector(pb,
@@ -1019,7 +1030,7 @@ int32_t tls13ParsePskKeyExchangeModes(ssl_t *ssl,
     psBool_t gotPskKe = PS_FALSE;
     psBool_t gotPskDheKe = PS_FALSE;
 
-    psAssert(IS_SERVER(ssl));
+    psAssert(MATRIX_IS_SERVER(ssl));
     psTracePrintExtensionParse(ssl, EXT_PSK_KEY_EXCHANGE_MODES);
 
     /*
@@ -1130,7 +1141,7 @@ int32_t tls13ParseCookie(ssl_t *ssl,
         goto out_unsupported_extension;
     }
 
-    if (IS_SERVER(ssl))
+    if (MATRIX_IS_SERVER(ssl))
     {
 # ifdef DEBUG_TLS_1_3_DECODE_EXTENSIONS
         psTraceBytes("Parsed ClientHello.cookie",
@@ -1217,7 +1228,7 @@ int32_t tls13ParseServerName(ssl_t *ssl,
       server_name extension sent in EncryptedExtensions.)
       TLS <1.3 code path handles the ClientHello extension.
     */
-    psAssert(!IS_SERVER(ssl));
+    psAssert(!MATRIX_IS_SERVER(ssl));
     psTracePrintExtensionParse(ssl, EXT_SERVER_NAME);
 # ifdef USE_CLIENT_SIDE_SSL
     /* Solicited or not? */
@@ -1252,7 +1263,7 @@ int32_t tls13ParseEarlyData(ssl_t *ssl,
       Only handling the client-side case (i.e. parsing the server's
       early_data extension sent in NewSessionTicket.)
     */
-    psAssert(!IS_SERVER(ssl));
+    psAssert(!MATRIX_IS_SERVER(ssl));
     psTracePrintExtensionParse(ssl, EXT_EARLY_DATA);
 
     rc = psParseBufTryParseBigEndianUint32(pb,

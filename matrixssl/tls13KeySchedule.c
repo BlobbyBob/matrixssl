@@ -159,10 +159,19 @@ int32_t tls13GenerateEarlySecret(ssl_t *ssl,
     psSize_t earlySecretLen;
     int32_t rc;
 
+    /*
+      Do not regenerate the secret if we are in the middle of flight
+      re-encoding after output buffer resizing. However, we do need to
+      regenerate if we tried to use a PSK (and thus bootstrapped
+      our key schedule with it), but ended up not with a non-PSK
+      handshake.
+    */
     if (ssl->sec.tls13KsState.generateEarlySecretDone)
     {
-        /* Already generated. Re-entry? */
-        return PS_SUCCESS;
+        if (!ssl->sec.tls13DidEncodePsk || ssl->sec.tls13UsingPsk)
+        {
+            return PS_SUCCESS;
+        }
     }
 
     /*

@@ -37,6 +37,11 @@ crypto/
 	test/
 		Functionality and performance tests.
 
+* crypto-rot/
+    Inside Secure Root-of-Trust based crypto provider. This can be
+    used instead of the standard software crypto implementation by
+    defining USE_ROT_CRYPTO in cryptoConfig.h.
+
 * crypto-cl/
 	SafeZone Cryptographic Library Integration. This directory replaces
 	(the most) contents of crypto library when compiling with default,

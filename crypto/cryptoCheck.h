@@ -127,14 +127,6 @@
 #   error "Enable USE_CERT_GEN in cryptoConfig.h for USE_OCSP_REQUEST"
 # endif
 
-/* Currently enable PEM decoding whenever private key parsing is enabled.*/
-# if defined(USE_PRIVATE_KEY_PARSING)
-#  define USE_PEM_DECODE
-#  ifndef USE_BASE64_DECODE
-#    define USE_BASE64_DECODE
-#  endif
-# endif
-
 #endif  /* _h_PS_CRYPTOCHECK */
 
 /******************************************************************************/

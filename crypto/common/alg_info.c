@@ -85,6 +85,7 @@ psResSize_t psSigAlgToHashLen(int32_t sigAlg)
         return MD5_HASH_SIZE;
     case OID_SHA1_RSA_SIG:
     case OID_SHA1_ECDSA_SIG:
+    case OID_SHA1_DSA_SIG:
         return SHA1_HASH_SIZE;
     case OID_SHA256_RSA_SIG:
     case OID_SHA256_ECDSA_SIG:
@@ -121,6 +122,8 @@ psResSize_t psPssHashAlgToHashLen(int32_t pssHashAlg)
 {
     switch(pssHashAlg)
     {
+    case PKCS1_MD5_ID:
+        return MD5_HASH_SIZE;
     case PKCS1_SHA1_ID:
         return SHA1_HASH_SIZE;
     case PKCS1_SHA256_ID:
@@ -389,11 +392,28 @@ uint16_t psGetNamedSigAlgId(const char *name)
     return 0;
 }
 
+/* Do we recognize namedGroup as an ECDHE/X25519 curve? */
 psBool_t psIsEcdheGroup(uint16_t namedGroup)
 {
-    if (namedGroup == namedgroup_secp256r1 ||
+    /* Refuse to recognize some of the rarer curves unless
+       enabled in cryptoConfig.h */
+    if (namedGroup == namedgroup_secp192r1 ||
+            namedGroup == namedgroup_secp256r1 ||
             namedGroup == namedgroup_secp384r1 ||
             namedGroup == namedgroup_secp521r1 ||
+# ifdef USE_BRAIN521R1
+            namedGroup == namedgroup_brain521r1 ||
+# endif
+# ifdef USE_BRAIN384R1
+            namedGroup == namedgroup_brain384r1 ||
+# endif
+# ifdef USE_BRAIN256R1
+            namedGroup == namedgroup_brain256r1 ||
+
+# endif
+# ifdef USE_SECP224R1
+            namedGroup == namedgroup_secp224r1 ||
+# endif
             namedGroup == namedgroup_x25519)
     {
         return PS_TRUE;
@@ -410,6 +430,8 @@ psBool_t psIsSigAlgSupported(uint16_t sigAlg)
     psBool_t isNonFips = PS_FALSE; /* TRUE if not allowed in FIPS mode for
                                  signature generation. */
     psBool_t canUsePss = PS_FALSE;
+
+    (void)canUsePss;
 
     PS_VARIABLE_SET_BUT_UNUSED(isNonFips);
 

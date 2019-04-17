@@ -55,12 +55,14 @@ extern "C" {
 
 /******************************************************************************/
 /**
-    Show which SSL messages are created and parsed
+    Show which handshake messages are created and parsed. Also enables
+    TLS level error message logging.
  */
 /* #define USE_SSL_HANDSHAKE_MSG_TRACE */
 
 /**
-    Informational trace that could help pinpoint problems with SSL connections
+    Informational trace that could help pinpoint problems with TLS/DTLS
+    connections.
  */
 /* #define USE_SSL_INFORMATIONAL_TRACE */
 /* #define USE_DTLS_DEBUG_TRACE */
@@ -250,6 +252,14 @@ extern "C" {
 /* #define ALLOW_SSLV2_CLIENT_HELLO_PARSE */
 #   endif
 
+/**
+   Allow more lenient TLS record header version matching: allow the
+   record header version to be an TLS version when TLS has been
+   negotiated. This does not affect the processing of the ClientHello
+   record, since it is already exempt from version matching.
+*/
+/* #define USE_LENIENT_TLS_RECORD_VERSION_MATCHING */
+
 /******************************************************************************/
 /**
     Client certificate authentication
@@ -423,6 +433,11 @@ extern "C" {
 
 /* #define DTLS_SEND_RECORDS_INDIVIDUALLY     *//* Max one record per datagram */
 #   endif
+
+/* Use a buffered instead of continuously updated HS hash.
+   This avoids the need for multiple parallel hash context, one for
+   each supported hash algorithm. */
+/* #define USE_BUFFERED_HS_HASH */
 
 #  ifdef __cplusplus
 }

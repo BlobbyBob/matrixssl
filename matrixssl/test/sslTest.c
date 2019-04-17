@@ -37,7 +37,9 @@
 # define _POSIX_C_SOURCE 200112L
 #endif
 
-#include "matrixssl/matrixsslApi.h"
+#include "matrixssl/matrixsslImpl.h"
+#include <stdlib.h>
+
 #include "psUtil.h"
 #include "psStat.h"
 #include "osdep_stdio.h"
@@ -60,7 +62,7 @@
     for each enabled cipher suite. The other handshake types will still run
     but will not be timed
  */
-/* #define ENABLE_PERF_TIMING */
+// #define ENABLE_PERF_TIMING
 
 #if !defined(POSIX) && !defined(WIN32)
 # define EMBEDDED
@@ -152,6 +154,15 @@ int main(void)
 #  ifdef USE_CLIENT_AUTH
 #   error "Disable client auth if using only PSK ciphers"
 #  endif
+# endif
+
+# ifdef SSL_REHANDSHAKES_ENABLED
+/* re-handshake for DTLS doesn't work with current test framework, therefore
+   it is disabled. XXX: Need to figure out what is the cause, although
+   rehandshaking is is a bad idea in general.  */
+static bool testLoss = false;
+# else
+static bool testLoss = true;
 # endif
 
 typedef struct
@@ -287,7 +298,6 @@ static char dhParamFile[] = "../../testkeys/DH/3072_DH_PARAMS.pem";
 #   endif /* REQUIRE_DH_PARAMS */
 #  endif  /* USE_FILE_SYSTEM_KEYS */
 
-#  ifdef USE_RSA
 #   include "testkeys/RSA/1024_RSA_KEY.h"
 #   include "testkeys/RSA/1024_RSA.h"
 #   include "testkeys/RSA/1024_RSA_CA.h"
@@ -302,7 +312,6 @@ static char dhParamFile[] = "../../testkeys/DH/3072_DH_PARAMS.pem";
 #   include "testkeys/RSA/4096_RSA_CA.h"
 static __THREAD const unsigned char *RSAKEY, *RSACERT, *RSACA;
 static __THREAD uint32_t RSAKEY_SIZE, RSA_SIZE, RSACA_SIZE;
-#  endif /* USE_RSA */
 
 #  ifdef USE_ECC
 #   include "testkeys/EC/192_EC_KEY.h"
@@ -496,6 +505,8 @@ const static __THREAD char *g_version_str[] = {
 # define CS(A) { #A, A }
 
 const static __THREAD testCipherSpec_t ciphers[] = {
+
+
 /* TLS1.3 */
 #ifdef USE_TLS_AES_128_GCM_SHA256
     CS(TLS_AES_128_GCM_SHA256),
@@ -890,6 +901,9 @@ int main(int argc, char **argv)
         return EXIT_FAILURE;
     }
 
+#ifdef USE_DTLS
+    matrixDtlsSetPmtu(1350);
+#endif
     if (num_threads > 1)
     {
         /* Multi-threaded test. */
@@ -962,7 +976,7 @@ psBool_t testCiphersuite(const testCipherSpec_t *spec)
 
 psBool_t testProtocolVersion(uint32_t version)
 {
-    /* No run-time restrictions unless USE_VERION_LIST is given. */
+    /* No run-time restrictions unless USE_VERSION_LIST is given. */
     if (!Getenv("USE_VERSION_LIST"))
     {
         return PS_TRUE;
@@ -1019,6 +1033,459 @@ psBool_t testProtocolVersion(uint32_t version)
     }
     return PS_FALSE;
 }
+
+# ifdef USE_ECC
+static
+psBool_t testCurve(psSizeL_t curveSize)
+{
+    psBool_t checkEnv = PS_FALSE;
+
+    if (Getenv("USE_CURVE_LIST"))
+    {
+        checkEnv = PS_TRUE;
+    }
+
+# ifdef USE_SECP192R1
+    if (curveSize == EC192_SIZE)
+    {
+        if (!checkEnv)
+        {
+            return PS_TRUE;
+        }
+        if (Getenv("P_192"))
+        {
+            return PS_TRUE;
+        }
+    }
+# endif
+
+# ifdef USE_SECP224R1
+    if (curveSize == EC224_SIZE)
+    {
+        if (!checkEnv)
+        {
+            return PS_TRUE;
+        }
+        if (Getenv("P_224"))
+        {
+            return PS_TRUE;
+        }
+    }
+# endif
+
+# ifdef USE_SECP256R1
+    if (curveSize == EC256_SIZE)
+    {
+        if (!checkEnv)
+        {
+            return PS_TRUE;
+        }
+        if (Getenv("P_256"))
+        {
+            return PS_TRUE;
+        }
+    }
+# endif
+
+# ifdef USE_SECP384R1
+    if (curveSize == EC384_SIZE)
+    {
+        if (!checkEnv)
+        {
+            return PS_TRUE;
+        }
+        if (Getenv("P_384"))
+        {
+            return PS_TRUE;
+        }
+    }
+# endif
+
+# ifdef USE_SECP521R1
+    if (curveSize == EC521_SIZE)
+    {
+        if (!checkEnv)
+        {
+            return PS_TRUE;
+        }
+        if (Getenv("P_521"))
+        {
+            return PS_TRUE;
+        }
+    }
+# endif
+
+    return PS_FALSE;
+}
+
+static
+uint32_t getNextCurveSize(uint32_t oldSize)
+{
+    uint32_t newSize;
+
+    newSize = oldSize;
+
+    if (oldSize == 0)
+    {
+        newSize = EC192_SIZE;
+    }
+    else if (oldSize == EC192_SIZE)
+    {
+        newSize = EC224_SIZE;
+    }
+    else if (oldSize == EC224_SIZE)
+    {
+        newSize = EC256_SIZE;
+    }
+    else if (oldSize == EC256_SIZE)
+    {
+        newSize = EC384_SIZE;
+    }
+    else if (oldSize == EC384_SIZE)
+    {
+        newSize = EC521_SIZE;
+    }
+    else if (oldSize == EC521_SIZE)
+    {
+        newSize = 0;
+    }
+
+    if (newSize != 0 && !testCurve(newSize))
+    {
+        /* Config won't support, or user does not want to test
+           this curve. Go recursive to get the next one. */
+        return getNextCurveSize(newSize);
+    }
+
+    return newSize;
+}
+
+static
+void getEccCurve(uint32_t curveSize,
+        const unsigned char **eccKey,
+        uint32_t *eccKeySize,
+        const unsigned char **eccCert,
+        uint32_t *eccCertSize,
+        const unsigned char **eccCa,
+        uint32_t *eccCaSize,
+        psSize_t *keySizeNBits)
+{
+    switch(curveSize)
+    {
+# ifdef USE_SECP192R1
+    case EC192_SIZE:
+        *eccKey = EC192KEY;
+        *eccKeySize = EC192KEY_SIZE;
+        *eccCert = EC192;
+        *eccCertSize = EC192_SIZE;
+        *eccCa = EC192CA;
+        *eccCaSize = EC192CA_SIZE;
+        *keySizeNBits = 192;
+        break;
+# endif
+# ifdef USE_SECP224R1
+    case EC224_SIZE:
+        *eccKey = EC224KEY;
+        *eccKeySize = EC224KEY_SIZE;
+        *eccCert = EC224;
+        *eccCertSize = EC224_SIZE;
+        *eccCa = EC224CA;
+        *eccCaSize = EC224CA_SIZE;
+        *keySizeNBits = 224;
+        break;
+# endif
+# ifdef USE_SECP256R1
+    case EC256_SIZE:
+        *eccKey = EC256KEY;
+        *eccKeySize = EC256KEY_SIZE;
+        *eccCert = EC256;
+        *eccCertSize = EC256_SIZE;
+        *eccCa = EC256CA;
+        *eccCaSize = EC256CA_SIZE;
+        *keySizeNBits = 256;
+        break;
+# endif
+# ifdef USE_SECP384R1
+    case EC384_SIZE:
+        *eccKey = EC384KEY;
+        *eccKeySize = EC384KEY_SIZE;
+        *eccCert = EC384;
+        *eccCertSize = EC384_SIZE;
+        *eccCa = EC384CA;
+        *eccCaSize = EC384CA_SIZE;
+        *keySizeNBits = 384;
+        break;
+# endif
+# ifdef USE_SECP521R1
+    case EC521_SIZE:
+        *eccKey = EC521KEY;
+        *eccKeySize = EC521KEY_SIZE;
+        *eccCert = EC521;
+        *eccCertSize = EC521_SIZE;
+        *eccCa = EC521CA;
+        *eccCaSize = EC521CA_SIZE;
+        *keySizeNBits = 521;
+        break;
+# endif
+    default:
+        testTrace("Unsupported ECC size\n");
+    }
+
+    return;
+}
+
+# endif
+
+int32_t setSigAlgs(sslSessOpts_t *sessOpts)
+{
+    /*
+      List A: Prefer SHA-384 over SHA-256.
+      List B: Prefer RSA over ECDSA and RSA-PSS over RSA PKCS #1.5
+      List C: Like list B, but prefer SHA-384 over SHA-256.
+    */
+    uint16_t tls12ListA[] =
+    {
+        sigalg_rsa_pkcs1_sha384,
+        sigalg_rsa_pkcs1_sha256,
+        sigalg_rsa_pkcs1_sha512,
+        sigalg_ecdsa_secp384r1_sha384,
+        sigalg_ecdsa_secp256r1_sha256,
+        sigalg_ecdsa_secp521r1_sha512,
+        sigalg_rsa_pkcs1_sha1,
+        sigalg_ecdsa_sha1
+    };
+    uint16_t tls12ListB[] =
+    {
+        sigalg_rsa_pkcs1_sha256,
+        sigalg_rsa_pkcs1_sha384,
+        sigalg_rsa_pkcs1_sha512,
+        sigalg_ecdsa_secp256r1_sha256,
+        sigalg_ecdsa_secp384r1_sha384,
+        sigalg_ecdsa_secp521r1_sha512,
+        sigalg_rsa_pkcs1_sha1,
+        sigalg_ecdsa_sha1
+    };
+    uint16_t tls12ListC[] =
+    {
+        sigalg_rsa_pkcs1_sha384,
+        sigalg_rsa_pkcs1_sha256,
+        sigalg_rsa_pkcs1_sha512,
+        sigalg_ecdsa_secp384r1_sha384,
+        sigalg_ecdsa_secp256r1_sha256,
+        sigalg_ecdsa_secp521r1_sha512,
+        sigalg_rsa_pkcs1_sha1,
+        sigalg_ecdsa_sha1
+    };
+    uint16_t tls13ListA[] =
+    {
+        sigalg_ecdsa_secp384r1_sha384,
+        sigalg_ecdsa_secp256r1_sha256,
+        sigalg_ecdsa_secp521r1_sha512,
+# ifdef USE_ED25519
+        sigalg_ed25519,
+# endif
+# ifdef USE_PKCS1_PSS
+        sigalg_rsa_pss_rsae_sha384,
+        sigalg_rsa_pss_rsae_sha256,
+        sigalg_rsa_pss_rsae_sha512,
+        sigalg_rsa_pss_pss_sha384,
+        sigalg_rsa_pss_pss_sha256,
+        sigalg_rsa_pss_pss_sha512
+# endif
+    };
+    uint16_t tls13ListB[] =
+    {
+# ifdef USE_PKCS1_PSS
+        sigalg_rsa_pss_rsae_sha256,
+        sigalg_rsa_pss_rsae_sha384,
+        sigalg_rsa_pss_rsae_sha512,
+        sigalg_rsa_pss_pss_sha256,
+        sigalg_rsa_pss_pss_sha384,
+        sigalg_rsa_pss_pss_sha512,
+# endif
+        sigalg_ecdsa_secp256r1_sha256,
+        sigalg_ecdsa_secp384r1_sha384,
+        sigalg_ecdsa_secp521r1_sha512,
+# ifdef USE_ED25519
+        sigalg_ed25519,
+# endif
+    };
+    uint16_t tls13ListC[] =
+    {
+# ifdef USE_PKCS1_PSS
+        sigalg_rsa_pss_rsae_sha384,
+        sigalg_rsa_pss_rsae_sha256,
+        sigalg_rsa_pss_rsae_sha512,
+        sigalg_rsa_pss_pss_sha256,
+        sigalg_rsa_pss_pss_sha384,
+        sigalg_rsa_pss_pss_sha512,
+# endif
+        sigalg_ecdsa_secp384r1_sha384,
+        sigalg_ecdsa_secp256r1_sha256,
+        sigalg_ecdsa_secp521r1_sha512,
+# ifdef USE_ED25519
+        sigalg_ed25519,
+# endif
+    };
+    uint16_t tls13ListCertA[] =
+    {
+        sigalg_rsa_pkcs1_sha384,
+        sigalg_rsa_pkcs1_sha256,
+        sigalg_rsa_pkcs1_sha512,
+        sigalg_ecdsa_secp384r1_sha384,
+        sigalg_ecdsa_secp256r1_sha256,
+        sigalg_ecdsa_secp521r1_sha512,
+# ifdef USE_ED25519
+        sigalg_ed25519,
+# endif
+# ifdef USE_PKCS1_PSS
+        sigalg_rsa_pss_rsae_sha384,
+        sigalg_rsa_pss_rsae_sha256,
+        sigalg_rsa_pss_rsae_sha512,
+        sigalg_rsa_pss_pss_sha384,
+        sigalg_rsa_pss_pss_sha256,
+        sigalg_rsa_pss_pss_sha512,
+# endif
+    };
+    uint16_t tls13ListCertB[] =
+    {
+        sigalg_rsa_pkcs1_sha256,
+        sigalg_rsa_pkcs1_sha384,
+        sigalg_rsa_pkcs1_sha512,
+        sigalg_ecdsa_secp384r1_sha384,
+        sigalg_ecdsa_secp256r1_sha256,
+        sigalg_ecdsa_secp521r1_sha512,
+# ifdef USE_ED25519
+        sigalg_ed25519,
+# endif
+# ifdef USE_PKCS1_PSS
+        sigalg_rsa_pss_rsae_sha256,
+        sigalg_rsa_pss_rsae_sha384,
+        sigalg_rsa_pss_rsae_sha512,
+        sigalg_rsa_pss_pss_sha384,
+        sigalg_rsa_pss_pss_sha256,
+        sigalg_rsa_pss_pss_sha512
+# endif
+    };
+    uint16_t tls13ListCertC[] =
+    {
+        sigalg_rsa_pkcs1_sha384,
+        sigalg_rsa_pkcs1_sha256,
+        sigalg_rsa_pkcs1_sha512,
+        sigalg_ecdsa_secp384r1_sha384,
+        sigalg_ecdsa_secp256r1_sha256,
+        sigalg_ecdsa_secp521r1_sha512,
+# ifdef USE_ED25519
+        sigalg_ed25519,
+# endif
+# ifdef USE_PKCS1_PSS
+        sigalg_rsa_pss_rsae_sha384,
+        sigalg_rsa_pss_rsae_sha256,
+        sigalg_rsa_pss_rsae_sha512,
+        sigalg_rsa_pss_pss_sha384,
+        sigalg_rsa_pss_pss_sha256,
+        sigalg_rsa_pss_pss_sha512
+# endif
+    };
+
+    uint16_t *list = NULL, *listCert;
+    psSize_t listLen, listCertLen;
+    int32_t rc;
+    psBool_t tls13 = PS_FALSE;
+
+    if (sessOpts->versionFlag & SSL_FLAGS_TLS_1_3)
+    {
+        tls13 = PS_TRUE;
+    }
+
+    if (Getenv("USE_SIGALG_LIST"))
+    {
+        if (Getenv("SIGALG_LIST_A"))
+        {
+            printf("Using list A\n");
+            if (tls13)
+            {
+                list = tls13ListA;
+                listLen = sizeof(tls13ListA)/sizeof(tls13ListA[0]);
+                listCert = tls13ListCertA;
+                listCertLen = sizeof(tls13ListCertA)/sizeof(tls13ListCertA[0]);
+            }
+            else
+            {
+                list = tls12ListA;
+                listLen = sizeof(tls12ListA)/sizeof(tls12ListA[0]);
+            }
+        }
+        if (Getenv("SIGALG_LIST_B"))
+        {
+            printf("Using list B\n");
+            if (tls13)
+            {
+                list = tls13ListB;
+                listLen = sizeof(tls13ListB)/sizeof(tls13ListB[0]);
+                listCert = tls13ListCertB;
+                listCertLen = sizeof(tls13ListCertB)/sizeof(tls13ListCertB[0]);
+            }
+            else
+            {
+                list = tls12ListB;
+                listLen = sizeof(tls12ListB)/sizeof(tls12ListB[0]);
+            }
+        }
+        if (Getenv("SIGALG_LIST_C"))
+        {
+            printf("Using list C\n");
+            if (tls13)
+            {
+                list = tls13ListC;
+                listLen = sizeof(tls13ListC)/sizeof(tls13ListC[0]);
+                listCert = tls13ListCertC;
+                listCertLen = sizeof(tls13ListCertC)/sizeof(tls13ListCertC[0]);
+            }
+            else
+            {
+                list = tls12ListC;
+                listLen = sizeof(tls12ListC)/sizeof(tls12ListC[0]);
+            }
+        }
+
+        if (list != NULL)
+        {
+            psTracePrintTls13SigAlgList(0,
+                    "Using sigalg preferences:",
+                    list,
+                    listLen,
+                    PS_TRUE);
+
+            rc = matrixSslSessOptsSetSigAlgs(sessOpts,
+                    list,
+                    listLen);
+            if (rc != PS_SUCCESS)
+            {
+                return rc;
+            }
+
+# ifdef USE_TLS_1_3
+            if (tls13)
+            {
+                rc = matrixSslSessOptsSetSigAlgsCert(sessOpts,
+                        listCert,
+                        listCertLen);
+                if (rc != PS_SUCCESS)
+                {
+                    return rc;
+                }
+            }
+# else
+            (void)listCert;
+            (void)listCertLen;
+# endif
+        }
+    }
+
+    return PS_SUCCESS;
+}
+
 
 int sslTest(void)
 {
@@ -1102,7 +1569,7 @@ L_NEXT_RSA:
                 keysize = authsize = 3072;
                 break;
             case RSA3072_SIZE:
-#   if !defined(EMBEDDED) && !defined(USE_CL_CRYPTO)
+#   if !defined(EMBEDDED) && !defined(USE_CL_CRYPTO) && !defined(USE_ROT_RSA)
                 RSAKEY = RSA4096KEY; RSAKEY_SIZE = RSA4096KEY_SIZE;
                 RSACERT = RSA4096; RSA_SIZE = RSA4096_SIZE;
                 RSACA = RSA4096CA; RSACA_SIZE = RSA4096CA_SIZE;
@@ -1146,80 +1613,17 @@ L_NEXT_RSA:
 L_NEXT_ECC:
         if (spec->type == CS_ECDH_ECDSA || spec->type == CS_ECDHE_ECDSA)
         {
-            switch (ECC_SIZE)
-            {
-            case 0:
-#   ifdef USE_SECP192R1
-                ECCKEY = EC192KEY; ECCKEY_SIZE = EC192KEY_SIZE;
-                ECC = EC192; ECC_SIZE = EC192_SIZE;
-                ECCCA = EC192CA; ECCCA_SIZE = EC192CA_SIZE;
-                keysize = authsize = 192;
-                break;
-#   else
-#    ifdef USE_SECP224R1
-                /* P-192 skipped. */
-                ECCKEY = EC224KEY; ECCKEY_SIZE = EC224KEY_SIZE;
-                ECC = EC224; ECC_SIZE = EC224_SIZE;
-                ECCCA = EC224CA; ECCCA_SIZE = EC224CA_SIZE;
-                keysize = authsize = 224;
-                break;
-#    else
-                /* P-192 and P-224 skipped. */
-                ECCKEY = EC256KEY; ECCKEY_SIZE = EC256KEY_SIZE;
-                ECC = EC256; ECC_SIZE = EC256_SIZE;
-                ECCCA = EC256CA; ECCCA_SIZE = EC256CA_SIZE;
-                keysize = authsize = 256;
-                break;
-#    endif /* USE_SECP224R1 */
-#   endif  /* USE_SECP192R1 */
-            case EC192_SIZE:
-#   ifdef USE_SECP224R1
-                ECCKEY = EC224KEY; ECCKEY_SIZE = EC224KEY_SIZE;
-                ECC = EC224; ECC_SIZE = EC224_SIZE;
-                ECCCA = EC224CA; ECCCA_SIZE = EC224CA_SIZE;
-                keysize = authsize = 224;
-                break;
-#   else
-                /* P-224 skipped. */
-                ECCKEY = EC256KEY; ECCKEY_SIZE = EC256KEY_SIZE;
-                ECC = EC256; ECC_SIZE = EC256_SIZE;
-                ECCCA = EC256CA; ECCCA_SIZE = EC256CA_SIZE;
-                keysize = authsize = 256;
-                break;
-#   endif       /* USE_SECP224R1 */
-            case EC224_SIZE:
-                ECCKEY = EC256KEY; ECCKEY_SIZE = EC256KEY_SIZE;
-                ECC = EC256; ECC_SIZE = EC256_SIZE;
-                ECCCA = EC256CA; ECCCA_SIZE = EC256CA_SIZE;
-                keysize = authsize = 256;
-                break;
-            case EC256_SIZE:
-#   ifndef EMBEDDED
-                ECCKEY = EC384KEY; ECCKEY_SIZE = EC384KEY_SIZE;
-                ECC = EC384; ECC_SIZE = EC384_SIZE;
-                ECCCA = EC384CA; ECCCA_SIZE = EC384CA_SIZE;
-                keysize = authsize = 384;
-                break;
-            case EC384_SIZE:
-#    ifdef USE_SECP521R1
-                ECCKEY = EC521KEY; ECCKEY_SIZE = EC521KEY_SIZE;
-                ECC = EC521; ECC_SIZE = EC521_SIZE;
-                ECCCA = EC521CA; ECCCA_SIZE = EC521CA_SIZE;
-                keysize = authsize = 521;
-                break;
-#    else
-                /* P-521 skipped. */
-                ECC_SIZE = 0;
-#    endif /* USE_SECP521R1 */
-            case EC521_SIZE:
-#   endif  /* !EMBEDDED */
-                ECC_SIZE = 0;
-                break;
-            }
+            ECC_SIZE = getNextCurveSize(ECC_SIZE);
             if (ECC_SIZE == 0)
             {
                 continue;   /* Next cipher suite */
             }
+            getEccCurve(ECC_SIZE,
+                    &ECCKEY, &ECCKEY_SIZE,
+                    &ECC, &ECC_SIZE,
+                    &ECCCA, &ECCCA_SIZE,
+                    &keysize);
+            authsize = keysize;
         }
 # endif /* USE_ECC */
 
@@ -1450,39 +1854,39 @@ L_NEXT_DH:
 # if defined(SSL_REHANDSHAKES_ENABLED) && !defined(USE_ZLIB_COMPRESSION)
 #   ifdef DISABLE_DTLS_CLIENT_CHANGE_CIPHER_FROM_GCM_TO_GCM
         if (NGTD_VER(clnConn->ssl, v_dtls_any) &&
-                clnConn->ssl->cipher->flags & CRYPTO_FLAGS_GCM &&
-                spec->flags & CRYPTO_FLAGS_GCM)
-            {
-                testPrint("  Re-handshakes with a GCM-to-GCM change are disabled\n");
-                goto skip_client_initiated_rehandshake;
-            }
+            clnConn->ssl->cipher->flags & CRYPTO_FLAGS_GCM &&
+            spec->flags & CRYPTO_FLAGS_GCM)
+        {
+            testPrint("  Re-handshakes with a GCM-to-GCM change are disabled\n");
+            goto skip_client_initiated_rehandshake;
+        }
 #   endif   /* DISABLE_DTLS_CLIENT_CHANGE_CIPHER_FROM_GCM_TO_GCM */
             /* Re-Handshake (full handshake over existing connection) */
-            testTrace(" Re-handshake test (client-initiated)\n");
-            if (initializeReHandshake(clnConn, svrConn, ciphers[id].id) < 0)
+        testTrace(" Re-handshake test (client-initiated)\n");
+        if (initializeReHandshake(clnConn, svrConn, ciphers[id].id) < 0)
+        {
+            testPrint("             FAILED: initializing Re-handshake\n");
+            goto LBL_FREE;
+        }
+        if (performHandshake(clnConn, svrConn) < 0)
+        {
+            testPrint("             FAILED: Re-handshake\n");
+            goto LBL_FREE;
+        }
+        else
+        {
+            testTrace("             PASSED: Re-handshake");
+            if (exchangeAppData(clnConn, svrConn, CLI_APP_DATA) < 0 ||
+                exchangeAppData(svrConn, clnConn, SVR_APP_DATA) < 0)
             {
-                testPrint("             FAILED: initializing Re-handshake\n");
-                goto LBL_FREE;
-            }
-            if (performHandshake(clnConn, svrConn) < 0)
-            {
-                testPrint("             FAILED: Re-handshake\n");
+                testPrint(" but FAILED to exchange application data\n");
                 goto LBL_FREE;
             }
             else
             {
-                testTrace("             PASSED: Re-handshake");
-                if (exchangeAppData(clnConn, svrConn, CLI_APP_DATA) < 0 ||
-                    exchangeAppData(svrConn, clnConn, SVR_APP_DATA) < 0)
-                {
-                    testPrint(" but FAILED to exchange application data\n");
-                    goto LBL_FREE;
-                }
-                else
-                {
-                    testTrace("\n");
-                }
+                testTrace("\n");
             }
+        }
 #   ifdef DISABLE_DTLS_CLIENT_CHANGE_CIPHER_FROM_GCM_TO_GCM
 skip_client_initiated_rehandshake:
 #   endif   /* DISABLE_DTLS_CLIENT_CHANGE_CIPHER_FROM_GCM_TO_GCM */
@@ -1492,7 +1896,7 @@ skip_client_initiated_rehandshake:
 
 # ifndef USE_ONLY_PSK_CIPHER_SUITE
             /* Resumed handshake (fast handshake over new connection) */
-            testTrace(" Resumed handshake test (new connection)\n");
+        testTrace(" Resumed handshake test (new connection)\n");
             if (initializeResumedHandshake(clnConn, svrConn,
                     ciphers[id].id) < 0)
             {
@@ -1532,7 +1936,7 @@ skip_client_initiated_rehandshake:
          we're not doing that here so the cipher suite might be changing
          underneath us now.
  */
-            testTrace(" Re-handshake test (server initiated)\n");
+        testTrace(" Re-handshake test (server initiated)\n");
             if (initializeServerInitiatedReHandshake(clnConn, svrConn,
                     ciphers[id].id) < 0)
             {
@@ -1907,6 +2311,7 @@ skip_client_change_cipher_spec_rehandshake:
 LBL_FREE:
             testPrint("EXITING ON ERROR\n");
 #  ifdef ABORT_IMMEDIATELY_ON_ERROR
+            matrixSslClose();
             Abort();
 #  endif
 
@@ -2110,6 +2515,12 @@ static int32 initializeResumedHandshake(sslConn_t *clnConn, sslConn_t *svrConn,
     Memset(&options, 0x0, sizeof(sslSessOpts_t));
     options.versionFlag = g_versionFlag;
 
+    rc = setSigAlgs(&options);
+    if (rc < 0)
+    {
+        return rc;
+    }
+
 #  ifdef USE_ECC_CIPHER_SUITE
     options.ecFlags = clnConn->ssl->ecInfo.ecFlags;
 #  endif
@@ -2189,12 +2600,13 @@ static int32 initializeClientAuthHandshake(sslConn_t *clnConn,
 {
     sslSessOpts_t options;
     sslKeys_t *keys = clnConn->keys;
-
+    int32_t rc;
 #  ifdef ENABLE_PERF_TIMING
     psTime_t start, end;
 #  endif /* ENABLE_PERF_TIMING */
 
     Memset(&options, 0x0, sizeof(sslSessOpts_t));
+
     /* Set fragment size to minimum to test also fragmentation */
     if (g_versionFlag & SSL_FLAGS_TLS_1_3)
     {
@@ -2211,6 +2623,13 @@ static int32 initializeClientAuthHandshake(sslConn_t *clnConn,
         }
     }
     options.versionFlag = g_versionFlag;
+
+    rc = setSigAlgs(&options);
+    if (rc < 0)
+    {
+        return rc;
+    }
+
 #  ifdef USE_ECC_CIPHER_SUITE
     options.ecFlags = clnConn->ssl->ecInfo.ecFlags;
 #  endif
@@ -2271,168 +2690,210 @@ static int32 initializeClientAuthHandshake(sslConn_t *clnConn,
 }
 # endif /* USE_CLIENT_AUTH */
 
+#ifdef ENABLE_PERF_TIMING
+#define TIMED(side, expr) do {                                  \
+        psTime_t start, end;                                    \
+        psGetTime(&start, NULL); (expr); psGetTime(&end, NULL); \
+        (side)->hsTime += psDiffMsecs(start, end, NULL);        \
+    } while(0)
+#else
+#define TIMED(side, expr) do { (expr); } while (0)
+#endif
+
+static void *memdup(void *src, size_t len)
+{
+    void *dst = psMalloc(NULL, len + 1);
+    memcpy(dst, src, len);
+    return dst;
+}
+
+static void freefrags(int nfrags, unsigned char *frags[])
+{
+    int i;
+    for (i = 0; i < nfrags; i++)
+    {
+        psFree(frags[i], NULL);
+    }
+}
+
 /*
     Recursive handshake
  */
 static int32 performHandshake(sslConn_t *sendingSide, sslConn_t *receivingSide)
 {
-    unsigned char *inbuf, *outbuf, *plaintextBuf;
-    int32 inbufLen, outbufLen, rc, dataSent;
+    unsigned char *inbuf, *plaintextBuf;
+    int32 inbufLen, rc, dataSent;
     uint32 ptLen;
-
-# ifdef ENABLE_PERF_TIMING
-    psTime_t start, end;
-# endif /* ENABLE_PERF_TIMING */
-
-/*
-    Sending side will have outdata ready
- */
-# ifdef ENABLE_PERF_TIMING
-    psGetTime(&start, NULL);
-# endif /* ENABLE_PERF_TIMING */
 # ifdef USE_DTLS
-    if (NGTD_VER(sendingSide->ssl, v_dtls_any))
+    bool sendServer = (sendingSide->ssl->flags & SSL_FLAGS_SERVER);
+    int retries = 0;
+# endif
+    unsigned char *frags[24] = {NULL};
+    int32 frag_lens[24] = {0};
+    int nfrags, ndrops;
+    int i;
+
+    /*
+      Sending side will have outdata ready
+    */
+
+again:
+    if (ACTV_VER(sendingSide->ssl, v_dtls_any))
     {
-        outbufLen = matrixDtlsGetOutdata(sendingSide->ssl, &outbuf);
+# ifdef USE_DTLS
+        TIMED(sendingSide, {
+                /* Collect data ready to be sent */
+                nfrags = 0;
+                while (true)
+                {
+                    unsigned char *frag;
+                    frag_lens[nfrags] = matrixDtlsGetOutdata(sendingSide->ssl, &frag);
+                    if (frag_lens[nfrags] == 0)
+                    {
+                        break;
+                    }
+                    /* the SentData will shrink the internal buffer, therefore need to copy */
+                    frags[nfrags] = (unsigned char *)memdup(frag, frag_lens[nfrags]);
+                    matrixDtlsSentData(sendingSide->ssl, frag_lens[nfrags]);
+                    nfrags++;
+                }
+            });
+# endif
     }
     else
     {
-        outbufLen = matrixSslGetOutdata(sendingSide->ssl, &outbuf);
+        TIMED(sendingSide, {
+                unsigned char *frag;
+                nfrags = 0;
+                frag_lens[nfrags] = matrixSslGetOutdata(sendingSide->ssl, &frag);
+                frags[nfrags] = (unsigned char *)memdup(frag, frag_lens[nfrags]);
+                matrixSslSentData(sendingSide->ssl, frag_lens[nfrags]);
+                nfrags = 1;
+            });
     }
-# else
-    outbufLen = matrixSslGetOutdata(sendingSide->ssl, &outbuf);
-# endif
-# ifdef ENABLE_PERF_TIMING
-    psGetTime(&end, NULL);
-    sendingSide->hsTime += psDiffMsecs(start, end, NULL);
-# endif /* ENABLE_PERF_TIMING */
 
-/*
-    Receiving side must ask for storage space to receive data into
- */
-# ifdef ENABLE_PERF_TIMING
-    psGetTime(&start, NULL);
-# endif /* ENABLE_PERF_TIMING */
-    inbufLen = matrixSslGetReadbuf(receivingSide->ssl, &inbuf);
-# ifdef ENABLE_PERF_TIMING
-    psGetTime(&end, NULL);
-    receivingSide->hsTime += psDiffMsecs(start, end, NULL);
-# endif /* ENABLE_PERF_TIMING */
+    ndrops = 0;
 
-/*
-    The indata is the outdata from the sending side.  copy it over
- */
-    if (outbufLen <= 0 || inbufLen <= 0)
+    /* Now play potentially unreliable network. However, never drop messages
+       sent by server, as this test driver can't handle server side
+       retransmits properly.  */
+    if (ACTV_VER(sendingSide->ssl, v_dtls_any))
     {
-        return PS_FAILURE;
-    }
-    dataSent = PS_MIN(outbufLen, inbufLen);
-    Memcpy(inbuf, outbuf, dataSent);
-
-/*
-    Now update the sending side that data has been "sent"
- */
-# ifdef ENABLE_PERF_TIMING
-    psGetTime(&start, NULL);
-# endif /* ENABLE_PERF_TIMING */
-# ifdef USE_DTLS
-    if (NGTD_VER(sendingSide->ssl, v_dtls_any))
-    {
-        matrixDtlsSentData(sendingSide->ssl, dataSent);
-    }
-    else
-    {
-        matrixSslSentData(sendingSide->ssl, dataSent);
-    }
-# else
-    matrixSslSentData(sendingSide->ssl, dataSent);
-# endif
-# ifdef ENABLE_PERF_TIMING
-    psGetTime(&end, NULL);
-    sendingSide->hsTime += psDiffMsecs(start, end, NULL);
-# endif /* ENABLE_PERF_TIMING */
-
-/*
-    Received data
- */
-# ifdef ENABLE_PERF_TIMING
-    psGetTime(&start, NULL);
-# endif /* ENABLE_PERF_TIMING */
-    rc = matrixSslReceivedData(receivingSide->ssl, dataSent, &plaintextBuf,
-        &ptLen);
-# ifdef ENABLE_PERF_TIMING
-    psGetTime(&end, NULL);
-    receivingSide->hsTime += psDiffMsecs(start, end, NULL);
-# endif /* ENABLE_PERF_TIMING */
-
-# ifdef USE_EXT_CLIENT_CERT_KEY_LOADING
-    if (rc == PS_PENDING && matrixSslNeedClientCert(receivingSide->ssl))
-    {
-        /* Well... we already have the keys read in */
-        (void)matrixSslClientCertUpdated(receivingSide->ssl);
-        /* Retry now that we have the cert and the priv key. */
-        rc = matrixSslReceivedData(receivingSide->ssl,
-                                   dataSent,
-                                   &plaintextBuf, &ptLen);
-    }
-# endif
-
-# ifdef USE_EXT_CERTIFICATE_VERIFY_SIGNING
-# endif  /* USE_EXT_CERTIFICATE_VERIFY_SIGNING */
-# ifdef USE_EXT_CLIENT_CERT_KEY_LOADING
-    if (rc == PS_PENDING && matrixSslNeedClientCert(receivingSide->ssl))
-    {
-        /* We have already loaded a client cert we can use in this test,
-           so do nothing. */
-        rc = matrixSslClientCertUpdated(receivingSide->ssl);
-        psAssert(rc == PS_TRUE);
-        rc = matrixSslReceivedData(receivingSide->ssl, dataSent, &plaintextBuf,
-            &ptLen);
-    }
-# endif /* USE_EXT_CLIENT_CERT_KEY_LOADING */
-    if (rc == MATRIXSSL_REQUEST_SEND)
-    {
-/*
-        Success case.  Switch roles and continue
- */
-        return performHandshake(receivingSide, sendingSide);
-
-    }
-    else if (rc == MATRIXSSL_REQUEST_RECV)
-    {
-/*
-        This pass didn't take care of it all.  Don't switch roles and
-        try again
- */
-        return performHandshake(sendingSide, receivingSide);
-
-    }
-    else if (rc == MATRIXSSL_HANDSHAKE_COMPLETE)
-    {
-        return PS_SUCCESS;
-    }
-    else if (rc == MATRIXSSL_RECEIVED_ALERT)
-    {
-/*
-        Just continue if warning level alert
- */
-        if (plaintextBuf[0] == SSL_ALERT_LEVEL_WARNING)
+        for (i = 0; testLoss && i < nfrags; i++)
         {
-            if (matrixSslProcessedData(receivingSide->ssl, &plaintextBuf,
-                    &ptLen) != 0)
+# ifdef USE_DTLS
+            if (!sendServer)
             {
-                return PS_FAILURE;
+                if (rand() % 3 == 0)
+                {
+                    retries++;
+                    for (i = 0; i < nfrags; i++)
+                    {
+                        /* maybe drop some of the fragments */
+                        if (rand() % 3 == 0)
+                        {
+                            printf("dropped %d bytes for %d time on sending %s %d/%d frag \n", frag_lens[i], retries,
+                                   sendServer ? "server": "client", i+1, nfrags);
+                            psFree(frags[i], NULL); frags[i] = NULL;
+                            ndrops++;
+                        }
+                    }
+                    if (ndrops == nfrags)
+                    {
+                        /* dropped all ... as nothing was sent we'll
+                           resend after zero timeout. */
+                        freefrags(nfrags, frags);
+                        goto again;
+                    }
+                }
             }
-            return performHandshake(sendingSide, receivingSide);
-        }
-        else
-        {
-            return PS_FAILURE;
+# endif
         }
     }
 
-    Printf("Unexpected error in performHandshake: %d\n", rc);
-    return PS_FAILURE;
+    rc = PS_FAILURE;
+    /* Received data */
+    for (i = 1; i <= nfrags; i++)
+    {
+        int off;
+
+        if (frags[i - 1] == NULL)
+            continue;
+
+# if (defined(USE_EXT_CERTIFICATE_VERIFY_SIGNING) && defined(USE_EXT_EXAMPLE_MODULE)) || \
+    defined(USE_EXT_CLIENT_CERT_KEY_LOADING)
+    retry:
+# endif
+        for (off = 0; off < frag_lens[i - 1]; off += dataSent)
+        {
+            TIMED(receivingSide, {
+                    inbufLen = matrixSslGetReadbuf(receivingSide->ssl, &inbuf);
+                });
+
+            dataSent = PS_MIN((frag_lens[i - 1] - off), inbufLen);
+            Memcpy(inbuf, frags[i - 1] + off, dataSent);
+            TIMED(receivingSide, {
+                    rc = matrixSslReceivedData(receivingSide->ssl,
+                                               dataSent, &plaintextBuf, &ptLen);
+                });
+
+            switch (rc)
+            {
+            case PS_PENDING:
+# ifdef USE_EXT_CLIENT_CERT_KEY_LOADING
+                if (matrixSslNeedClientCert(receivingSide->ssl))
+                {
+                    /* Well... we already have the keys read in */
+                    (void)matrixSslClientCertUpdated(receivingSide->ssl);
+                    /* Retry now that we have the cert and the priv key. */
+                    goto retry;
+                };
+# endif
+
+                psAssert(false);
+                break;
+
+            case MATRIXSSL_REQUEST_SEND:
+                if (i < nfrags)
+                {
+                    /* Handle all fragments received, only send the response
+                       on the last */
+                    continue;
+                }
+                freefrags(nfrags, frags);
+                return performHandshake(receivingSide, sendingSide);
+
+            case MATRIXSSL_REQUEST_RECV:
+                /* Feed more data */
+                psAssert(i < nfrags || off < frag_lens[i - 1]);
+                continue;
+
+            case MATRIXSSL_HANDSHAKE_COMPLETE:
+                psAssert(i == nfrags);
+                freefrags(nfrags, frags);
+                return PS_SUCCESS;
+
+            case MATRIXSSL_RECEIVED_ALERT:
+                /* Just continue if warning level alert */
+                if (plaintextBuf[0] == SSL_ALERT_LEVEL_WARNING)
+                {
+                    continue;
+                }
+                else
+                {
+                    freefrags(nfrags, frags);
+                    return PS_FAILURE;
+                }
+            }
+        }
+    }
+    freefrags(nfrags, frags);
+    if (ndrops > 0
+        && (rc == MATRIXSSL_REQUEST_SEND || rc == MATRIXSSL_REQUEST_RECV))
+    {
+        goto again;
+    }
+    return rc;
 }
 
 
@@ -2855,9 +3316,16 @@ static int32 initializeServer(sslConn_t *conn, psCipher16_t cipherSuite)
 # endif /* ENABLE_PERF_TIMING */
     sslSessOpts_t options;
     const sslCipherSpec_t *spec;
+    int32_t rc;
 
     Memset(&options, 0x0, sizeof(sslSessOpts_t));
     options.versionFlag = g_versionFlag;
+    rc = setSigAlgs(&options);
+    if (rc < 0)
+    {
+        return rc;
+    }
+
     if (conn->keys == NULL)
     {
         if ((spec = sslGetDefinedCipherSpec(cipherSuite)) == NULL)
@@ -2988,7 +3456,6 @@ static int32 initializeServer(sslConn_t *conn, psCipher16_t cipherSuite)
     conn->hsTime += psDiffMsecs(start, end, NULL);
 # endif /* ENABLE_PERF_TIMING */
     conn->ssl = ssl;
-
     return PS_SUCCESS;
 }
 
@@ -2997,15 +3464,22 @@ static int32 initializeClient(sslConn_t *conn, psCipher16_t cipherSuite,
 {
     ssl_t *ssl;
     sslKeys_t *keys;
-
+    int32_t rc;
 # ifdef ENABLE_PERF_TIMING
     psTime_t start, end;
 # endif /* ENABLE_PERF_TIMING */
     sslSessOpts_t options;
     const sslCipherSpec_t *spec;
+
     Memset(&options, 0x0, sizeof(sslSessOpts_t));
     options.versionFlag = g_versionFlag;
     /* options.maxFragLen = 512; */
+    rc = setSigAlgs(&options);
+    if (rc < 0)
+    {
+        return rc;
+    }
+
 # ifdef TEST_RESUMPTIONS_WITH_SESSION_TICKETS
     options.ticketResumption = 1;
 # endif
@@ -3232,6 +3706,13 @@ int tls13sslTest(void)
                 algorithm = TLS13_PSK;
                 break;
             }
+
+# ifndef USE_RSA
+            if (algorithm == TLS13_RSA)
+            {
+                continue;
+            }
+# endif
             matrixSslNewSessionId(&clientSessionId, NULL);
             testPrintStr("Testing %s TLS 1.3 ", (char *) ciphers[id].name);
             if (algorithm != TLS13_PSK)
@@ -3374,6 +3855,7 @@ error:
     testPrint("EXITING ON ERROR\n");
     rc = PS_FAILURE;
 # ifdef ABORT_IMMEDIATELY_ON_ERROR
+    matrixSslClose();
     Abort();
 # endif     /* ABORT_IMMEDIATELY_ON_ERROR */
 
@@ -3408,9 +3890,17 @@ static int32 tls13InitializeServer(sslConn_t *conn, psCipher16_t cipherSuite, ui
     unsigned char sessTicketMacKey[32] = { 0 };
     unsigned char sessTicketName[16];
 # endif
+    int32_t rc;
 
     Memset(&options, 0x0, sizeof(sslSessOpts_t));
+
     options.versionFlag = g_versionFlag;
+    rc = setSigAlgs(&options);
+    if (rc < 0)
+    {
+        return rc;
+    }
+
     options.tls13SessionMaxEarlyData = 16384;
     if (Getenv("TLS13_BLOCK_SIZE"))
     {
@@ -3488,16 +3978,23 @@ static int32 tls13InitializeServer(sslConn_t *conn, psCipher16_t cipherSuite, ui
         {
             const unsigned char *psk;
             uint32 pskLen;
+            const unsigned char *psk_id;
+            psSize_t psk_id_len;
+
             psTls13SessionParams_t session;
 
             switch (cipherSuite)
             {
             case TLS_AES_256_GCM_SHA384:
                 psk = g_tls13_test_psk_384;
+                psk_id = g_tls13_test_psk_id_sha384;
+                psk_id_len = sizeof(g_tls13_test_psk_id_sha384);
                 pskLen = 48;
                 break;
             default:
                 psk = g_tls13_test_psk_256;
+                psk_id = g_tls13_test_psk_id_sha256;
+                psk_id_len = sizeof(g_tls13_test_psk_id_sha256);
                 pskLen = 32;
             }
 
@@ -3509,8 +4006,8 @@ static int32 tls13InitializeServer(sslConn_t *conn, psCipher16_t cipherSuite, ui
             if (matrixSslLoadTls13Psk(keys,
                     psk,
                     pskLen,
-                    g_tls13_test_psk_id,
-                    sizeof(g_tls13_test_psk_id),
+                    psk_id,
+                    psk_id_len,
                     &session) < 0)
             {
                 return PS_FAILURE;
@@ -3559,9 +4056,18 @@ static int32 tls13InitializeClient(sslConn_t *conn, psCipher16_t cipherSuite,
     sslKeys_t *keys;
     sslSessOpts_t options;
     const sslCipherSpec_t *spec;
+    int32_t rc;
 
     Memset(&options, 0x0, sizeof(sslSessOpts_t));
+
     options.versionFlag = g_versionFlag;
+
+    rc = setSigAlgs(&options);
+    if (rc < 0)
+    {
+        return rc;
+    }
+
     if (Getenv("TLS13_BLOCK_SIZE"))
     {
         options.tls13BlockSize = Strtol(Getenv("TLS13_BLOCK_SIZE"),
@@ -3666,16 +4172,22 @@ static int32 tls13InitializeClient(sslConn_t *conn, psCipher16_t cipherSuite,
         {
             const unsigned char *psk;
             uint32 pskLen;
+            const unsigned char *psk_id;
+            psSize_t psk_id_len;
             psTls13SessionParams_t session;
 
             switch (cipherSuite)
             {
             case TLS_AES_256_GCM_SHA384:
                 psk = g_tls13_test_psk_384;
+                psk_id = g_tls13_test_psk_id_sha384;
+                psk_id_len = sizeof(g_tls13_test_psk_id_sha384);
                 pskLen = 48;
                 break;
             default:
                 psk = g_tls13_test_psk_256;
+                psk_id = g_tls13_test_psk_id_sha256;
+                psk_id_len = sizeof(g_tls13_test_psk_id_sha256);
                 pskLen = 32;
             }
 
@@ -3687,8 +4199,8 @@ static int32 tls13InitializeClient(sslConn_t *conn, psCipher16_t cipherSuite,
             if (matrixSslLoadTls13Psk(keys,
                     psk,
                     pskLen,
-                    g_tls13_test_psk_id,
-                    sizeof(g_tls13_test_psk_id),
+                    psk_id,
+                    psk_id_len,
                     &session) < 0)
             {
                 return PS_FAILURE;

@@ -269,7 +269,7 @@ READ_MORE:
     {
         if (SOCKET_ERRNO != EINTR)
         {
-            psTraceIntDtls("unhandled error %d from select", SOCKET_ERRNO);
+            psTraceInt("unhandled error %d from select", SOCKET_ERRNO);
             goto L_CLOSE_ERR;
         }
         goto READ_MORE;
@@ -278,10 +278,10 @@ READ_MORE:
     if (!FD_ISSET(fd, &readfd))
     {
         /* Timed out.  For good? */
-        psTraceIntDtls("select timed out %d\n", val);
+        psTraceInt("select timed out %d\n", val);
         if (tSec == MAX_WAIT_SECS)
         {
-            psTraceDtls("Max Timeout.  Leaving\n");
+            psTrace("Max Timeout.  Leaving\n");
             goto L_CLOSE_ERR;
         }
         tSec *= 2;
@@ -325,7 +325,7 @@ READ_MORE:
 
 # ifdef USE_DTLS_DEBUG_TRACE
     /* nice for debugging */
-    psTraceIntDtls("Read %d bytes from server\n", transferred);
+    psTraceInt("Read %d bytes from server\n", transferred);
 # endif
 
     /*  If EOF, remote socket closed. But we haven't received the HTTP response
@@ -422,7 +422,7 @@ PROCESS_MORE:
         /* The second byte is the description */
         if (*buf == SSL_ALERT_LEVEL_FATAL)
         {
-            psTraceIntInfo("Fatal alert: %d, closing connection.\n",
+            psTraceInt("Fatal alert: %d, closing connection.\n",
                 *(buf + 1));
             goto L_CLOSE_ERR;
         }
@@ -432,7 +432,7 @@ PROCESS_MORE:
             closeConn(dtlsCtx, fd);
             return MATRIXSSL_SUCCESS;
         }
-        psTraceIntInfo("Warning alert: %d\n", *(buf + 1));
+        psTraceInt("Warning alert: %d\n", *(buf + 1));
         if ((rc = matrixSslProcessedData(ssl, &buf, (uint32 *) &len)) == 0)
         {
             /* No more data in buffer. Might as well read for more. */
@@ -958,7 +958,7 @@ static int32 certCb(ssl_t *ssl, psX509Cert_t *cert, int32 alert)
         }
     }
 
-    psTraceStrDtls("Validated cert for: %s.\n", cert->subject.commonName);
+    psTraceStr("Validated cert for: %s.\n", cert->subject.commonName);
 
 # endif /* !USE_ONLY_PSK_CIPHER_SUITE */
     return PS_SUCCESS;

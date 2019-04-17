@@ -48,7 +48,7 @@
 # define DEBUGF(...) do {} while (0)
 #endif
 
-#ifdef USE_PS_NETWORKING
+#if defined(USE_PS_NETWORKING) && defined(MATRIX_USE_FILE_SYSTEM)
 
 /* The flags used by this program for TLS versions. */
 # define FLAG_TLS_1_0 (1 << 10)
@@ -155,9 +155,11 @@ static int init_client_tls(psSocket_t *sock, const char *capath, int tls)
 #  else
 #   ifdef USE_ECC
         rc = matrixSslLoadEcKeys(keys, NULL, NULL, NULL, capath);
+#   else
 #    warning either USE_RSA or USE_ECC needed in matrixsslSocket.c
 #   endif
 #  endif
+
         if (rc != PS_SUCCESS)
         {
             DEBUGF("No certificate material loaded.\n");
@@ -510,6 +512,6 @@ const psSocketFunctions_t *psGetSocketFunctionsTLS(void)
     return &psSocketFunctionsTLS;
 }
 
-#endif /* USE_PS_NETWORKING */
+#endif /* USE_PS_NETWORKING && MATRIX_USE_FILE_SYSTEM */
 
 /* end of file matrixsslSocket.c */

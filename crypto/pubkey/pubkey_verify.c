@@ -2,7 +2,7 @@
  *      @file    pubkey_verify.c
  *      @version $Format:%h%d$
  *
- *      Algorithm-independent verification API.
+ *      Algorithm-independent signature verification API.
  */
 /*
  *      Copyright (c) 2013-2018 INSIDE Secure Corporation
@@ -217,7 +217,7 @@ psRes_t psHashDataAndVerifySig(psPool_t *pool,
     return rc;
 }
 
-# ifdef USE_PKCS1_PSS
+# if defined(USE_RSA) && defined(USE_PKCS1_PSS)
 static
 int32_t get_pss_hash_sig_alg(psVerifyOptions_t *opts)
 {
@@ -251,9 +251,10 @@ psRes_t psVerify(psPool_t *pool,
 
     *verifyResult = PS_FALSE;
 
+# if defined(USE_RSA) && defined(USE_PKCS1_PSS)
     if (opts && opts->useRsaPss)
     {
-# if defined (USE_PKCS1_PSS) && defined(USE_CL_RSA)
+#  ifdef USE_CL_RSA
         /* The crypto-cl API for RSA-PSS verification does not support
            pre-hashing. */
         needPreHash = PS_FALSE;
@@ -267,6 +268,7 @@ psRes_t psVerify(psPool_t *pool,
             signatureAlgorithm = get_pss_hash_sig_alg(opts);
         }
     }
+# endif /* RSA && PKCS1_PSS */
 
 # ifdef USE_ED25519
     if (signatureAlgorithm == OID_ED25519_KEY_ALG)

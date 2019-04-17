@@ -61,61 +61,78 @@ static int32_t psTryParsePrivKeyMem(psPool_t *pool,
         const unsigned char *keyBuf,
         int32 keyBufLen,
         const char *password,
-        psPubKey_t *privkey)
+        psPubKey_t *privKey)
 {
     int32_t rc;
 
 #ifdef USE_RSA
     /* Examine data to ensure parses which could not succeed are not tried. */
     if (possiblyRSAKey(keyBuf, keyBufLen)) {
-        rc = psRsaParsePkcs1PrivKey(pool, keyBuf, keyBufLen, &privkey->key.rsa);
+#  ifdef USE_ROT_RSA
+        if (privKey->rotSigAlg == 0)
+        {
+            privKey->key.rsa.rotSigAlg = OID_SHA256_RSA_SIG;
+        }
+        else
+        {
+            privKey->key.rsa.rotSigAlg = privKey->rotSigAlg;
+        }
+#  endif
+        rc = psRsaParsePkcs1PrivKey(pool,
+                keyBuf,
+                keyBufLen,
+                &privKey->key.rsa);
         if (rc >= PS_SUCCESS)
         {
-            privkey->type = PS_RSA;
-            privkey->keysize = psRsaSize(&privkey->key.rsa);
-            privkey->pool = pool;
-            return 1; /* RSA */
+            privKey->type = PS_RSA;
+            privKey->keysize = psRsaSize(&privKey->key.rsa);
+            privKey->pool = pool;
+            return PS_RSA;
         }
     }
 #endif /* USE_RSA */
 
 #ifdef USE_ECC
-    rc = psEccParsePrivKey(pool, keyBuf, keyBufLen, &privkey->key.ecc, NULL);
+    rc = psEccParsePrivKey(pool,
+            keyBuf,
+            keyBufLen,
+            &privKey->key.ecc,
+            NULL);
     if (rc >= PS_SUCCESS)
     {
-        privkey->type = PS_ECC;
-        privkey->keysize = psEccSize(&privkey->key.ecc);
-        privkey->pool = pool;
-        return 2; /* ECC */
+        privKey->type = PS_ECC;
+        privKey->keysize = psEccSize(&privKey->key.ecc);
+        privKey->pool = pool;
+        return PS_ECC;
     }
 # ifdef USE_ED25519
     rc = psEd25519ParsePrivKey(pool, keyBuf, keyBufLen,
-            &privkey->key.ed25519);
+            &privKey->key.ed25519);
     if (rc >= PS_SUCCESS)
     {
-        privkey->type = PS_ED25519;
-        privkey->keysize = 32;
-        privkey->pool = pool;
-        return 3;
+        privKey->type = PS_ED25519;
+        privKey->keysize = 32;
+        privKey->pool = pool;
+        return PS_ED25519;
     }
 # endif /* USE_ED25519 */
 #endif /* USE_ECC */
 
 #ifdef USE_PKCS8
      if (psPkcs8ParsePrivBin(pool, keyBuf, keyBufLen,
-         (char*)password, privkey) >= PS_SUCCESS)
+         (char*)password, privKey) >= PS_SUCCESS)
      {
 # ifdef USE_RSA
-         if (privkey->type == PS_RSA)
+         if (privKey->type == PS_RSA)
          {
-             return 1; /* RSA */
+             return PS_RSA;
          }
 # endif /* USE_RSA */
 
 # ifdef USE_ECC
-         if (privkey->type == PS_ECC)
+         if (privKey->type == PS_ECC)
          {
-             return 2; /* ECC */
+             return PS_ECC;
          }
 # endif /* USE_ECC */
 
@@ -141,20 +158,20 @@ int32_t psParseUnknownPrivKeyMem(psPool_t *pool,
         const unsigned char *keyBuf,
         int32 keyBufLen,
         const char *password,
-        psPubKey_t *privkey)
+        psPubKey_t *privKey)
 {
     int32_t keytype;
 
     if (keyBuf == NULL || keyBufLen <= 0)
         return PS_ARG_FAIL;
 
-     privkey->keysize = 0;
+     privKey->keysize = 0;
 
      keytype = psTryParsePrivKeyMem(pool,
              keyBuf,
              keyBufLen,
              password,
-             privkey);
+             privKey);
 
      if (keytype < 0)
      {
@@ -252,6 +269,7 @@ psParseUnknownPubKeyMem(psPool_t *pool,
     int32_t rc;
     unsigned char *data;
     psSizeL_t data_len;
+    psBool_t mustFreeData = PS_TRUE;
 # if defined USE_RSA || defined USE_ECC
     unsigned char hashBuf[SHA1_HASH_SIZE];
 # endif
@@ -268,6 +286,7 @@ psParseUnknownPubKeyMem(psPool_t *pool,
         /* Not PEM or PEM decoding not supported. Try DER. */
         data = (unsigned char *)keyBuf;
         data_len = keyBufLen;
+        mustFreeData = PS_FALSE;
     }
 
 # ifdef USE_RSA
@@ -275,6 +294,10 @@ psParseUnknownPubKeyMem(psPool_t *pool,
                              (const unsigned char **)&data, data_len,
                              &pubkey->key.rsa,
                              hashBuf);
+    if (rc == PS_SUCCESS)
+    {
+        pubkey->type = PS_RSA;
+    }
 # endif
 # ifdef USE_ECC
     if (rc < PS_SUCCESS)
@@ -287,11 +310,17 @@ psParseUnknownPubKeyMem(psPool_t *pool,
             rc = psEccParsePrivKey(pool, data, data_len,
                                    &pubkey->key.ecc, NULL);
         }
+        if (rc == PS_SUCCESS)
+        {
+            pubkey->type = PS_ECC;
+        }
     }
 # endif
 
-    if (data != keyBuf)
+
+    if (mustFreeData)
     {
+        psAssert(data != keyBuf);
         psFree(data, pool);
     }
 
@@ -301,13 +330,13 @@ psParseUnknownPubKeyMem(psPool_t *pool,
 # else /* USE_PRIVATE_KEY_PARSING */
 PSPUBLIC int32_t psParseUnknownPrivKeyMem(psPool_t *pool,
         const unsigned char *keyBuf, int32 keyBufLen,
-        const char *password, psPubKey_t *privkey)
+        const char *password, psPubKey_t *privKey)
 {
     PS_VARIABLE_SET_BUT_UNUSED(pool);
     PS_VARIABLE_SET_BUT_UNUSED(keyBuf);
     PS_VARIABLE_SET_BUT_UNUSED(keyBufLen);
     PS_VARIABLE_SET_BUT_UNUSED(password);
-    PS_VARIABLE_SET_BUT_UNUSED(privkey);
+    PS_VARIABLE_SET_BUT_UNUSED(privKey);
     return -1; /* Not implemented */
 }
 # endif   /* USE_PRIVATE_KEY_PARSING */

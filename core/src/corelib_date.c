@@ -235,6 +235,7 @@ PSPUBLIC int32 psBrokenDownTimeAdd(psBrokenDownTime_t *res, int32 offset)
         res->tm_wday %= 7;
         res->tm_hour %= 24;
     }
+
     /* Do month days, months & years as a loop. */
     while (res->tm_mday > mdays(res))
     {

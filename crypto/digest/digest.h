@@ -75,35 +75,42 @@
 # ifdef USE_OPENSSL_CRYPTO
 #  include "digest_openssl.h"
 # endif
+# ifdef USE_ROT_CRYPTO
+#  include "digest_rot.h"
+# endif
 
 /******************************************************************************/
 
-typedef union
+typedef struct
 {
+    union
+    {
 # ifdef USE_SHA1
-    psSha1_t sha1;
+        psSha1_t sha1;
 # endif
 # ifdef USE_MD5SHA1
-    psMd5Sha1_t md5sha1;
+        psMd5Sha1_t md5sha1;
 # endif
 # ifdef USE_SHA256
-    psSha256_t sha256;
+        psSha256_t sha256;
 # endif
 # ifdef USE_SHA384
-    psSha384_t sha384;
+        psSha384_t sha384;
 # endif
 # ifdef USE_SHA512
-    psSha512_t sha512;
+        psSha512_t sha512;
 # endif
 # ifdef USE_MD5
-    psMd5_t md5;
+        psMd5_t md5;
 # endif
 # ifdef USE_MD2
-    psMd2_t md2;
+        psMd2_t md2;
 # endif
 # ifdef USE_MD4
-    psMd4_t md4;
+        psMd4_t md4;
 # endif
+    } u;
+    int32_t hashAlgId;
 } psDigestContext_t;
 
 typedef struct

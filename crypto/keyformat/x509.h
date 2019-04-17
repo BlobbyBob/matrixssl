@@ -264,8 +264,7 @@ typedef struct x509PolicyQualifierInfo_t
 
 typedef struct x509PolicyInformation_t
 {
-    uint32_t *policyOid;
-    psSize_t policyOidLen;
+    psAsnOid_t *policyAsnOid;
     x509PolicyQualifierInfo_t *qualifiers;
     struct x509PolicyInformation_t *next;
 } x509PolicyInformation_t;
@@ -283,10 +282,8 @@ typedef struct x509policyConstraints_t
 
 typedef struct x509policyMappings_t
 {
-    uint32_t *issuerDomainPolicy;
-    uint32_t *subjectDomainPolicy;
-    psSize_t issuerDomainPolicyLen;
-    psSize_t subjectDomainPolicyLen;
+    psAsnOid_t *issuerDomainPolicy;
+    psAsnOid_t *subjectDomainPolicy;
     struct x509policyMappings_t *next;
 } x509policyMappings_t;
 
@@ -624,7 +621,7 @@ typedef struct psCert
     int32 certAlgorithm;              /* TBSCertificate sig alg OID */
     unsigned char *signature;
     psSize_t signatureLen;
-#  ifdef USE_ED25519
+#  if defined(USE_ED25519) || defined(USE_ROT_ECC) || defined(USE_ROT_RSA)
     unsigned char *tbsCertStart;
     psSizeL_t tbsCertLen;
 #  endif
@@ -775,7 +772,7 @@ extern int32_t psX509GetOnelineDN(const x509DNattributes_t *DN,
 /* The OCSP structure members point directly into an OCSPResponse stream.
     They are validated immediately after the parse so if a change request
     requires these fields to persist, this will all have to change */
-typedef struct
+typedef struct psOcspSingleResponse
 {
     uint16_t certIdHashAlg;            /* hashAlgorithm in CertID */
     const unsigned char *certIdNameHash;
@@ -793,7 +790,7 @@ typedef struct
 
 #   define MAX_OCSP_RESPONSES 3
 
-typedef struct
+typedef struct psOcspResponse
 {
     const unsigned char *responderName;
     const unsigned char *responderKeyHash;

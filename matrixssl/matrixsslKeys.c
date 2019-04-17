@@ -44,6 +44,10 @@
 
 #if defined(USE_CA_CERTIFICATES) || defined(USE_IDENTITY_CERTIFICATES)
 
+# ifdef USE_ROT_CRYPTO
+#  include "../crypto-rot/rotCommon.h"
+# endif
+
 # ifdef USE_CERT_PARSE
 static
 psRes_t handleAuthFailDate(matrixSslLoadKeysOpts_t *opts)
@@ -314,11 +318,16 @@ matrixSslAddIdentity(sslKeys_t *keys, sslIdentity_t *identity)
 {
 # if defined(USE_SERVER_SIDE_SSL) || defined(USE_CLIENT_AUTH)
     sslIdentity_t **p;
+
     /* Push the new key at the end of the list, so that routines using the
        keys can easily prefer the first one added. */
     for (p = &(keys->identity); *p; p = &((*p)->next))
         ;
     *p = identity;
+
+    psTraceInfo("Adding identity with key type: ");
+    psTracePrintPubKeyTypeAndSize(NULL, &identity->privKey);
+
     return identity;
 # else
     return NULL;
@@ -502,6 +511,74 @@ static psRes_t sslLoadCert(psPool_t *pool,
     return rc;
 }
 
+psRes_t psRotSetupIdentityKey(matrixSslLoadKeysOpts_t *opts,
+        psPubKey_t *idKey)
+{
+# ifdef USE_ROT_CRYPTO
+    int32_t err;
+#  ifdef USE_ROT_ECC
+    const psEccCurve_t *curve;
+#  endif
+
+    switch (opts->key_type)
+    {
+#  ifdef USE_ROT_ECC
+    case PS_ECC:
+        idKey->type = PS_ECC;
+        idKey->key.ecc.rotKeyType = ps_ecc_key_type_ecdsa;
+
+        idKey->key.ecc.privAsset = opts->privAsset;
+        psTraceIntInfo("Using ECDSA private key asset: %u\n",
+                idKey->key.ecc.privAsset);
+        err = getEccParamById(opts->privAssetCurveId,
+                &curve);
+        psTraceStrInfo("  (%s curve)\n", curve->name);
+        idKey->key.ecc.curve = curve;
+        if (err < 0)
+        {
+            psTraceErrr("getEccParamById failed\n");
+            return err;
+        }
+        idKey->keysize = curve->size * 2;
+        err = psRotLoadCurve(curve->curveId,
+                &idKey->key.ecc.domainAsset);
+        if (err < 0)
+        {
+            psTraceErrr("psRotLoadCurve failed\n");
+            return err;
+        }
+        /* Do not take ownership of this asset - we are not responsible
+           for freeing. */
+        idKey->key.ecc.longTermPrivAsset = PS_TRUE;
+        break;
+#  endif
+#  ifdef USE_ROT_RSA
+    case PS_RSA:
+        idKey->type = PS_RSA;
+        idKey->key.rsa.privSigAsset = opts->privAsset;
+        psTraceIntInfo("Using RSA private key asset: %u\n",
+                idKey->key.rsa.privSigAsset);
+        idKey->keysize = opts->privAssetModulusNBytes;
+        idKey->key.rsa.size = opts->privAssetModulusNBytes;
+        /* Do not take ownership of this asset - we are not responsible
+           for freeing. */
+        idKey->key.rsa.longTermPrivAsset = PS_TRUE;
+        break;
+#  endif
+    default:
+        psTraceErrr("Unknown key type in psRotSetupIdentityKey\n");
+        return PS_UNSUPPORTED_FAIL;
+    }
+    return PS_SUCCESS;
+
+# else
+    (void)opts;
+    (void)idKey;
+    psTraceErrr("USE_ROT_CRYPTO needed for psRotSetupIdentityKey\n");
+    return PS_UNSUPPORTED_FAIL;
+# endif /* USE_ROT_CRYPTO */
+}
+
 psRes_t
 matrixSslCreateIdentityFromData(sslKeys_t *keys,
         const unsigned char *cert,
@@ -516,22 +593,39 @@ matrixSslCreateIdentityFromData(sslKeys_t *keys,
     psX509Cert_t *idcert = NULL;
     int32 err;
     sslIdentity_t *id;
+    psRes_t rc;
+
+    memset(&idkey, 0, sizeof(idkey));
 
     err = sslLoadCert(keys->pool, &idcert, cert, cert_len, opts);
     if (err < PS_SUCCESS)
     {
         return err;
     }
-    err = sslLoadKeyPair(keys->pool,
-            &idkey,
-            keytype,
-            keypass,
-            keydata,
-            keydata_len);
-    if (err < PS_SUCCESS)
+
+    if (opts && opts->privAsset != 0)
     {
-        psX509FreeCert(idcert);
-        return err;
+        rc = psRotSetupIdentityKey(opts, &idkey);
+        if (rc < 0)
+        {
+            psTraceErrr("psRotLoadIdentity failed\n");
+            psX509FreeCert(idcert);
+            return rc;
+        }
+    }
+    else
+    {
+        err = sslLoadKeyPair(keys->pool,
+                &idkey,
+                keytype,
+                keypass,
+                keydata,
+                keydata_len);
+        if (err < PS_SUCCESS)
+        {
+            psX509FreeCert(idcert);
+            return err;
+        }
     }
 
     id = matrixSslCreateIdentity(keys, idkey, idcert);
@@ -560,27 +654,48 @@ static psRes_t matrixSslLoadKeyMaterialMem(sslKeys_t *keys,
     {
         return PS_ARG_FAIL;
     }
+
+# ifdef USE_ROT_CRYPTO
+    if (privKeyType != PS_ECC && privKeyType != PS_RSA)
+    {
+        psTraceErrr("Only ECDSA/RSA auth keys supported by crypto-rot\n");
+        return PS_ARG_FAIL;
+    }
+    if (opts && opts->privAsset != VAL_ASSETID_INVALID)
+    {
+        /* The asset ID overrides the plaintext key. */
+        privBuf = NULL;
+        privLen = 0;
+    }
+# endif /* USE_ROT_CRYPTO */
+
     err = matrixSslAddTrustAnchors(keys, NULL, CAbuf, CAlen, opts);
     if (err < PS_SUCCESS)
     {
         return err;
     }
-    err = matrixSslCreateIdentityFromData(keys,
-            certBuf,
-            certLen,
-            privKeyType,
-            NULL,
-            privBuf,
-            privLen,
-            opts);
-    if (err < PS_SUCCESS)
+
+    if ((privBuf != NULL && certBuf != NULL) ||
+            (opts != NULL && opts->privAsset != 0))
     {
+        err = matrixSslCreateIdentityFromData(keys,
+                certBuf,
+                certLen,
+                privKeyType,
+                NULL,
+                privBuf,
+                privLen,
+                opts);
+        if (err < PS_SUCCESS)
+        {
 # if defined(USE_CLIENT_SIDE_SSL) || defined(USE_CLIENT_AUTH)
-        psX509FreeCert(keys->CAcerts);
-        keys->CAcerts = NULL;
+            psX509FreeCert(keys->CAcerts);
+            keys->CAcerts = NULL;
 # endif
-        return PS_CERT_AUTH_FAIL;
+            return PS_CERT_AUTH_FAIL;
+        }
     }
+
     return PS_SUCCESS;
 }
 
@@ -594,7 +709,7 @@ int32_t matrixSslLoadKeysMem(sslKeys_t *keys,
         matrixSslLoadKeysOpts_t *opts)
 {
     int32_t keytype = 0;
-    int32_t rc;
+    int32_t rc = PS_FAILURE;
 
     if (opts)
     {
@@ -606,9 +721,11 @@ int32_t matrixSslLoadKeysMem(sslKeys_t *keys,
         keytype = 1;
     }
 
+    /* Note: previous versions used the constants 1 for RSA,
+       2 for ECC and 3 for EDDSA. */
     switch (keytype)
     {
-    case 1: /* RSA */
+    case PS_RSA:
         rc = matrixSslLoadKeyMaterialMem(keys,
                 certBuf,
                 certLen,
@@ -619,7 +736,7 @@ int32_t matrixSslLoadKeysMem(sslKeys_t *keys,
                 PS_RSA,
                 opts);
         break;
-    case 2: /* ECC */
+    case PS_ECC:
         rc = matrixSslLoadKeyMaterialMem(keys,
                 certBuf,
                 certLen,
@@ -630,7 +747,7 @@ int32_t matrixSslLoadKeysMem(sslKeys_t *keys,
                 PS_ECC,
                 opts);
         break;
-    case 3: /* ECDSA*/
+    case PS_ED25519:
         rc = matrixSslLoadKeyMaterialMem(keys,
                 certBuf,
                 certLen,
@@ -670,7 +787,6 @@ int32_t matrixSslLoadKeysMem(sslKeys_t *keys,
     }
     return rc;
 }
-
 
 #ifdef USE_RSA
 int32 matrixSslLoadRsaKeysMemExt(sslKeys_t *keys,
@@ -769,7 +885,7 @@ int32 matrixSslLoadPkcs12Mem(sslKeys_t *keys,
     psPool_t *pool;
     int32 rc;
     psX509Cert_t *cert;
-    psPubKey_t idkey = {0};
+    psPubKey_t idkey;
     sslIdentity_t *id;
 
     if (keys == NULL)
@@ -778,6 +894,8 @@ int32 matrixSslLoadPkcs12Mem(sslKeys_t *keys,
     }
     pool = keys->pool;
     PS_POOL_USED(pool);
+
+    Memset(&idkey, 0, sizeof(idkey));
 
     if (macPass == NULL)
     {
@@ -940,7 +1058,11 @@ int32 psTestUserEc(int32 ecFlags, const sslKeys_t *keys)
         if (cert->publicKey.type == PS_ECC)
         {
             eccKey = &cert->publicKey.key.ecc;
-            res = psTestUserEcID(eccKey->curve->curveId, ecFlags);
+            res = PS_FAILURE;
+            if (eccKey->curve)
+            {
+                res = psTestUserEcID(eccKey->curve->curveId, ecFlags);
+            }
             if (res == PS_SUCCESS)
             {
                 goodEccCount++;
@@ -950,6 +1072,101 @@ int32 psTestUserEc(int32 ecFlags, const sslKeys_t *keys)
 #   endif /* USE_CERT_PARSE */
 # endif /* USE_CLIENT_SIDE_SSL || USE_CLIENT_AUTH */
     return goodEccCount > 0 || otherKeyCount > 0;
+}
+
+/**
+    Generate and cache an ephemeral ECC key for later use in ECDHE key exchange.
+    @param[out] keys Keys structure to hold ephemeral keys
+    @param[in] curve ECC curve to generate key on, or NULL to generate for all
+        supported curves.
+    @param[in] hwCtx Context for hardware crypto.
+ */
+int32_t matrixSslGenEphemeralEcKey(sslKeys_t *keys,
+        psEccKey_t *ecc,
+        const psEccCurve_t *curve,
+        void *hwCtx)
+{
+#  if ECC_EPHEMERAL_CACHE_USAGE > 0
+    psTime_t t;
+#  endif
+    int32_t rc = PS_FAILURE;
+
+    if (keys == NULL  || curve == NULL)
+    {
+        return PS_ARG_FAIL;
+    }
+
+#  if ECC_EPHEMERAL_CACHE_USAGE > 0
+    psGetTime(&t, keys->poolUserPtr);
+    psLockMutex(&keys->cache.lock);
+    if (keys->cache.eccPrivKey.curve != curve)
+    {
+        psTraceStrInfo("Generating ephemeral %s key (new curve)\n",
+            curve->name);
+        goto L_REGEN;
+    }
+    if (keys->cache.eccPrivKeyUse > ECC_EPHEMERAL_CACHE_USAGE)
+    {
+        psTraceStrInfo("Generating ephemeral %s key (usage exceeded)\n",
+            curve->name);
+        goto L_REGEN;
+    }
+    if (psDiffMsecs(keys->cache.eccPrivKeyTime, t, keys->poolUserPtr) >
+        (1000 * ECC_EPHEMERAL_CACHE_SECONDS))
+    {
+        psTraceStrInfo("Generating ephemeral %s key (time exceeded)\n",
+            curve->name);
+        goto L_REGEN;
+    }
+    keys->cache.eccPrivKeyUse++;
+    rc = PS_SUCCESS;
+    if (ecc)
+    {
+        rc = psEccCopyKey(ecc, &keys->cache.eccPrivKey);
+    }
+    psUnlockMutex(&keys->cache.lock);
+    return rc;
+
+L_REGEN:
+    if (keys->cache.eccPrivKeyUse)
+    {
+        /* We use eccPrivKeyUse == 0 as a flag to note the key not allocated */
+        psEccClearKey(&keys->cache.eccPrivKey);
+        keys->cache.eccPrivKeyUse = 0;
+    }
+#   ifdef USE_ROT_ECC
+    keys->cache.eccPrivKey.rotKeyType = ps_ecc_key_type_ecdhe;
+#   endif
+    rc = psEccGenKey(keys->pool, &keys->cache.eccPrivKey, curve, hwCtx);
+    if (rc < 0)
+    {
+        psUnlockMutex(&keys->cache.lock);
+        return rc;
+    }
+    keys->cache.eccPrivKeyTime = t;
+    keys->cache.eccPrivKeyUse = 1;
+    rc = PS_SUCCESS;
+    if (ecc)
+    {
+        rc = psEccCopyKey(ecc, &keys->cache.eccPrivKey);
+    }
+    psUnlockMutex(&keys->cache.lock);
+    return rc;
+#  else
+    /* Not using ephemeral caching. */
+    if (ecc)
+    {
+#   ifdef USE_ROT_ECC
+        ecc->rotKeyType = ps_ecc_key_type_ecdhe;
+#   endif
+        psTraceStrInfo("Generating ephemeral %s key (new curve)\n",
+                curve->name);
+        rc = psEccGenKey(keys->pool, ecc, curve, hwCtx);
+        return rc;
+    }
+    rc = PS_SUCCESS;
+    return rc;
+#  endif /* ECC_EPHEMERAL_CACHE_USAGE > 0 */
 }
 #endif /* USE_ECC */
 
@@ -971,7 +1188,7 @@ int32 matrixSslLoadPkcs12(sslKeys_t *keys,
     psPool_t *pool;
     int32 rc;
     psX509Cert_t *cert;
-    psPubKey_t idkey = {0};
+    psPubKey_t idkey;
     sslIdentity_t *id;
 
     if (keys == NULL)
@@ -980,6 +1197,8 @@ int32 matrixSslLoadPkcs12(sslKeys_t *keys,
     }
     pool = keys->pool;
     PS_POOL_USED(pool);
+
+    Memset(&idkey, 0, sizeof(idkey));
 
     if (macPass == NULL)
     {
@@ -1069,10 +1288,10 @@ static psRes_t matrixSslLoadKeyMaterial(sslKeys_t *keys,
             psFree(idkey, pool);
         }
     }
-#  endif
+#  endif /* USE_IDENTITY_CERTIFICATES */
     return err;
 }
-#endif
+#endif /* USE_RSA || USE_ECC */
 
 # ifdef USE_RSA
 /******************************************************************************/
@@ -1106,8 +1325,6 @@ int32 matrixSslLoadRsaKeys(sslKeys_t *keys,
             PS_RSA,
             NULL);
 }
-
-/******************************************************************************/
 # endif /* USE_RSA */
 
 # ifdef USE_ECC
@@ -1142,93 +1359,6 @@ int32 matrixSslLoadEcKeys(sslKeys_t *keys,
             PS_ECC,
             NULL);
 }
-
-/**
-    Generate and cache an ephemeral ECC key for later use in ECDHE key exchange.
-    @param[out] keys Keys structure to hold ephemeral keys
-    @param[in] curve ECC curve to generate key on, or NULL to generate for all
-        supported curves.
-    @param[in] hwCtx Context for hardware crypto.
- */
-int32_t matrixSslGenEphemeralEcKey(sslKeys_t *keys,
-        psEccKey_t *ecc,
-        const psEccCurve_t *curve,
-        void *hwCtx)
-{
-#  if ECC_EPHEMERAL_CACHE_USAGE > 0
-    psTime_t t;
-#  endif
-    int32_t rc;
-
-    if (keys == NULL  || curve == NULL)
-    {
-        return PS_ARG_FAIL;
-    }
-
-#  if ECC_EPHEMERAL_CACHE_USAGE > 0
-    psGetTime(&t, keys->poolUserPtr);
-    psLockMutex(&keys->cache.lock);
-    if (keys->cache.eccPrivKey.curve != curve)
-    {
-        psTraceStrInfo("Generating ephemeral %s key (new curve)\n",
-            curve->name);
-        goto L_REGEN;
-    }
-    if (keys->cache.eccPrivKeyUse > ECC_EPHEMERAL_CACHE_USAGE)
-    {
-        psTraceStrInfo("Generating ephemeral %s key (usage exceeded)\n",
-            curve->name);
-        goto L_REGEN;
-    }
-    if (psDiffMsecs(keys->cache.eccPrivKeyTime, t, keys->poolUserPtr) >
-        (1000 * ECC_EPHEMERAL_CACHE_SECONDS))
-    {
-        psTraceStrInfo("Generating ephemeral %s key (time exceeded)\n",
-            curve->name);
-        goto L_REGEN;
-    }
-    keys->cache.eccPrivKeyUse++;
-    rc = PS_SUCCESS;
-    if (ecc)
-    {
-        rc = psEccCopyKey(ecc, &keys->cache.eccPrivKey);
-    }
-    psUnlockMutex(&keys->cache.lock);
-    return rc;
-
-L_REGEN:
-    if (keys->cache.eccPrivKeyUse)
-    {
-        /* We use eccPrivKeyUse == 0 as a flag to note the key not allocated */
-        psEccClearKey(&keys->cache.eccPrivKey);
-        keys->cache.eccPrivKeyUse = 0;
-    }
-    rc = psEccGenKey(keys->pool, &keys->cache.eccPrivKey, curve, hwCtx);
-    if (rc < 0)
-    {
-        psUnlockMutex(&keys->cache.lock);
-        return rc;
-    }
-    keys->cache.eccPrivKeyTime = t;
-    keys->cache.eccPrivKeyUse = 1;
-    rc = PS_SUCCESS;
-    if (ecc)
-    {
-        rc = psEccCopyKey(ecc, &keys->cache.eccPrivKey);
-    }
-    psUnlockMutex(&keys->cache.lock);
-    return rc;
-#  else
-    /* Not using ephemeral caching. */
-    if (ecc)
-    {
-        rc = psEccGenKey(keys->pool, ecc, curve, hwCtx);
-        return rc;
-    }
-    rc = PS_SUCCESS;
-    return rc;
-#  endif /* ECC_EPHEMERAL_CACHE_USAGE > 0 */
-}
 # endif /* USE_ECC */
 
 # if defined(USE_IDENTITY_CERTIFICATES)
@@ -1240,7 +1370,7 @@ psRes_t matrixSslLoadKeys(sslKeys_t *keys,
         matrixSslLoadKeysOpts_t *opts)
 {
     int32_t keytype = 0;
-    int32_t rc;
+    int32_t rc = PS_FAILURE;
 
     if (opts)
     {
@@ -1311,6 +1441,7 @@ psRes_t matrixSslLoadKeys(sslKeys_t *keys,
     return rc;
 }
 # endif
+
 # ifdef REQUIRE_DH_PARAMS
 /******************************************************************************/
 /*

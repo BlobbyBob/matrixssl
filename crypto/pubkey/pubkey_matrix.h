@@ -45,6 +45,12 @@ typedef struct
     psPool_t *pool;
     psSize_t size;          /* Size of the key in bytes */
     uint8_t optimized;      /* Set if optimized */
+# ifdef USE_ROT_RSA
+    ValAssetId_t privSigAsset;
+    ValAssetId_t pubSigAsset;
+    ValAssetId_t privEncAsset;
+    ValAssetId_t pubEncAsset;
+# endif
 } psRsaKey_t;
 
 # endif
@@ -85,6 +91,12 @@ typedef struct
     psPool_t *pool;
 } psEccPoint_t;
 
+typedef enum
+{
+    ps_ecc_key_type_ecdsa = 0,
+    ps_ecc_key_type_ecdhe = 1
+} psEccKeyType_t;
+
 typedef struct
 {
     pstm_int k;                 /* The private key */
@@ -92,7 +104,36 @@ typedef struct
     const psEccCurve_t *curve;  /* pointer to named curve */
     psPool_t *pool;
     uint8_t type;               /* Type of key, PS_PRIVKEY or PS_PUBKEY */
+# ifdef USE_ROT_ECC
+    ValAssetId_t pubAsset;
+    ValAssetId_t domainAsset;
+    ValAssetId_t privAsset;
+    psBool_t longTermPrivAsset;
+    psEccKeyType_t rotKeyType;
+    unsigned char pubValue[64];
+# endif
 } psEccKey_t;
+
+# ifdef USE_ROT_ECC
+/* RoT-specific structure for the ECC curves. */
+typedef struct
+{
+    uint32_t CurveBits;
+    const uint8_t * P_p;
+    uint32_t PLen;
+    const uint8_t * A_p;
+    uint32_t ALen;
+    const uint8_t * B_p;
+    uint32_t BLen;
+    const uint8_t * ECPointX_p;
+    uint32_t ECPointXLen;
+    const uint8_t * ECPointY_p;
+    uint32_t ECPointYLen;
+    const uint8_t * Order_p;
+    uint32_t OrderLen;
+    const uint8_t Cofactor;
+} psRotCurve_t;
+# endif /* USE_ROT_ECC */
 
 # endif
 

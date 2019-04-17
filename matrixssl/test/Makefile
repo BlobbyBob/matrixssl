@@ -15,6 +15,10 @@ STATIC:=../libssl_s.a $(MATRIXSSL_ROOT)/crypto/libcrypt_s.a $(MATRIXSSL_ROOT)/co
 
 include $(MATRIXSSL_ROOT)/common.mk
 
+#ifdef USE_ROT_CRYPTO
+STATIC+=$(LIBDRIVER_VAL_UP_PATH)
+#endif
+
 # Include possible additional MatrixSSL test program build instructions
 -include Makefile.add
 
@@ -47,13 +51,13 @@ compile: $(OBJS) $(CERT_EXE) $(TEST_EXE)
 $(OBJS): $(MATRIXSSL_ROOT)/common.mk Makefile $(wildcard *.h)
 
 $(TEST_EXE): $(TEST_SRC:.c=.o) $(STATIC)
-	$(CC) -o $@ $^ $(LDFLAGS)
+	$(CC) -o $@ $^ $(EXTRA_CFLAGS) $(LDFLAGS)
 
 $(CERT_EXE): $(CERT_SRC:.c=.o) $(STATIC)
-	$(CC) -o $@ $^ $(LDFLAGS)
+	$(CC) -o $@ $^ $(EXTRA_CFLAGS) $(LDFLAGS)
 
 $(PROVIDER_EXE): $(PROVIDER_SRC:.c=.o) $(STATIC)
-	$(CC) -o $@ $^ $(LDFLAGS)
+	$(CC) -o $@ $^ $(EXTRA_CFLAGS) $(LDFLAGS)
 
 clean:
 	rm -f $(TEST_EXE) $(CERT_EXE) $(PROVIDER_EXE) $(OBJS) $(CLEAN_EXTRA_FILES) *.map

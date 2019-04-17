@@ -49,6 +49,11 @@
 #  define LABEL_EXT_SIZE          22
 #  define LABEL_EXT_MASTERSEC     "extended master secret"
 
+/* Warning: enabling this will output the derived secrets to the
+   debug log. Enable only if debugging key derivation issues. */
+#  ifndef DEBUG_TLS_LOG_SECRETS
+/*#   define DEBUG_TLS_LOG_SECRETS */
+#  endif
 
 static int32_t genKeyBlock(ssl_t *ssl)
 {
@@ -298,6 +303,7 @@ int32_t tlsExtendedDeriveKeys(ssl_t *ssl)
 #  endif
 
     extMasterSecretSnapshotHSHash(ssl, hash, &outLen);
+
 /*
     master_secret = PRF(pre_master_secret, "extended master secret",
         session_hash);
@@ -334,6 +340,10 @@ int32_t tlsExtendedDeriveKeys(ssl_t *ssl)
         return rc;
     }
 #  endif
+
+#   ifdef DEBUG_TLS_LOG_SECRETS
+        psTraceBytes("ssl->sec.masterSecret", ssl->sec.masterSecret, 48);
+#   endif
 
 #  ifdef USE_DTLS
     if (ACTV_VER(ssl, v_dtls_any))
@@ -875,6 +885,7 @@ int32 sslActivateWriteCipher(ssl_t *ssl)
             Memcpy(&ssl->oencryptCtx, &ssl->sec.encryptCtx,
                 sizeof(psCipherContext_t));
             Memcpy(ssl->owriteIV, ssl->sec.writeIV, ssl->cipher->ivSize);
+            Memcpy(ssl->owriteKey, ssl->sec.writeKey, sizeof(ssl->owriteKey));
         }
     }
 # endif /* USE_DTLS */

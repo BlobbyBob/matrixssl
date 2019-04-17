@@ -831,7 +831,7 @@ int main(int argc, char **argv)
 
         if (val > 0 && FD_ISSET(sock, &readfd))
         {
-            psTraceIntDtls("Select woke %d\n", val);
+            _psTraceInt("Select woke %d\n", val);
             /* recvfrom data must always go into generic buffer becuase we
                don't yet know who it is from */
             inaddrlen = sizeof(struct sockaddr_in);
@@ -856,7 +856,7 @@ int main(int argc, char **argv)
             {
                 const char *addrstr;
                 addrstr = getaddrstring((struct sockaddr *) &inaddr, 1);
-                psTraceIntDtls("Read %d bytes ", recvLen);
+                _psTraceInt("Read %d bytes ", recvLen);
                 _psTraceStr("from %s\n", (char *) addrstr);
                 psFree(addrstr, NULL);
             }
@@ -868,7 +868,7 @@ int main(int argc, char **argv)
             {
                 Memset(&options, 0x0, sizeof(sslSessOpts_t));
                 options.versionFlag = SSL_FLAGS_DTLS;
-                if (COMPILED_IN_VER(v_dtls_1_2))
+                if (v_dtls_1_2 & v_compiled_in)
                 {
                     options.versionFlag |= SSL_FLAGS_TLS_1_2;
                 }
@@ -919,7 +919,7 @@ PROCESS_MORE_FROM_BUFFER:
                    to handle this case so we are not resending our final
                    flight */
                 dtlsCtx->connStatus = RESUMED_HANDSHAKE_COMPLETE;
-                psTraceDtls("Got HANDSHAKE_COMPLETE out of ReceivedData\n");
+                _psTrace("Got HANDSHAKE_COMPLETE out of ReceivedData\n");
                 break;
             case MATRIXSSL_APP_DATA:
                 /* Now safe to clear the connStatus flag that was keeping
@@ -943,7 +943,7 @@ PROCESS_MORE_FROM_BUFFER:
                              packet_loss_prob,
                              NULL)) < 0)
                     {
-                        psTraceDtls("udpSend error.  Ignoring\n");
+                        _psTrace("udpSend error.  Ignoring\n");
                     }
                     /* Always indicate the entire datagram was sent as
                        there is no way for DTLS to handle partial records.
@@ -952,7 +952,7 @@ PROCESS_MORE_FROM_BUFFER:
 
                     if (rcs == MATRIXSSL_REQUEST_CLOSE)
                     {
-                        psTraceDtls("Got REQUEST_CLOSE out of SentData\n");
+                        _psTrace("Got REQUEST_CLOSE out of SentData\n");
                         clearClient(dtlsCtx);
                         break;
                     }
@@ -966,14 +966,14 @@ PROCESS_MORE_FROM_BUFFER:
                 }
                 break;
             case MATRIXSSL_REQUEST_RECV:
-                psTraceDtls("Got REQUEST_RECV from ReceivedData\n");
+                _psTrace("Got REQUEST_RECV from ReceivedData\n");
                 break;
             case MATRIXSSL_RECEIVED_ALERT:
                 /* The first byte of the buffer is the level */
                 /* The second byte is the description */
                 if (*sslBuf == SSL_ALERT_LEVEL_FATAL)
                 {
-                    psTraceIntDtls("Fatal alert: %d, closing connection.\n",
+                    _psTraceInt("Fatal alert: %d, closing connection.\n",
                         *(sslBuf + 1));
                     clearClient(dtlsCtx);
                     continue;     /* Next connection */
@@ -984,7 +984,7 @@ PROCESS_MORE_FROM_BUFFER:
                     clearClient(dtlsCtx);
                     continue;     /* Next connection */
                 }
-                psTraceIntDtls("Warning alert: %d\n", *(sslBuf + 1));
+                _psTraceInt("Warning alert: %d\n", *(sslBuf + 1));
                 if ((rcr = matrixSslProcessedData(ssl, &sslBuf,
                          (uint32 *) &freeBufLen)) == 0)
                 {
@@ -1000,7 +1000,7 @@ PROCESS_MORE_FROM_BUFFER:
         {
             if (SOCKET_ERRNO != EINTR)
             {
-                psTraceIntDtls("unhandled error %d from select", SOCKET_ERRNO);
+                _psTraceInt("unhandled error %d from select", SOCKET_ERRNO);
             }
         }
 /*
@@ -1073,7 +1073,7 @@ static int32 handleResends(SOCKET sock)
                    us as complete officially */
                 if (dtlsCtx->connStatus == RESUMED_HANDSHAKE_COMPLETE)
                 {
-                    psTraceDtls("Connected but awaiting data\n");
+                    _psTrace("Connected but awaiting data\n");
                     continue;
                 }
                 ssl = dtlsCtx->ssl;
@@ -1087,21 +1087,21 @@ static int32 handleResends(SOCKET sock)
                              packet_loss_prob,
                              NULL)) < 0)
                     {
-                        psTraceDtls("udpSend error.  Ignoring\n");
+                        _psTrace("udpSend error.  Ignoring\n");
                     }
                     /* Always indicate the entire datagram was sent as
                        there is no way for DTLS to handle partial records.
                        Resends and timeouts will handle any problems */
                     if ((rc = matrixDtlsSentData(ssl, sslBufLen)) < 0)
                     {
-                        psTraceDtls("internal error\n");
+                        _psTrace("internal error\n");
                         clearClient(dtlsCtx);
                         clientCount--;
                         break;
                     }
                     if (rc == MATRIXSSL_REQUEST_CLOSE)
                     {
-                        psTraceDtls("Got REQUEST_CLOSE out of SentData\n");
+                        _psTrace("Got REQUEST_CLOSE out of SentData\n");
                         clearClient(dtlsCtx);
                         clientCount--;
                         break;
@@ -1109,7 +1109,7 @@ static int32 handleResends(SOCKET sock)
                     if (rc == MATRIXSSL_HANDSHAKE_COMPLETE)
                     {
                         /* This is the standard handshake case */
-                        psTraceDtls("Got HANDSHAKE_COMPLETE out of SentData\n");
+                        _psTrace("Got HANDSHAKE_COMPLETE out of SentData\n");
                         break;
                     }
                     /* SSL_REQUEST_SEND is handled by loop logic */

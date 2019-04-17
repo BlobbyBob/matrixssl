@@ -88,7 +88,7 @@ static int g_use_psk;
 # endif
 
 # define ALLOW_ANON_CONNECTIONS  0
-# define CRL_MAX_LENGTH 1048576 /* Maximum length for CRL: 1 megabyte. */
+# define CRL_MAX_LENGTH 2097152 /* Maximum length for CRL: 2 megabytes. */
 
 /* #define REHANDSHAKE_TEST */
 #  ifdef REHANDSHAKE_TEST
@@ -191,6 +191,10 @@ static void fetchSavedCRL(psX509Cert_t *potentialIssuers);
 
 static void sslstatsPrintTime(const struct g_sslstats* stats, int conn_count);
 static void addTimeDiff(int64 *t, psTime_t t1, psTime_t t2);
+
+/* Not a public function, but needed for command-line backwards
+   compatibility. */
+extern int32_t psVerToFlag(psProtocolVersion_t ver);
 
 /******************************************************************************/
 /*
@@ -341,7 +345,8 @@ static int32 httpsClientConnection(sslKeys_t *keys, sslSessionId_t *sid,
         while (supportedVersion)
         {
             supportedVersions[i] = atoi((char* )supportedVersion->item);
-            supportedVersions[i] = DIGIT_TO_VER(supportedVersions[i]);
+            supportedVersions[i] = matrixSslVersionFromMinorDigit(
+                    supportedVersions[i]);
             supportedVersion = supportedVersion->next;
             i++;
         }
@@ -366,7 +371,8 @@ static int32 httpsClientConnection(sslKeys_t *keys, sslSessionId_t *sid,
     }
     else if (g_version != 0)
     {
-        options.versionFlag = psVerToFlag(DIGIT_TO_VER(g_version));
+        options.versionFlag = psVerToFlag(matrixSslVersionFromMinorDigit(
+                        g_version));
     }
 
     options.userPtr = keys;
@@ -466,6 +472,7 @@ WRITE_MORE:
         }
         else
         {
+            psTraceBytes("sent", buf, len);
             /* Indicate that we've written > 0 bytes of data */
             if ((rc = matrixSslSentData(ssl, transferred)) < 0)
             {
@@ -480,7 +487,8 @@ WRITE_MORE:
             {
                 Printf("TLS handshake complete.\n");
 
-                if (USING_TLS_1_3(ssl) && sid != NULL && g_resumed > 0)
+                if ((matrixSslGetNegotiatedVersion(ssl) & v_tls_1_3_any)
+                        && sid != NULL && g_resumed > 0)
                 {
                     /* Try to receive the server's NewSessionTicket. */
                     goto READ_MORE;
@@ -515,7 +523,7 @@ READ_MORE:
     }
     if (g_trace)
     {
-        psTraceBytes("RECV", buf, transferred);
+        //psTraceBytes("RECV", buf, transferred);
     }
     /*  If EOF, remote socket closed. But we haven't received the HTTP response
         so we consider it an error in the case of an HTTP client */
@@ -531,7 +539,7 @@ READ_MORE:
 # ifdef USE_EXT_CLIENT_CERT_KEY_LOADING
         if (rc == PS_PENDING && matrixSslNeedClientCert(ssl))
         {
-            sslIdentity_t *id, *next;
+            sslKeys_t *newKeys;
 
             psTrace("Loading client cert and key in response to " \
                     "CertificateRequest\n");
@@ -542,25 +550,25 @@ READ_MORE:
                On a typical application the 'identity' keys would not be
                shared with initial NewClient call, and the ps-pending
                driven/callback driven mechanisms */
-            for (id = ssl->keys->identity; id; id = next)
-            {
-                next = id->next;
-                if (id->cert)
-                    psX509FreeCert(id->cert);
-                psClearPubKey(&id->privKey);
-                psFree(id, ssl->keys->pool);
-            }
-            ssl->keys->identity = NULL;
+            matrixSslDeleteKeys(matrixSslGetKeys(ssl));
 
-            if (matrixSslLoadKeys(ssl->keys,
-                            g_on_demand_cert_file,
-                            g_on_demand_key_file,
-                            NULL, NULL, NULL) < 0)
+            /* Load the "on-demand" keys.  */
+            rc = matrixSslNewKeys(&newKeys, NULL);
+            if (rc < 0)
+            {
+                psTrace("matrixSslNewKeys failed\n");
+                exit(EXIT_FAILURE);
+            }
+            rc = matrixSslLoadKeys(newKeys,
+                    g_on_demand_cert_file,
+                    g_on_demand_key_file,
+                    NULL, NULL, NULL);
+            if (rc < 0)
             {
                 psTrace("matrixSslLoadKeys failed\n");
                 exit(EXIT_FAILURE);
             }
-            matrixSslSetClientIdentity(ssl, ssl->keys);
+            matrixSslSetClientIdentity(ssl, newKeys);
             (void)matrixSslClientCertUpdated(ssl);
 
             /* Retry now that we have the cert and the priv key. */
@@ -575,7 +583,7 @@ READ_MORE:
 # endif
 # ifdef USE_EXT_CERTIFICATE_VERIFY_SIGNING
 # endif  /* USE_EXT_CERTIFICATE_VERIFY_SIGNING */
-        if (ssl->hsState == SSL_HS_DONE)
+        if (matrixSslHandshakeIsComplete(ssl))
         {
             addTimeDiff(&stats->datatime, t1, t2);
         }
@@ -586,7 +594,7 @@ READ_MORE:
         goto L_CLOSE_ERR;
     }
     psGetTime(&t2, NULL);
-    if (ssl->hsState == SSL_HS_DONE)
+    if (matrixSslHandshakeIsComplete(ssl))
     {
         addTimeDiff(&stats->datatime, t1, t2);
     }
@@ -764,7 +772,7 @@ PROCESS_MORE:
         /* The second byte is the description */
         if (*buf == SSL_ALERT_LEVEL_FATAL)
         {
-            psTraceIntInfo("Fatal alert: %d, closing connection.\n",
+            psTraceInt("Fatal alert: %d, closing connection.\n",
                 *(buf + 1));
             goto L_CLOSE_ERR;
         }
@@ -780,7 +788,7 @@ PROCESS_MORE:
             cp.parsebuflen = 0;
             return MATRIXSSL_SUCCESS;
         }
-        psTraceIntInfo("Warning alert: %d\n", *(buf + 1));
+        psTraceInt("Warning alert: %d\n", *(buf + 1));
         if ((rc = matrixSslProcessedData(ssl, &buf, (uint32 *) &len)) == 0)
         {
             /* No more data in buffer. Might as well read for more. */
@@ -859,7 +867,7 @@ static int32 httpWriteRequest(ssl_t *ssl)
 
     if (g_trace)
     {
-        psTraceStr("SEND: [%s]\n", (char *) buf);
+        //psTraceStr("SEND: [%s]\n", (char *) buf);
     }
     if (matrixSslEncodeWritebuf(ssl, Strlen((char *) buf)) < 0)
     {
@@ -1223,8 +1231,8 @@ static int32 process_cmd_options(int32 argc, char **argv)
             /* Single version. */
             version = atoi(optarg);
             if (!matrixSslTlsVersionRangeSupported(
-                            DIGIT_TO_VER(version),
-                            DIGIT_TO_VER(version)))
+                            matrixSslVersionFromMinorDigit(version),
+                            matrixSslVersionFromMinorDigit(version)))
             {
                 Printf("Invalid version: %d\n", version);
                 return -1;
@@ -1276,8 +1284,10 @@ static int32 process_cmd_options(int32 argc, char **argv)
                             optarg);
                     return -1;
                 }
-                g_min_version = DIGIT_TO_VER(atoi((char *)versionRangeList->item));
-                g_max_version = DIGIT_TO_VER(atoi((char *)versionRangeList->next->item));
+                g_min_version = matrixSslVersionFromMinorDigit(
+                        atoi((char *)versionRangeList->item));
+                g_max_version = matrixSslVersionFromMinorDigit(
+                        atoi((char *)versionRangeList->next->item));
                 psFreeList(versionRangeList, NULL);
                 if (!matrixSslTlsVersionRangeSupported(
                                 g_min_version,
@@ -1444,10 +1454,6 @@ int32 main(int32 argc, char **argv)
     sslKeys_t *keys;
     sslSessionId_t *sid = NULL;
     struct g_sslstats stats;
-# if defined(USE_HEADER_KEYS) && !defined(ID_RSA)
-    const unsigned char *key_buf;
-    int32 key_buf_len;
-# endif /* USE_HEADER_KEYS && !ID_RSA */
 # ifdef WIN32
     WSADATA wsaData;
     WSAStartup(MAKEWORD(1, 1), &wsaData);
@@ -1512,8 +1518,8 @@ int32 main(int32 argc, char **argv)
         rc = matrixSslLoadTls13Psk(keys,
                 g_tls13_test_psk_256,
                 sizeof(g_tls13_test_psk_256),
-                g_tls13_test_psk_id,
-                sizeof(g_tls13_test_psk_id),
+                g_tls13_test_psk_id_sha256,
+                sizeof(g_tls13_test_psk_id_sha256),
                 NULL);
         if (rc < 0)
         {
@@ -1527,7 +1533,9 @@ int32 main(int32 argc, char **argv)
     /* One initialization step that can be taken is to run through the CA
         files and see if any CRL URL distribution points are present.
         Fetch the CRL and load into the cache if found */
-    fetchParseAndAuthCRLfromCert(NULL, keys->CAcerts, keys->CAcerts);
+    fetchParseAndAuthCRLfromCert(NULL,
+            sslKeysGetCACerts(keys),
+            sslKeysGetCACerts(keys));
 # endif
 
     Memset(&stats, 0x0, sizeof(struct g_sslstats));
@@ -1555,7 +1563,7 @@ int32 main(int32 argc, char **argv)
             will be available on this next connection attempt. */
         if (g_crlDistURLs[0][0] == 'h')   /* assumption is "http" */
         {
-            fetchSavedCRL(keys->CAcerts);
+            fetchSavedCRL(sslKeysGetCACerts(keys));
         }
 #  endif
 # endif
@@ -1810,7 +1818,7 @@ static int32 certCb(ssl_t *ssl, psX509Cert_t *cert, int32 alert)
     if (alert == SSL_ALERT_CERTIFICATE_UNKNOWN)
     {
         psTraceStr("ERROR: %s not found in cert subject names\n",
-            ssl->expectedName);
+                matrixSslGetExpectedName(ssl));
     }
 
     if (alert == SSL_ALERT_CERTIFICATE_EXPIRED)
@@ -1910,7 +1918,9 @@ RETRY_CRL_TEST_ONCE:
                     so it is correct that the server cert will look for the first
                     instance of CHECK_EXPECTED and pass that as the start of
                     chain to work upon */
-                fetchParseAndAuthCRLfromCert(NULL, next, ssl->keys->CAcerts);
+                fetchParseAndAuthCRLfromCert(NULL,
+                        next,
+                        sslKeysGetCACerts(matrixSslGetKeys(ssl)));
                 /* If all went well, every cert in the server chain will have an
                     updated status */
                 retryOnce++;

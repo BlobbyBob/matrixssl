@@ -61,6 +61,11 @@
 #define Sleep sleep
 #endif /* Sleep */
 
+/* Macro that provides Close, which is macro wrapper for close. */
+#ifndef Close
+#define Close close
+#endif /* Close */
+
 #endif /* system that usually has unistd.h. */
 
 #endif /* OSDEP_UNISTD_H_DEFINED */
