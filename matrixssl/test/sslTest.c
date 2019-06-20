@@ -293,6 +293,14 @@ static char clnEcRsaKeyFile[] = "../../testkeys/ECDH_RSA/521_ECDH-RSA_KEY.pem";
 static char clnEcRsaCertFile[] = "../../testkeys/ECDH_RSA/521_ECDH-RSA.pem";
 static char clnEcRsaCAfile[] = "../../testkeys/ECDH_RSA/ALL_ECDH-RSA_CAS.pem";
 #   endif /* USE_ECC */
+#   ifdef USE_ED25519
+static char svrEd25519KeyFile[] = "../../testkeys/EC/ED25519_KEY.pem";
+static char svrEd25519CertFile[] = "../../testkeys/EC/ED25519.pem";
+static char svrEd25519CAfile[] = "../../testkeys/EC/ED25519_CA.pem";
+static char clnEd25519KeyFile[] = "../../testkeys/EC/ED25519_KEY.pem";
+static char clnEd25519CertFile[] = "../../testkeys/EC/ED25519.pem";
+static char clnEd25519CAfile[] = "../../testkeys/EC/ED25519_CA.pem";
+#   endif
 #   ifdef REQUIRE_DH_PARAMS
 static char dhParamFile[] = "../../testkeys/DH/3072_DH_PARAMS.pem";
 #   endif /* REQUIRE_DH_PARAMS */
@@ -341,6 +349,12 @@ static __THREAD uint32_t ECCKEY_SIZE, ECC_SIZE, ECCCA_SIZE;
 #   include "testkeys/ECDH_RSA/521_ECDH-RSA.h"
 #   include "testkeys/ECDH_RSA/ALL_ECDH-RSA_CAS.h"
 #  endif /* USE_ECC */
+
+#  ifdef USE_ED25519
+#   include "testkeys/EC/ED25519_KEY.h"
+#   include "testkeys/EC/ED25519.h"
+#   include "testkeys/EC/ED25519_CA.h"
+#  endif /* USE_ED25519 */
 
 #  ifdef REQUIRE_DH_PARAMS
 #   include "testkeys/DH/1024_DH_PARAMS.h"
@@ -449,6 +463,7 @@ static int32 svrCertChecker(ssl_t *ssl, psX509Cert_t *cert, int32 alert);
 enum {
     TLS13_RSA = 1,
     TLS13_ECC,
+    TLS13_ED25519,
     TLS13_PSK
    };
 static __THREAD uint32_t g_versionFlag = 0;
@@ -902,7 +917,7 @@ int main(int argc, char **argv)
     }
 
 #ifdef USE_DTLS
-    matrixDtlsSetPmtu(1350);
+    matrixDtlsSetPmtu(1400);
 #endif
     if (num_threads > 1)
     {
@@ -1389,7 +1404,7 @@ int32_t setSigAlgs(sslSessOpts_t *sessOpts)
     };
 
     uint16_t *list = NULL, *listCert;
-    psSize_t listLen, listCertLen;
+    psSize_t listLen = 0, listCertLen;
     int32_t rc;
     psBool_t tls13 = PS_FALSE;
 
@@ -2820,10 +2835,6 @@ again:
         if (frags[i - 1] == NULL)
             continue;
 
-# if (defined(USE_EXT_CERTIFICATE_VERIFY_SIGNING) && defined(USE_EXT_EXAMPLE_MODULE)) || \
-    defined(USE_EXT_CLIENT_CERT_KEY_LOADING)
-    retry:
-# endif
         for (off = 0; off < frag_lens[i - 1]; off += dataSent)
         {
             TIMED(receivingSide, {
@@ -2832,6 +2843,11 @@ again:
 
             dataSent = PS_MIN((frag_lens[i - 1] - off), inbufLen);
             Memcpy(inbuf, frags[i - 1] + off, dataSent);
+# if (defined(USE_EXT_CERTIFICATE_VERIFY_SIGNING) && \
+      defined(USE_EXT_EXAMPLE_MODULE)) || \
+      defined(USE_EXT_CLIENT_CERT_KEY_LOADING)
+    retry:
+# endif
             TIMED(receivingSide, {
                     rc = matrixSslReceivedData(receivingSide->ssl,
                                                dataSent, &plaintextBuf, &ptLen);
@@ -2850,6 +2866,19 @@ again:
                 };
 # endif
 
+# if defined(USE_EXT_CERTIFICATE_VERIFY_SIGNING) && \
+     defined(USE_EXT_EXAMPLE_MODULE)
+                if (matrixSslNeedCvSignature(receivingSide->ssl))
+                {
+                    rc = compute_external_cv_signature(receivingSide->ssl);
+                    if (rc != PS_SUCCESS)
+                    {
+                        freefrags(nfrags, frags);
+                        return PS_FAILURE;
+                    }
+                goto retry;
+                }
+#  endif
                 psAssert(false);
                 break;
 
@@ -3644,6 +3673,56 @@ static int32 initializeClient(sslConn_t *conn, psCipher16_t cipherSuite,
  */
 #ifdef USE_TLS_1_3
 
+static
+psBool_t testTls13AuthAlgorithm(uint8_t alg)
+{
+    switch (alg)
+    {
+# ifdef USE_RSA
+    case TLS13_RSA:
+        if (Getenv("USE_TLS13_AUTH_ALG_LIST")
+                && !Getenv("TLS13_RSA"))
+        {
+            return PS_FALSE;
+        }
+        return PS_TRUE;
+# endif
+# ifdef USE_ECC
+    case TLS13_ECC:
+        if (Getenv("USE_TLS13_AUTH_ALG_LIST")
+                && !Getenv("TLS13_ECC"))
+        {
+            return PS_FALSE;
+        }
+        return PS_TRUE;
+# endif
+# ifdef USE_ED25519
+    case TLS13_ED25519:
+        if (Getenv("USE_TLS13_AUTH_ALG_LIST")
+                && !Getenv("TLS13_ED25519"))
+        {
+            return PS_FALSE;
+        }
+        if (!psIsSigAlgSupported(sigalg_ed25519, 0))
+        {
+            return PS_FALSE;
+        }
+        return PS_TRUE;
+# endif
+    case TLS13_PSK:
+        if (Getenv("USE_TLS13_AUTH_ALG_LIST")
+                && !Getenv("TLS13_PSK"))
+        {
+            return PS_FALSE;
+        }
+        return PS_TRUE;
+    default:
+        return PS_FALSE;
+    }
+
+    return PS_FALSE;
+}
+
 int tls13sslTest(void)
 {
     sslConn_t *svrConn, *clnConn;
@@ -3690,7 +3769,7 @@ int tls13sslTest(void)
             continue;
         }
         keysize = authsize = 0;
-        for (algorithmIdx = 0; algorithmIdx < 3; algorithmIdx++)
+        for (algorithmIdx = 0; algorithmIdx < 4; algorithmIdx++)
         {
             switch (algorithmIdx)
             {
@@ -3703,16 +3782,19 @@ int tls13sslTest(void)
                 algorithm = TLS13_ECC;
                 break;
             case 2:
+                keysize = authsize = 256;
+                algorithm = TLS13_ED25519;
+                break;
+            case 3:
                 algorithm = TLS13_PSK;
                 break;
             }
 
-# ifndef USE_RSA
-            if (algorithm == TLS13_RSA)
+            if (!testTls13AuthAlgorithm(algorithm))
             {
                 continue;
             }
-# endif
+
             matrixSslNewSessionId(&clientSessionId, NULL);
             testPrintStr("Testing %s TLS 1.3 ", (char *) ciphers[id].name);
             if (algorithm != TLS13_PSK)
@@ -3949,6 +4031,44 @@ static int32 tls13InitializeServer(sslConn_t *conn, psCipher16_t cipherSuite, ui
 #  endif
 # endif
 
+# ifdef USE_ED25519
+#  ifndef USE_ONLY_PSK_CIPHER_SUITE
+        if (algorithm == TLS13_ED25519)
+        {
+            matrixSslLoadKeysOpts_t opts;
+
+            Memset(&opts, 0, sizeof(opts));
+            opts.key_type = PS_ED25519;
+
+#  ifdef USE_HEADER_KEYS
+            rc = matrixSslLoadKeysMem(keys,
+                    ED25519,
+                    ED25519_SIZE,
+                    ED25519_KEY,
+                    ED25519_KEY_SIZE,
+                    ED25519CA,
+                    ED25519CA_SIZE,
+                    &opts);
+            if (rc < 0)
+            {
+                return PS_FAILURE;
+            }
+#  else
+            rc = matrixSslLoadKeys(keys,
+                    svrEd25519CertFile,
+                    svrEd25519KeyFile,
+                    NULL,
+                    clnEd25519CAfile,
+                    &opts);
+            if (rc < 0)
+            {
+                return PS_FAILURE;
+            }
+#  endif
+        }
+#  endif
+# endif
+
 # ifdef USE_RSA
 #  ifndef USE_ONLY_PSK_CIPHER_SUITE
         if (algorithm == TLS13_RSA)
@@ -4142,6 +4262,44 @@ static int32 tls13InitializeClient(sslConn_t *conn, psCipher16_t cipherSuite,
         }
 #  endif   /* USE_ONLY_PSK_CIPHER_SUITE */
 # endif    /* USE_ECC */
+
+# ifdef USE_ED25519
+#  ifndef USE_ONLY_PSK_CIPHER_SUITE
+        if (algorithm == TLS13_ED25519)
+        {
+            matrixSslLoadKeysOpts_t opts;
+
+            Memset(&opts, 0, sizeof(opts));
+            opts.key_type = PS_ED25519;
+
+#  ifdef USE_HEADER_KEYS
+            rc = matrixSslLoadKeysMem(keys,
+                    ED25519,
+                    ED25519_SIZE,
+                    ED25519_KEY,
+                    ED25519_KEY_SIZE,
+                    ED25519CA,
+                    ED25519CA_SIZE,
+                    &opts);
+            if (rc < 0)
+            {
+                return PS_FAILURE;
+            }
+#  else
+            rc = matrixSslLoadKeys(keys,
+                    clnEd25519CertFile,
+                    clnEd25519KeyFile,
+                    NULL,
+                    svrEd25519CAfile,
+                    &opts);
+            if (rc < 0)
+            {
+                return PS_FAILURE;
+            }
+#  endif
+        }
+#  endif
+# endif
 
 # ifdef USE_RSA
 #  ifndef USE_ONLY_PSK_CIPHER_SUITE

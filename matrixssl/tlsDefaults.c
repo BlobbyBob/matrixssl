@@ -133,7 +133,7 @@ int32 getDefaultSigAlgs(ssl_t *ssl)
     {
         while (tls12SigAlgs[i] != 0)
         {
-            if (psIsSigAlgSupported(tls12SigAlgs[i]))
+            if (psIsSigAlgSupported(tls12SigAlgs[i], 0))
             {
                 if (j >= TLS_MAX_SIGNATURE_ALGORITHMS)
                 {
@@ -152,7 +152,7 @@ int32 getDefaultSigAlgs(ssl_t *ssl)
     {
         while (tls13SigAlgs[i] != 0)
         {
-            if (psIsSigAlgSupported(tls13SigAlgs[i]))
+            if (psIsSigAlgSupported(tls13SigAlgs[i], 0))
             {
                 if (j >= TLS_MAX_SIGNATURE_ALGORITHMS)
                 {
@@ -171,7 +171,7 @@ int32 getDefaultSigAlgs(ssl_t *ssl)
     {
         while (allSigAlgs[i] != 0)
         {
-            if (psIsSigAlgSupported(allSigAlgs[i]))
+            if (psIsSigAlgSupported(allSigAlgs[i], 0))
             {
                 if (j >= TLS_MAX_SIGNATURE_ALGORITHMS)
                 {
@@ -202,7 +202,7 @@ int32 tls13GetDefaultSigAlgsCert(ssl_t *ssl)
     psSize_t i = 0,j = 0;
     while (allSigAlgs[i] != 0)
     {
-        if (psIsSigAlgSupported(allSigAlgs[i]))
+        if (psIsSigAlgSupported(allSigAlgs[i], 0))
         {
             if (j >= TLS_MAX_SIGNATURE_ALGORITHMS)
             {

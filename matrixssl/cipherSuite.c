@@ -2582,20 +2582,36 @@ chooseCS(ssl_t *ssl, uint32_t *suites, psSize_t nsuites)
           When using TLS 1.3, just pick the first supported TLS 1.3 suite from
           the client's list. No need to check against key material.*/
 # ifdef USE_TLS_1_3
-        if (NGTD_VER(ssl, v_tls_1_3_any) && spec->type == CS_TLS13)
+        if (NGTD_VER(ssl, v_tls_1_3_any))
         {
-            ssl->cipher = spec;
+            if (spec->type == CS_TLS13)
+            {
+                ssl->cipher = spec;
 #  ifdef USE_IDENTITY_CERTIFICATES
-            ssl->chosenIdentity = ssl->keys->identity;
+                ssl->chosenIdentity = ssl->keys->identity;
 #  endif
-            goto out_ok;
+                goto out_ok;
+            }
+            else
+            {
+                /* Ignore non-1.3 suites if 1.3 has been negotiated. */
+                continue;
+            }
+        }
+        else
+        {
+            /* Ignore 1.3 suites if 1.2 or below has been negotiated. */
+            if (spec->type == CS_TLS13)
+            {
+                continue;
+            }
         }
 # endif /* USE_TLS_1_3 */
 
         reqSigType = getKeyTypeFromCipherType(spec->type, &needDh, &isEc);
         if (!sniUsed)
         {
-# ifndef USE_ONLY_PSK_CIPHER_SUITE
+# if !defined(USE_ONLY_PSK_CIPHER_SUITE) && !defined(USE_TLS_1_3_ONLY)
             if (ssl->sec.pubkeyCb != NULL)
             {
                 /* Check if the pubKeyCb has keys for this suite/server */
@@ -2748,7 +2764,9 @@ out_ok:
             ssl->cipher->ident, PS_TRUE);
     return PS_SUCCESS;
 }
+# endif /* USE_SERVER_SIDE */
 
+# ifdef USE_SERVER_SIDE_SSL
 int32 chooseCipherSuite(ssl_t *ssl, unsigned char *listStart, int32 listLen)
 {
     unsigned char *c = listStart;
@@ -2785,7 +2803,7 @@ int32 chooseCipherSuite(ssl_t *ssl, unsigned char *listStart, int32 listLen)
     psFree(suites, ssl->hsPool);
     return rc;
 }
-# endif /* USE_SERVER_SIDE */
+# endif /* USE_SERVER_SIDE_SSL */
 
 
 #ifndef USE_ONLY_PSK_CIPHER_SUITE

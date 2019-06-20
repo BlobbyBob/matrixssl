@@ -9,6 +9,37 @@
 </head>
 <body>
 <h1 id="matrixssl-4.x-changelog">MatrixSSL 4.x changelog</h1>
+<h2 id="changes-between-4.2.0-and-4.2.1-june-2019">Changes between 4.2.0 and 4.2.1 [June 2019]</h2>
+<p>This version fixes an out of bounds read in ASN.1 handling found by Tyler Nighswander (ForAllSecure).</p>
+<h2 id="changes-between-4.1.0-and-4.2.0-may-2019">Changes between 4.1.0 and 4.2.0 [May 2019]</h2>
+<p>This version adds a compile-time option that allows TLS 1.3 only builds, adds new getter APIs and fixes several bugs.</p>
+<ul>
+<li><p>TLS:</p>
+<ul>
+<li><p>Allow TLS 1.3 only builds by introducing the USE_TLS_1_3_ONLY compile-time option. This significantly reduces the minimum code footprint of TLS 1.3 builds. The example configuration tls13-minimal makes use of the new compile-time option.</p></li>
+<li><p>Add the matrixSslGetUserPtr API. This getter API should be used instead of raw access to ssl-&gt;userPtr.</p></li>
+<li><p>Added the matrixSslGetNegotiatedCiphersuite and matrixSslGetActiveCiphersuite APIs.</p></li>
+<li><p>Added the matrixSslGetMasterSecret API. This API requires the ENABLE_MASTER_SECRET_EXPORT compile-time option, which is disabled by default.</p></li>
+<li><p>Completely remove support for TLS record compression (unifdef USE_ZLIB_COMPRESSION). TLS record compression is almost never used in practice due to serious vulnerabilities associated with the feature (see e.g. the CRIME attack).</p></li>
+<li><p>Fixed a bug where decrypting an alert in TLS 1.3 could cause matrixSslProcessed data to erroneously indicate that there is more application data to process.</p></li>
+<li><p>Allow storing the unparsed certificate DER octets (in the unparsedBin member of psX509Cert_t) even in TLS 1.3.</p></li>
+<li><p>Fix segfault when receiving a server certificate without the commonName component.</p></li>
+<li><p>Fixed handshake failure with some clients that attempted to use a TLS 1.2 session ticket in a TLS 1.3 connection.</p></li>
+<li><p>Fix build error with the USE_EXT_CERTIFICATE_VERIFY_SIGNING compile-time option.</p></li>
+<li><p>Fix sslTest failure when using the USE_EXT_CERTIFICATE_VERIFY_SIGNING compile-time option.</p></li>
+<li><p>Fix a bug that caused the server to sometimes select a TLS 1.3 ciphersuite even when TLS 1.2 or below had been negotiated.</p></li>
+<li><p>Add Ed25519 test keys and certificates.</p></li>
+<li><p>Add Ed25519 testing to sslTest. (Note that Ed25519 is only supported in TLS 1.3.)</p></li>
+</ul></li>
+<li><p>Crypto:</p>
+<ul>
+<li><p>(FIPS Edition only): Fix a bug that prevented verification of RSA-SHA-1 signatures in FIPS mode. FIPS 140-2 allows verification of SHA-1 based signatures, but forbids generating such signatures.</p></li>
+<li><p>Store the order of DN attributes in certificate subject and issuer fields.</p></li>
+<li><p>Add an option to the psX509GetOnelineDN API that allows printing the DN attributes in the original order they were encoded in the parsed certificate.</p></li>
+<li><p>Fix parsing of Ed25519 certificates.</p></li>
+<li><p>Fix parsing of ECDSA-SHA224 certificates.</p></li>
+</ul></li>
+</ul>
 <h2 id="changes-between-4.0.2-and-4.1.0-april-2019">Changes between 4.0.2 and 4.1.0 [April 2019]</h2>
 <ul>
 <li><p>TLS:</p>

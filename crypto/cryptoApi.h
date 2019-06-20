@@ -1188,9 +1188,12 @@ PSPUBLIC psResSize_t psGetOutputBlockLength(psCipherType_e alg);
 PSPUBLIC psResSize_t psSigAlgToHashLen(int32_t sigAlg);
 /** Return the length of hash used in an RSASSA-PSS signature algorithm. */
 PSPUBLIC psResSize_t psPssHashAlgToHashLen(int32_t pssHashAlg);
+/** Flags to psIsSigAlgSupported. */
+# define PS_SIG_ALG_FLAG_VERIFY 1 /* This is a verify operation. */
 /** Return PS_TRUE if the given sigAlg is supported by the
     compile-time config. */
-PSPUBLIC psBool_t psIsSigAlgSupported(uint16_t sigAlg);
+PSPUBLIC psBool_t psIsSigAlgSupported(uint16_t sigAlg,
+            uint32_t flags);
 /** Return PS_TRUE if sigAlg is deemed insecure.
     Return PS_FALSE otherwise. */
 PSPUBLIC psBool_t psIsInsecureSigAlg(int32_t sigAlg,

@@ -5,7 +5,7 @@
  *      Functions for decoding TLS 1.3 extensions
  */
 /*
- *      Copyright (c) 2013-2018 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2019 INSIDE Secure Corporation
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -187,7 +187,9 @@ int32_t tls13ParseStatusRequest(ssl_t *ssl,
           } CertificateStatus;
         */
 
-        if (ssl->keys == NULL || ssl->keys->CAcerts == NULL || ssl->sec.cert == NULL)
+        if (ssl->keys == NULL
+                || ssl->keys->CAcerts == NULL
+                || ssl->sec.cert == NULL)
         {
             goto out_illegal_parameter;
         }
@@ -270,7 +272,8 @@ out_bad_certificate_status_response:
 */
 int32_t tls13ParseSingleExtension(ssl_t *ssl,
         psParseBuf_t *extBuf,
-        unsigned char hsMsgType)
+        unsigned char hsMsgType,
+        psBool_t allowStateChange)
 {
     psParseBuf_t extDataBuf;
     psSizeL_t extDataLen;
@@ -318,10 +321,23 @@ int32_t tls13ParseSingleExtension(ssl_t *ssl,
             extDataLen);
 # endif
 
+    if (extType != EXT_SUPPORTED_VERSIONS && !allowStateChange)
+    {
+        /* If we are not allowed to change state, ignore the extension
+           data, unless it's supported_versions, which we want to
+           check for version negotiation purposes. */
+        rc = psParseTryForward(&extDataBuf, extDataLen);
+        if (rc < 0)
+        {
+            return rc;
+        }
+        goto skip_parse;
+    }
+
     switch (extType)
     {
-    case EXT_EARLY_DATA:
-        rc = tls13ParseEarlyData(ssl, &extDataBuf, &maxEarlyData);
+    case EXT_SERVER_NAME:
+        rc = tls13ParseServerName(ssl, &extDataBuf);
         if (rc < 0)
         {
             return rc;
@@ -336,10 +352,85 @@ int32_t tls13ParseSingleExtension(ssl_t *ssl,
         }
         break;
 # endif
+# ifdef USE_SERVER_SIDE_SSL
+#  if defined(USE_TLS_1_2) || defined(USE_TLS_1_3)
+#   ifdef USE_ECC_CIPHER_SUITE
+    case EXT_SUPPORTED_GROUPS:
+        rc = tlsParseSupportedGroups(ssl,
+                (const unsigned char *)extDataBuf.buf.start,
+                extDataLen);
+        if (rc < 0)
+        {
+            return rc;
+        }
+        break;
+#   endif
+#  endif
+# endif
+    case EXT_SIGNATURE_ALGORITHMS:
+    case EXT_SIGNATURE_ALGORITHMS_CERT:
+        rc = tls13ParseSignatureAlgorithms(ssl,
+                (const unsigned char **)&extDataBuf.buf.start,
+                extDataLen,
+                (hsMsgType == SSL_HS_CERTIFICATE) ? PS_TRUE : PS_FALSE);
+        if (rc < 0)
+        {
+            return rc;
+        }
+        break;
+    case EXT_PRE_SHARED_KEY:
+        rc = tls13ParsePreSharedKey(ssl, &extDataBuf);
+        if (rc < 0)
+        {
+            return rc;
+        }
+        break;
+    case EXT_EARLY_DATA:
+        rc = tls13ParseEarlyData(ssl, &extDataBuf, &maxEarlyData);
+        if (rc < 0)
+        {
+            return rc;
+        }
+        break;
+    case EXT_SUPPORTED_VERSIONS:
+        rc = tls13ParseSupportedVersions(ssl,
+                (const unsigned char **)&extDataBuf.buf.start,
+                extDataLen);
+        if (rc < 0)
+        {
+            return rc;
+        }
+        break;
+    case EXT_COOKIE:
+        rc = tls13ParseCookie(ssl, &extDataBuf);
+        if (rc < 0)
+        {
+            return rc;
+        }
+        break;
+    case EXT_PSK_KEY_EXCHANGE_MODES:
+        rc = tls13ParsePskKeyExchangeModes(ssl, &extDataBuf);
+        if (rc < 0)
+        {
+            return rc;
+        }
+        break;
+# ifndef USE_ONLY_PSK_CIPHER_SUITE
+    case EXT_KEY_SHARE:
+        rc = tls13ParseKeyShare(ssl,
+                &extDataBuf,
+                allowStateChange);
+        if (rc < 0)
+        {
+            return rc;
+        }
+        break;
+# endif /* USE_ONLY_PSK_CIPHER_SUITE */
     default:
         psTraceIntInfo("Ignoring unknown extension: %hu\n", extType);
     }
 
+skip_parse:
     return PS_SUCCESS;
 
 out_decode_error:
@@ -358,7 +449,8 @@ out_illegal_parameter:
 */
 int32_t tls13ParseExtensions(ssl_t *ssl,
         psParseBuf_t *pb,
-        unsigned char hsMsgType)
+        unsigned char hsMsgType,
+        psBool_t allowStateChange)
 {
     psParseBuf_t extBuf;
     psSizeL_t extensionsLen;
@@ -381,7 +473,10 @@ int32_t tls13ParseExtensions(ssl_t *ssl,
     */
     while (psParseCanRead(&extBuf, 4))
     {
-        rc = tls13ParseSingleExtension(ssl, &extBuf, hsMsgType);
+        rc = tls13ParseSingleExtension(ssl,
+                &extBuf,
+                hsMsgType,
+                allowStateChange);
         if (rc < 0)
         {
             return rc;
@@ -452,6 +547,11 @@ psSize_t tls13ParseSupportedVersions(ssl_t *ssl,
         {
             ADD_PEER_SUPP_VER(ssl, ver);
             ADD_PEER_SUPP_VER_PRIORITY(ssl, ver);
+            psTracePrintProtocolVersion(INDENT_EXTENSION,
+                    NULL,
+                    majVer,
+                    minVer,
+                    1);
         }
         i++;
 
@@ -613,6 +713,166 @@ out_illegal_parameter:
     ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
     return MATRIXSSL_ERROR;
 }
+
+int32_t tls13ParseKeyShare(ssl_t *ssl,
+        psParseBuf_t *pb,
+        psBool_t allowStateChange)
+{
+    int32_t rc;
+    const unsigned char *c = pb->buf.start;
+    psSize_t extLen = pb->buf.end - pb->buf.start;
+
+    psTracePrintExtensionParse(ssl, EXT_KEY_SHARE);
+
+    /*
+      enum {
+      unallocated_RESERVED(0x0000),
+
+      // Elliptic Curve Groups (ECDHE)
+      obsolete_RESERVED(0x0001..0x0016),
+      secp256r1(0x0017), secp384r1(0x0018), secp521r1(0x0019),
+      obsolete_RESERVED(0x001A..0x001C),
+      x25519(0x001D), x448(0x001E),
+
+      // Finite Field Groups (DHE)
+      ffdhe2048(0x0100), ffdhe3072(0x0101), ffdhe4096(0x0102),
+      ffdhe6144(0x0103), ffdhe8192(0x0104),
+
+      // Reserved Code Points
+      ffdhe_private_use(0x01FC..0x01FF),
+      ecdhe_private_use(0xFE00..0xFEFF),
+      obsolete_RESERVED(0xFF01..0xFF02),
+      (0xFFFF)
+      } NamedGroup;
+
+      struct {
+      NamedGroup group;
+      opaque key_exchange<1..2^16-1>;
+      } KeyShareEntry;
+
+      struct {
+      KeyShareEntry client_shares<0..2^16-1>;
+      } KeyShareClientHello;
+    */
+
+    /*
+      Minimum length: 7 ==
+      2 (client_shares length)
+      + 2 (NamedGroup)
+      + 2 (key_exchange length)
+      + 1 (min bytes in key_exchange data)
+    */
+    if (extLen < 7)
+    {
+        psTraceErrr("Malformed key_share extension\n");
+        ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
+        return MATRIXSSL_ERROR;
+    }
+    else
+    {
+        /* KeyShareEntry client_shares<0..2^16-1>; */
+        psSizeL_t clientSharesLen = 0;
+        psBool_t importedPeerPubValue = PS_FALSE;
+        psSize_t n = psParseTlsVariableLengthVec(c, c + extLen,
+                0, (1 << 16) - 1,
+                &clientSharesLen);
+
+        psTraceIndent(INDENT_EXTENSION,
+                "Groups in ClientHello.key_share:\n");
+
+        if (n <= 0 || clientSharesLen < 1)
+        {
+            psTraceErrr("Malformed key_share extension\n");
+            ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
+            return MATRIXSSL_ERROR;
+        }
+        c += n;
+        extLen -= n;
+
+        while (clientSharesLen > 0)
+        {
+            psSizeL_t keyExchangeLen = 0;
+            psSize_t n;
+            psBool_t foundSupportedCurve = PS_FALSE;
+            unsigned short groupName;
+
+            /* 2-byte NamedGroup ID */
+            if (extLen < 2)
+            {
+                psTraceErrr("Malformed key_share extension\n");
+                ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
+                return MATRIXSSL_ERROR;
+            }
+            groupName = *c << 8; c++;
+            groupName += *c; c++;
+            extLen -= 2;
+            clientSharesLen -= 2;
+
+            psTracePrintTls13NamedGroup(INDENT_EXTENSION + 1,
+                    NULL, groupName, PS_TRUE);
+            if (tls13AddPeerKeyShareGroup(ssl, groupName) < 0)
+            {
+                ssl->err = SSL_ALERT_INTERNAL_ERROR;
+                return MATRIXSSL_ERROR;
+            }
+            if (tls13WeSupportGroup(ssl, groupName))
+            {
+                psTracePrintTls13NamedGroup(INDENT_NEGOTIATED_PARAM,
+                        "Found supported group",
+                        groupName,
+                        PS_TRUE);
+                foundSupportedCurve = PS_TRUE;
+            }
+
+            /* opaque key_exchange<1..2^16-1>; */
+            n = psParseTlsVariableLengthVec(c, c + extLen,
+                    1, (1 << 16) - 1,
+                    &keyExchangeLen);
+            if (n <= 0 || keyExchangeLen < 1)
+            {
+                psTraceErrr("Malformed key_share extension\n");
+                ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
+                return MATRIXSSL_ERROR;
+            }
+
+            c += n;
+            extLen -= n;
+            clientSharesLen -= n;
+
+            /* Import the first public value that we can support. */
+            if (foundSupportedCurve && !importedPeerPubValue)
+            {
+                if (allowStateChange)
+                {
+                    rc = tls13ImportPublicValue(ssl,
+                            c,
+                            keyExchangeLen,
+                            groupName);
+                    if (rc < 0)
+                    {
+                        return rc;
+                    }
+                }
+
+                /* We will still iterate over the rest of the entries,
+                   but will not try to import another public value. */
+                importedPeerPubValue = PS_TRUE;
+                ssl->tls13NegotiatedGroup = groupName;
+            }
+
+            c += keyExchangeLen;
+            extLen -= keyExchangeLen;
+            clientSharesLen -= keyExchangeLen;
+        }
+    }
+
+    if (allowStateChange)
+    {
+        ssl->extFlags.got_key_share = 1;
+    }
+
+    return MATRIXSSL_SUCCESS;
+}
 # endif /* USE_ONLY_PSK_CIPHER_SUITE */
 
 static
@@ -710,8 +970,8 @@ int32_t tls13VerifyBinder(ssl_t *ssl,
 # ifdef DEBUG_TLS_1_3_DECODE_EXTENSIONS
     psTraceBytes("binder key", binderKey, binderKeyLen);
     psTraceBytes("snapshot hs hash",
-            ssl->sec.tls13TrHashSnapshotCHWithoutBinders, hmacLen);
-
+            ssl->sec.tls13TrHashSnapshotCHWithoutBinders,
+            hmacLen);
 # endif
 
     /*
@@ -766,6 +1026,7 @@ psBool_t tls13ServerFoundSupportedPsk(ssl_t *ssl,
 {
     psProtocolVersion_t pskVer;
     uint8_t majVer, minVer;
+    const sslCipherSpec_t *cipher;
 
     (void)pskVer;
 
@@ -788,12 +1049,19 @@ psBool_t tls13ServerFoundSupportedPsk(ssl_t *ssl,
         }
         pskVer = psVerFromEncodingMajMin(majVer, minVer);
 
-        ssl->cipher = sslGetCipherSpec(ssl, psk->params->cipherId);
-        if (ssl->cipher == NULL)
+        /* If the PSK is associated with a ciphersuite, take that
+           suite into use. Otherwise, use whathever we may have
+           negotiated. */
+        cipher = sslGetCipherSpec(ssl, psk->params->cipherId);
+        if (cipher == NULL)
         {
             psTraceInfo("Error: PSK is associated with an unsupported " \
                     "ciphersuite\n");
             return PS_FALSE;
+        }
+        else if (cipher->ident != SSL_NULL_WITH_NULL_NULL)
+        {
+            ssl->cipher = cipher;
         }
         psTracePrintProtocolVersionNew(INDENT_EXTENSION,
                 "PSK is associated with protocol version",
@@ -801,7 +1069,7 @@ psBool_t tls13ServerFoundSupportedPsk(ssl_t *ssl,
                 PS_TRUE);
         psTracePrintCiphersuiteName(INDENT_EXTENSION,
                     "PSK is associated with ciphersuite",
-                    ssl->cipher->ident,
+                    cipher->ident,
                     PS_TRUE);
     }
 # ifdef DEBUG_TLS_1_3_DECODE_EXTENSIONS
@@ -892,13 +1160,31 @@ int32_t tls13ParsePreSharedKey(ssl_t *ssl,
                 goto out_decode_error;
             }
 
+            psTracePrintPskIdentity(INDENT_EXTENSION,
+                    "psk_identity",
+                    idBuf.buf.start,
+                    identityLen,
+                    ssl,
+                    PS_TRUE);
+
             if (!foundPsk)
             {
+                /*
+                  Check whether the PSK is negotiable, i.e. that we
+                  recognize (i.e. have) it and it is compatible with the
+                  ciphersuite.
+
+                  The ciphersuite has been negotiated already, we can follow
+                  the RFC 8446 recommendation (4.2.11) and exclude any
+                  non-compatible PSKs.
+                */
                 psk = NULL;
                 rc = tls13FindSessionPsk(ssl,
                         idBuf.buf.start, identityLen,
                         &psk);
-                if (rc == PS_SUCCESS && psk != NULL)
+                if (rc == PS_SUCCESS && psk != NULL &&
+                    tls13GetPskHmacAlg(psk) ==
+                        tls13CipherIdToHmacAlg(ssl->cipher->ident))
                 {
                     foundPsk = tls13ServerFoundSupportedPsk(ssl, psk, ix);
                 }
@@ -1200,6 +1486,7 @@ int32_t tls13ParseCookie(ssl_t *ssl,
             goto out_internal_error;
         }
         psAssert(copiedLen == cookieLen);
+        (void)copiedLen;
         ssl->sec.tls13CookieFromServerLen = cookieLen;
     }
 
@@ -1219,38 +1506,136 @@ out_unsupported_extension:
     return MATRIXSSL_ERROR;
 }
 
-static
 int32_t tls13ParseServerName(ssl_t *ssl,
         psParseBuf_t *pb)
 {
-    /*
-      Only handling the client-side case (i.e. parsing the server's
-      server_name extension sent in EncryptedExtensions.)
-      TLS <1.3 code path handles the ClientHello extension.
-    */
-    psAssert(!MATRIX_IS_SERVER(ssl));
-    psTracePrintExtensionParse(ssl, EXT_SERVER_NAME);
-# ifdef USE_CLIENT_SIDE_SSL
-    /* Solicited or not? */
-    if (ssl->extFlags.req_sni == 0)
-    {
-        psTraceErrr("Server sent unsolicited server_name extension\n");
-        ssl->err = SSL_ALERT_UNSUPPORTED_EXTENSION;
-        return MATRIXSSL_ERROR;
-    }
-
-    /* Only an empty server_name is allowed from the server. */
-    if (psParseCanRead(pb, 1))
-    {
-        ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
-        return PS_PARSE_FAIL;
-    }
-
-    psTraceInfo("Received empty server_name in EncryptedExtensions\n");
-# else
-    return MATRIXSSL_ERROR;
+# ifdef USE_SERVER_SIDE_SSL
+    int32_t rc;
+    psSizeL_t serverNameListLen, hostNameLen;
+    unsigned char nameType = 0;
+    size_t copiedLen;
 # endif
-    return PS_SUCCESS;
+
+    psTracePrintExtensionParse(ssl, EXT_SERVER_NAME);
+
+    /*
+      struct {
+          NameType name_type;
+          select (name_type) {
+              case host_name: HostName;
+          } name;
+      } ServerName;
+
+      enum {
+          host_name(0), (255)
+      } NameType;
+
+      opaque HostName<1..2^16-1>;
+
+      struct {
+          ServerName server_name_list<1..2^16-1>
+      } ServerNameList;
+    */
+
+# ifdef USE_SERVER_SIDE_SSL
+    if (MATRIX_IS_SERVER(ssl))
+    {
+        /* ServerName server_name_list<1..2^16-1> */
+        rc = psParseBufParseTlsVector(pb,
+                1, (1 << 16) - 1,
+                &serverNameListLen);
+        if (rc < 0)
+        {
+            psTraceErrr("Error parsing server_name_list\n");
+            goto out_illegal_parameter;
+        }
+        if (!psParseCanRead(pb, serverNameListLen))
+        {
+            psTraceErrr("Error parsing server_name_list\n");
+            goto out_illegal_parameter;
+        }
+
+        /* NameType name_type; */
+        rc = psParseOctet(pb, &nameType);
+        if (rc < 0 || nameType != 0) /* We only support host_name(0). */
+        {
+            psTraceErrr("Invalid NameType\n");
+            goto out_illegal_parameter;
+        }
+
+        /* opaque HostName<1..2^16-1>; */
+        rc = psParseBufParseTlsVector(pb,
+                1, (1 << 16) - 1,
+                &hostNameLen);
+        if (rc < 0)
+        {
+            psTraceErrr("Error parsing HostName\n");
+            goto out_illegal_parameter;
+        }
+        if (!psParseCanRead(pb, hostNameLen))
+        {
+            psTraceErrr("Error parsing HostName\n");
+            goto out_illegal_parameter;
+        }
+        if (ssl->expectedName)
+        {
+            psFree(ssl->expectedName, ssl->sPool);
+        }
+        ssl->expectedName = psMalloc(ssl->sPool, hostNameLen + 1);
+        if (ssl->expectedName == NULL)
+        {
+            psTraceErrr("Out of mem\n");
+            goto out_internal_error;
+        }
+        psParseBufCopyN(pb,
+                hostNameLen,
+                (unsigned char*)ssl->expectedName,
+                &copiedLen);
+        (void)copiedLen;
+        ssl->expectedName[hostNameLen] = '\0';
+        psTracePrintServerName(INDENT_EXTENSION,
+                "HostName",
+                ssl->expectedName,
+                PS_TRUE);
+        ssl->extFlags.sni_in_last_client_hello = 1;
+    }
+# endif
+# ifdef USE_CLIENT_SIDE_SSL
+    if (!MATRIX_IS_SERVER(ssl))
+    {
+        /* Solicited or not? */
+        if (ssl->extFlags.req_sni == 0)
+        {
+            psTraceErrr("Server sent unsolicited server_name extension\n");
+            goto out_unsupported_extension;
+        }
+
+        /* Only an empty server_name is allowed from the server. */
+        if (psParseCanRead(pb, 1))
+        {
+            psTraceErrr("Server's server_name extension not empty\n");
+            goto out_illegal_parameter;
+        }
+
+        psTraceInfo("Received empty server_name in EncryptedExtensions\n");
+    }
+# endif
+
+    return MATRIXSSL_SUCCESS;
+
+out_illegal_parameter:
+    ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
+    return MATRIXSSL_ERROR;
+# ifdef USE_SERVER_SIDE_SSL
+out_internal_error:
+    ssl->err = SSL_ALERT_INTERNAL_ERROR;
+    return MATRIXSSL_ERROR;
+# endif /* USE_SERVER_SIDE_SSL */
+# ifdef USE_CLIENT_SIDE_SSL
+out_unsupported_extension:
+    ssl->err = SSL_ALERT_UNSUPPORTED_EXTENSION;
+    return MATRIXSSL_ERROR;
+# endif /* USE_CLIENT_SIDE_SSL */
 }
 
 int32_t tls13ParseEarlyData(ssl_t *ssl,
@@ -1259,19 +1644,36 @@ int32_t tls13ParseEarlyData(ssl_t *ssl,
 {
     int32_t rc;
 
-    /*
-      Only handling the client-side case (i.e. parsing the server's
-      early_data extension sent in NewSessionTicket.)
-    */
-    psAssert(!MATRIX_IS_SERVER(ssl));
     psTracePrintExtensionParse(ssl, EXT_EARLY_DATA);
 
-    rc = psParseBufTryParseBigEndianUint32(pb,
-            maxEarlyData);
-    if (rc < 0)
+    if (MATRIX_IS_SERVER(ssl))
     {
-        return rc;
+        if (!ssl->tls13IncorrectDheKeyShare)
+        {
+            ssl->extFlags.got_early_data = 1;
+        }
+        else
+        {
+            /* early_data extension should not be included to CH after HRR
+               so ignore it */
+            ssl->extFlags.got_early_data = 0;
+        }
     }
+    else
+    {
+        /*
+          Handle the client-side case (i.e. parsing the server's
+          early_data extension sent in NewSessionTicket.)
+        */
+        psAssert(!MATRIX_IS_SERVER(ssl));
+        rc = psParseBufTryParseBigEndianUint32(pb,
+                maxEarlyData);
+        if (rc < 0)
+        {
+            return rc;
+        }
+    }
+
     return PS_SUCCESS;
 }
 
@@ -1402,7 +1804,8 @@ int32_t tls13ParseSignatureAlgorithms(ssl_t *ssl,
 }
 #  ifdef USE_IDENTITY_CERTIFICATES
 psRes_t tls13ParseCertificateAuthorities(ssl_t *ssl,
-                                         const unsigned char **start, psSizeL_t len)
+        const unsigned char **start,
+        psSizeL_t len)
 {
     sslKeySelectInfo_t *keySelect = &ssl->sec.keySelect;
 

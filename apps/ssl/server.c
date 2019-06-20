@@ -47,8 +47,8 @@
 #include "osdep_sys_types.h"
 #include "osdep_sys_time.h"
 
-#ifdef USE_SERVER_SIDE_SSL
 # ifdef MATRIX_USE_FILE_SYSTEM
+#  ifdef USE_SERVER_SIDE_SSL
 
 #  include "osdep_signal.h"                /* Defines SIGTERM, etc. */
 
@@ -1106,8 +1106,10 @@ static void usage(void)
         "-C <sigAlgsCert>    - Supported signature algorithms in TLS1.3 certs.\n"
         "                      For example: ecdsa_secp256r1_sha256:rsa_pss_rsae_sha256\n"
         "-E <maxEarlyData>   - Enable early data support for TLS1.3 with maximum accepted amount.\n"
-        "                    - Maximum early data is 16384 bytes"
+        "                    - Maximum early data is 16384 bytes\n"
         "-b <block size>     - Block size to pad TLS 1.3 records to.\n"
+        "-o/-O               - Load a test OCSP response (-o: good, -O: revoked)\n"
+        "                      Requires -c testkeys/EC/256_EC.pem to work.\n"
         "\n");
 
 }
@@ -1298,7 +1300,6 @@ static int32 process_cmd_options(int32 argc, char **argv)
             }
             Strncpy(g_serverName, optarg, str_len);
             break;
-
 # ifdef USE_OCSP_RESPONSE
         case 'o':
             /* Test OCSP stapling with a "good" response. */

@@ -620,7 +620,10 @@ int32_t tls13ParseMatrixSessionParams(ssl_t *ssl,
     }
     params->ticketAgeAdd = ticketAgeAdd;
 
-    rc = psParseBufCopyN(pb, sizeof(psTime_t), (unsigned char *)&timestamp, &copiedLen);
+    rc = psParseBufCopyN(pb,
+            sizeof(psTime_t),
+            (unsigned char *)&timestamp,
+            &copiedLen);
     if (rc < 0)
     {
         return rc;

@@ -30,6 +30,7 @@ SRC:=\
 	tlsSelectKeys.c \
 	tlsSigVer.c \
 	tlsTrace.c \
+	tls13Adapter.c \
 	tls13Authenticate.c \
 	tls13CipherSuite.c \
 	tls13Encode.c \

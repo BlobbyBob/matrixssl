@@ -5,7 +5,7 @@
  *      Functions for decoding TLS 1.3 records.
  */
 /*
- *      Copyright (c) 2013-2018 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2019 INSIDE Secure Corporation
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -137,7 +137,10 @@ static int32_t tls13ParseFinished(ssl_t *ssl,
         psParseBuf_t *pb);
 static int32_t tls13ParseNewSessionTicket(ssl_t *ssl,
         psParseBuf_t *pb);
-static int32_t tls13ParseServerHello(ssl_t *ssl,
+int32_t tls13ParseClientHello(ssl_t *ssl,
+        psParseBuf_t *pb,
+        psBool_t allowStateChange);
+int32_t tls13ParseServerHello(ssl_t *ssl,
         psParseBuf_t *pb);
 #ifdef USE_IDENTITY_CERTIFICATES
 # ifdef USE_CLIENT_SIDE_SSL
@@ -283,12 +286,14 @@ parse_next_record_header:
         if (ssl->rec.len < 2 + TLS_GCM_TAG_LEN)
         {
             /* If it's this short, it cannot be an encrypted. */
-            return tls13ParseAndHandleAlert(ssl,
+            rc = tls13ParseAndHandleAlert(ssl,
                     &pb,
                     in,
                     len,
                     alertLevel,
                     alertDescription);
+            *in = pb.buf.start;
+            return rc;
         }
     }
 
@@ -476,12 +481,14 @@ parse_next_record_header:
     else if (innerType == SSL_RECORD_TYPE_ALERT)
     {
         (void)psParseBufFromStaticData(&alertBuf, decryptTo, ptLen);
-        return tls13ParseAndHandleAlert(ssl,
+        rc = tls13ParseAndHandleAlert(ssl,
                 &alertBuf,
                 in,
                 len,
                 alertLevel,
                 alertDescription);
+        *in = pb.buf.start;
+        return rc;
     }
 
     /* Advance pointer to point to after the data we have read. */
@@ -595,7 +602,6 @@ static int32_t tls13ParseAndHandleAlert(ssl_t *ssl,
     /* The client expects to find the alert data at the start of the buffer */
     Memmove(*in, *in + TLS_REC_HDR_LEN, 2);
 
-    *in = pb->buf.start;
     *len = 2;
 
     return tls13HandleAlert(ssl,
@@ -796,6 +802,9 @@ static int32_t tls13ParseHandshakeMessage(ssl_t *ssl,
     psParseBuf_t pb;
     unsigned char *msgStart = *bufStart;
     unsigned char *msgEnd = bufEnd;
+# ifdef USE_SERVER_SIDE_SSL
+    unsigned char *hsMsgStart;
+# endif
     psSizeL_t readableLen = msgEnd - msgStart;
     uint32_t fragmentLen = 0;
     uint32_t hsMsgLen;
@@ -820,9 +829,13 @@ static int32_t tls13ParseHandshakeMessage(ssl_t *ssl,
     {
         goto exit;
     }
-#ifdef DEBUG_TLS_1_3_DECODE
+# ifdef DEBUG_TLS_1_3_DECODE
     psTracePrintHandshakeHeader(type, hsMsgLen, PS_TRUE);
-#endif
+# endif
+# ifdef USE_SERVER_SIDE_SSL
+    hsMsgStart = pb.buf.start;
+# endif
+
     rc = psParseCanRead(&pb, hsMsgLen);
     if (rc == 0)
     {
@@ -837,12 +850,12 @@ static int32_t tls13ParseHandshakeMessage(ssl_t *ssl,
         *bufStart = pb.buf.start;
         return SSL_PARTIAL;
     }
-#ifdef DEBUG_TLS_1_3_DECODE_DUMP
+# ifdef DEBUG_TLS_1_3_DECODE_DUMP
     psTraceBytes("handshake message", msgStart, hsMsgLen);
-#endif
-#ifdef DEBUG_TLS_1_3_DECODE
+# endif
+# ifdef DEBUG_TLS_1_3_DECODE
     psTracePrintHandshakeHeader(type, hsMsgLen, PS_TRUE);
-#endif
+# endif
 
     /* Move the buffer start pointer over this handshake message to signal
        caller how much data was processed */
@@ -873,9 +886,55 @@ static int32_t tls13ParseHandshakeMessage(ssl_t *ssl,
 
     switch(type)
     {
-    /* Note: Initial ClientHello parsing is done on the TLS 1.2 code
-       path, because TLS 1.3 has not been negotiated yet. */
+# ifdef USE_SERVER_SIDE_SSL
+    case SSL_HS_CLIENT_HELLO:
+        /* Parse without changing ssl struct state to find out whether
+           this is a TLS 1.3 ClientHello. */
+        rc = tls13ParseClientHello(ssl, &pb, PS_FALSE);
+        if (rc < 0)
+        {
+            psTraceIntInfo("tls13ParseClientHello failed: %d\n", rc);
+            goto exit;
+        }
 
+        rc = tlsServerNegotiateVersion(ssl);
+        if (rc < 0)
+        {
+            return rc;
+        }
+
+        if (!NGTD_VER(ssl, v_tls_1_3_any))
+        {
+            /* Drop to legacy (TLS 1.2 and below) track. */
+            ssl->hsState = SSL_HS_CLIENT_HELLO;
+            return SSL_NO_TLS_1_3;
+        }
+
+        /* Now parse again and handle the message. */
+        pb.buf.start = hsMsgStart;
+        ssl->sec.tls13CHStart = msgStart; /* Include header. */
+        ssl->sec.tls13CHLen = msgEnd - msgStart;
+        if (!ssl->tls13IncorrectDheKeyShare)
+        {
+            tls13TranscriptHashInit(ssl);
+        }
+        rc = tls13ParseClientHello(ssl, &pb, PS_TRUE);
+        if (rc < 0)
+        {
+            psTraceIntInfo("tls13ParseClientHello failed: %d\n", rc);
+            goto exit;
+        }
+
+        if (ssl->sec.tls13BindersLen == 0)
+        {
+            tls13TranscriptHashUpdate(ssl,
+                    msgStart, /* Include header. */
+                    msgEnd-msgStart);
+        }
+        ssl->hsState = SSL_HS_TLS_1_3_RECVD_CH;
+        rc = SSL_ENCODE_RESPONSE;
+        break;
+# endif /* USE_SERVER_SIDE_SSL */
     case SSL_HS_SERVER_HELLO:
         /* Add serverHello to HS transcript hash */
         rc = tls13ParseServerHello(ssl, &pb);
@@ -1052,7 +1111,193 @@ exit:
     return rc;
 }
 
-static int32_t tls13ParseServerHello(ssl_t *ssl,
+# ifdef USE_SERVER_SIDE_SSL
+int32_t tls13ParseClientHello(ssl_t *ssl,
+        psParseBuf_t *pb,
+        psBool_t handleTls13Message)
+{
+    int32_t rc;
+    psSizeL_t sessionIdLen = 0;
+    psSizeL_t cipherSuitesLen = 0;
+    psSizeL_t compressionMethodsLen = 0;
+    unsigned char compressionMethod = 0;
+    unsigned char *cipherSuitesStart;
+    uint16_t legacy_version;
+    uint16_t cipher = 0;
+    int32_t i;
+
+    psTracePrintHsMessageParse(ssl, SSL_HS_CLIENT_HELLO);
+
+    /*
+      struct {
+          ProtocolVersion legacy_version = 0x0303;
+          Random random;
+          opaque legacy_session_id<0..32>;
+          CipherSuite cipher_suites<2..2^16-2>;
+          opaque legacy_compression_methods<1..2^8-1>;
+          Extension extensions<8..2^16-1>;
+      } ClientHello;
+    */
+
+    /* ProtocolVersion legacy_version = 0x0303; */
+    rc = psParseBufTryParseBigEndianUint16(pb, &legacy_version);
+    if (rc != 2)
+    {
+        goto out_decode_error;
+    }
+    ssl->peerHelloVersion = psVerFromEncoding(legacy_version);
+    psTracePrintProtocolVersionNew(INDENT_HS_MSG,
+            "legacy_version",
+            ssl->peerHelloVersion,
+            PS_TRUE);
+    /* Ignore legacy_version. */
+
+    /* Random random; */
+    rc = psParseBufTryParseOctets(pb,
+            SSL_HS_RANDOM_SIZE,
+            ssl->sec.clientRandom,
+            handleTls13Message);
+    if (rc == 0)
+    {
+        goto out_illegal_parameter;
+    }
+    if (handleTls13Message)
+    {
+        psTracePrintHex(INDENT_HS_MSG,
+                "client_random",
+                ssl->sec.clientRandom,
+                SSL_HS_RANDOM_SIZE,
+                PS_TRUE);
+    }
+
+    /* opaque legacy_session_id<0..32>; */
+    rc = psParseBufParseTlsVector(pb, 0, 32, &sessionIdLen);
+    if (rc < 0)
+    {
+        goto out_decode_error;
+    }
+
+    if (sessionIdLen > 0)
+    {
+        rc = psParseBufTryParseOctets(pb,
+                sessionIdLen,
+                ssl->sessionId,
+                handleTls13Message);
+        if (rc == 0)
+        {
+            goto out_decode_error;
+        }
+        ssl->sessionIdLen = sessionIdLen;
+    }
+
+    if (handleTls13Message)
+    {
+        psTracePrintHex(INDENT_HS_MSG,
+                "legacy_session_id",
+                ssl->sessionId,
+                sessionIdLen,
+                PS_TRUE);
+    }
+
+    rc = psParseBufParseTlsVector(pb,
+            2,
+            (1<<16) - 2,
+            &cipherSuitesLen);
+    if (rc < 2)
+    {
+        psTraceErrr("Error parsing ciphersuite list\n");
+        goto out_decode_error;
+    }
+
+    if (cipherSuitesLen & 1)
+    {
+        psTraceErrr("Invalid ciphersuite list length\n");
+        goto out_decode_error;
+    }
+
+    cipherSuitesStart = pb->buf.start;
+
+    /* Any TLS 1.3 suites? Version negotiation needs to know. */
+    for (i = 0; i < cipherSuitesLen; i += 2)
+    {
+        rc = psParseBufTryParseBigEndianUint16(pb, &cipher);
+        if (rc < 0)
+        {
+            psTraceErrr("Error parsing ciphersuite list\n");
+            goto out_decode_error;
+        }
+
+        if (isTls13Ciphersuite(cipher))
+        {
+            ssl->gotTls13CiphersuiteInCH = PS_TRUE;
+        }
+    }
+
+    if (handleTls13Message)
+    {
+        psTracePrintEncodedCipherList(INDENT_HS_MSG,
+                "cipher_suites",
+                cipherSuitesStart,
+                cipherSuitesLen,
+                PS_FALSE);
+        rc = chooseCipherSuite(ssl, cipherSuitesStart, cipherSuitesLen);
+        if (rc < 0)
+        {
+            return rc;
+        }
+    }
+
+    /* opaque legacy_compression_methods<1..2^8-1>; */
+    rc = psParseBufParseTlsVector(pb,
+            1,
+            (1<<8) - 1,
+            &compressionMethodsLen);
+    if (rc < 1)
+    {
+        return rc;
+    }
+    if (handleTls13Message)
+    {
+        rc = psParseOctet(pb, &compressionMethod);
+        if (rc < 0)
+        {
+            goto out_decode_error;
+        }
+        if (compressionMethodsLen != 1 || compressionMethod != 0)
+        {
+            psTraceErrr("Non-zero or too many compression methods " \
+                    "in a TLS 1.3 ClientHello\n");
+            goto out_illegal_parameter;
+        }
+    }
+    else
+    {
+        psParseForward(pb, compressionMethodsLen);
+    }
+
+    /* Extension extensions<8..2^16-1>; */
+    rc = tls13ParseExtensions(ssl,
+            pb,
+            SSL_HS_CLIENT_HELLO,
+            handleTls13Message);
+    if (rc < 0)
+    {
+        return rc;
+    }
+
+    return MATRIXSSL_SUCCESS;
+
+out_decode_error:
+    ssl->err = SSL_ALERT_DECODE_ERROR;
+    return MATRIXSSL_ERROR;
+
+out_illegal_parameter:
+    ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
+    return MATRIXSSL_ERROR;
+}
+# endif /* USE_SERVER_SIDE_SSL */
+
+int32_t tls13ParseServerHello(ssl_t *ssl,
         psParseBuf_t *pb)
 {
     int32_t rc;
@@ -1095,8 +1340,11 @@ static int32_t tls13ParseServerHello(ssl_t *ssl,
     */
 
     /* Random random; */
-    if (!psParseBufTryParseOctets(pb, SSL_HS_RANDOM_SIZE,
-                    ssl->sec.serverRandom))
+    rc = psParseBufTryParseOctets(pb,
+            SSL_HS_RANDOM_SIZE,
+            ssl->sec.serverRandom,
+            PS_TRUE);
+    if (rc == 0)
     {
         return PS_PARSE_FAIL;
     }
@@ -1129,7 +1377,11 @@ static int32_t tls13ParseServerHello(ssl_t *ssl,
 
     if (sessionIdLen > 0)
     {
-        if (!psParseBufTryParseOctets(pb, sessionIdLen, ssl->sessionId))
+        rc = psParseBufTryParseOctets(pb,
+                sessionIdLen,
+                ssl->sessionId,
+                PS_TRUE);
+        if (rc == 0)
         {
             return PS_PARSE_FAIL;
         }
@@ -1409,6 +1661,11 @@ static int32_t tls13ParseCertificate(ssl_t *ssl,
 
     psTracePrintHsMessageParse(ssl, SSL_HS_CERTIFICATE);
 
+    if (ssl->bFlags & BFLAG_KEEP_PEER_CERT_DER)
+    {
+        certFlags |= CERT_STORE_UNPARSED_BUFFER;
+    }
+
     /*
       Note: not allowing RawPublicKey certs.
 
@@ -1478,8 +1735,11 @@ static int32_t tls13ParseCertificate(ssl_t *ssl,
     /* Parse the CertificateEntries in certificate_list. */
     remCertListLen = certificateListLen;
 
-    for (currentCert = &(ssl->sec.cert); *currentCert; currentCert = &((*currentCert)->next))
-        ;
+    currentCert = &ssl->sec.cert;
+    while (*currentCert != NULL)
+    {
+        currentCert = &((*currentCert)->next);
+    }
 
     while (remCertListLen >= 3)
     {
@@ -1524,7 +1784,10 @@ static int32_t tls13ParseCertificate(ssl_t *ssl,
 
         if (psParseCanRead(pb, 6))
         {
-            rc = tls13ParseExtensions(ssl, pb, SSL_HS_CERTIFICATE);
+            rc = tls13ParseExtensions(ssl,
+                    pb,
+                    SSL_HS_CERTIFICATE,
+                    PS_TRUE);
             if (rc < 0)
             {
                 return rc;

@@ -80,6 +80,7 @@
 #ifdef USE_CLIENT_SIDE_SSL
 
 static int g_use_psk;
+static int g_use_psk_sha384;
 
 # ifndef MATRIX_TESTING_ENVIRONMENT /* Omit the message when testing. */
 #  define WARNING_MESSAGE "DO NOT USE THESE DEFAULT KEYS IN PRODUCTION ENVIRONMENTS."
@@ -486,6 +487,18 @@ WRITE_MORE:
             if (rc == MATRIXSSL_HANDSHAKE_COMPLETE)
             {
                 Printf("TLS handshake complete.\n");
+# ifdef ENABLE_MASTER_SECRET_EXPORT
+                {
+                    unsigned char *masterSecret = NULL;
+                    psSizeL_t hsMasterSecretLen = 0;
+                    matrixSslGetMasterSecret(
+                            ssl,
+                            &masterSecret,
+                            &hsMasterSecretLen);
+                    psTraceBytes("Master secret",
+                        masterSecret, hsMasterSecretLen);
+                }
+# endif /* ENABLE_MASTER_SECRET_EXPORT */
 
                 if ((matrixSslGetNegotiatedVersion(ssl) & v_tls_1_3_any)
                         && sid != NULL && g_resumed > 0)
@@ -610,7 +623,7 @@ PROCESS_MORE:
 # ifdef REHANDSHAKE_TEST
 /*
             Test rehandshake capabilities of server.  A full re-handshake
-            is first tested.  After that, a session resmption rehandshake
+            is first tested.  After that, a session resumption rehandshake
             is attempted. In that case, this client will be last to
             send handshake data and MATRIXSSL_HANDSHAKE_COMPLETE will hit on
             the WRITE_MORE handler and httpWriteRequest will occur there.
@@ -653,6 +666,20 @@ PROCESS_MORE:
         goto WRITE_MORE;
 # else
         Printf("TLS handshake complete.\n");
+
+# ifdef ENABLE_MASTER_SECRET_EXPORT
+        {
+            unsigned char *masterSecret = NULL;
+            psSizeL_t hsMasterSecretLen = 0;
+            matrixSslGetMasterSecret(
+                    ssl,
+                    &masterSecret,
+                    &hsMasterSecretLen);
+            psTraceBytes("Master secret",
+                         masterSecret, hsMasterSecretLen);
+        }
+# endif /* ENABLE_MASTER_SECRET_EXPORT */
+
         /* We got the Finished SSL message, initiate the HTTP req */
         if ((rc = httpWriteRequest(ssl)) < 0)
         {
@@ -971,6 +998,7 @@ static void usage(void)
         "                          ec (for EC keys ECDSA signature)\n"
         "                          ecrsa (for EC keys with RSA signature)\n"
         "--psk                    \n"
+        "--psk-sha384             \n"
         "                        - Load test PSKs.\n"
         "--groups <groups>\n"
         "                        - Supported groups.\n"
@@ -1083,6 +1111,7 @@ static int32 process_cmd_options(int32 argc, char **argv)
 #define ARG_DISABLE_PEER_AUTHENTICATION 17
 #define ARG_TLS13_BLOCK_SIZE 18
 #define ARG_MIN_DH_P_SIZE 19
+#define ARG_PSK_SHA384 20
 
     static struct option long_options[] =
     {
@@ -1117,6 +1146,7 @@ static int32 process_cmd_options(int32 argc, char **argv)
         {"sig-algs", required_argument, NULL, ARG_SIG_ALGS},
         {"sig-algs-cert", required_argument, NULL, ARG_SIG_ALGS_CERT},
         {"psk", no_argument, NULL, ARG_PSK},
+        {"psk-sha384", no_argument, NULL, ARG_PSK_SHA384},
         {"early-data", required_argument, NULL, ARG_EARLY_DATA},
         {"tls13-block-size", required_argument, NULL, ARG_TLS13_BLOCK_SIZE},
         {"req-ocsp-stapling", no_argument, NULL, ARG_REQ_OCSP_STAPLING},
@@ -1363,6 +1393,10 @@ static int32 process_cmd_options(int32 argc, char **argv)
             g_clientconfig.loadPreSharedKeys = 1;
             g_use_psk = 1;
             break;
+        case ARG_PSK_SHA384:
+            g_clientconfig.loadPreSharedKeys = 1;
+            g_use_psk_sha384 = 1;
+            break;
         case ARG_EARLY_DATA:
             Strcpy(g_early_data_file, optarg);
             break;
@@ -1514,12 +1548,26 @@ int32 main(int32 argc, char **argv)
 # ifdef USE_TLS_1_3
     if (g_use_psk)
     {
-        /* Load the TLS 1.3 test PSK. */
+        /* Load the TLS 1.3 test PSKs. */
         rc = matrixSslLoadTls13Psk(keys,
                 g_tls13_test_psk_256,
                 sizeof(g_tls13_test_psk_256),
                 g_tls13_test_psk_id_sha256,
                 sizeof(g_tls13_test_psk_id_sha256),
+                NULL);
+        if (rc < 0)
+        {
+            psTrace("Unable to load PSK keys.\n");
+            return rc;
+        }
+    }
+    if (g_use_psk_sha384)
+    {
+        rc = matrixSslLoadTls13Psk(keys,
+                g_tls13_test_psk_384,
+                sizeof(g_tls13_test_psk_384),
+                g_tls13_test_psk_id_sha384,
+                sizeof(g_tls13_test_psk_id_sha384),
                 NULL);
         if (rc < 0)
         {

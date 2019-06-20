@@ -35,6 +35,8 @@
 
 #include "matrixsslImpl.h"
 
+# ifndef USE_TLS_1_3_ONLY
+
 # ifndef USE_ONLY_PSK_CIPHER_SUITE
 
 # ifdef USE_ROT_CRYPTO
@@ -1502,3 +1504,5 @@ int32_t getSignatureAndHashAlgorithmEncoding(uint16_t sigAlgOid,
 
 #endif /* ! USE_ONLY_PSK_CIPHER_SUITE */
 #endif /* USE_SERVER_SIDE_SSL || USE_CLIENT_AUTH */
+
+#endif /* USE_TLS_1_3_ONLY */

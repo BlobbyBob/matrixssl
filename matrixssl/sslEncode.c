@@ -34,6 +34,8 @@
 
 #include "matrixsslImpl.h"
 
+#ifndef USE_TLS_1_3_ONLY
+
 #ifdef USE_ROT_CRYPTO
 #  include "../crypto-rot/rotCommon.h"
 #endif
@@ -103,18 +105,6 @@ static int32 writeNewSessionTicket(ssl_t *ssl, sslBuf_t *out);
 static int32 secureWriteAdditions(ssl_t *ssl, int32 numRecs);
 static int32 encryptFlight(ssl_t *ssl, unsigned char **end);
 
-# ifdef USE_TLS_1_3
-extern int32_t tls13EncodeResponse(ssl_t *ssl,
-        psBuf_t *out,
-        uint32 *requiredLen);
-extern int32_t tls13EncryptMessage(ssl_t *ssl,
-        flightEncode_t *msg,
-        unsigned char **end);
-# endif
-
-# ifdef USE_ZLIB_COMPRESSION
-#  define MAX_ZLIB_COMPRESSED_OH  128/* Only FINISHED message supported */
-# endif
 /******************************************************************************/
 /*
     This works for both in-situ and external buf
@@ -145,7 +135,6 @@ int32 matrixSslEncode(ssl_t *ssl, unsigned char *buf, uint32 size,
         return tls13EncodeAppData(ssl, buf, size, ptBuf, len);
     }
 # endif
-
     /* If we've had a protocol error, don't allow further use of the session
         Also, don't allow a application data record to be encoded unless the
         handshake is complete.
@@ -706,14 +695,6 @@ psResSize_t calcCkeSize(ssl_t *ssl)
     testing against high performance servers. The same premaster must be
     used each time as well though. */
 /* #define REUSE_CKE */
-#  ifdef REUSE_CKE
-#   pragma message("!! DO NOT USE REUSE_CKE IN PRODUCTION !!")
-static char g_reusePremaster[SSL_HS_RSA_PREMASTER_SIZE] = { 0 };
-static int16 g_reusePreLen = 0;
-static char g_reuseRSAEncrypt[512] = { 0 }; /* Encrypted pre-master */
-static int16 g_reuseRSALen = 0;
-static psRsaKey_t g_reuseRSAKey;
-#  endif
 /*********/
 
 /* The ClientKeyExchange delayed PKA ops */
@@ -994,26 +975,6 @@ static int32 nowDoCkePka(ssl_t *ssl)
     /* Standard RSA suite entry point */
     psAssert(pka->type == PKA_AFTER_RSA_ENCRYPT);
 
-#   ifdef REUSE_CKE
-    if (g_reusePreLen)
-    {
-        if (psRsaCmpPubKey(&g_reuseRSAKey, &ssl->sec.cert->publicKey.key.rsa) == 0)
-        {
-            Memcpy(ssl->sec.premaster, g_reusePremaster, g_reusePreLen);
-            Memcpy(pka->outbuf, g_reuseRSAEncrypt, g_reuseRSALen);
-        }
-        else
-        {
-            memzero_s(g_reusePremaster, g_reusePreLen);
-            g_reusePreLen = 0;
-            memzero_s(g_reuseRSAEncrypt, g_reuseRSALen);
-            g_reuseRSALen = 0;
-            psRsaClearKey(&g_reuseRSAKey);
-        }
-    }
-    else
-    {
-#   endif
     /* pkaAfter.user is buffer len */
     if ((rc = psRsaEncryptPub(pka->pool,
              &ssl->sec.cert->publicKey.key.rsa,
@@ -1031,22 +992,6 @@ static int32 nowDoCkePka(ssl_t *ssl)
         psTraceIntInfo("psRsaEncryptPub in CKE failed %d\n", rc);
         return MATRIXSSL_ERROR;
     }
-#   ifdef REUSE_CKE
-}
-if (g_reusePreLen == 0)
-{
-    Printf("REUSE_CKE ENABLED!! NOT FOR PRODUCTION USE\n");
-    g_reusePreLen = ssl->sec.premasterSize;
-    g_reuseRSALen = psRsaSize(&ssl->sec.cert->publicKey.key.rsa);
-    Memcpy(g_reusePremaster, ssl->sec.premaster,  g_reusePreLen);
-    Memcpy(g_reuseRSAEncrypt, pka->outbuf, g_reuseRSALen);
-    /* TODO this key is allocated once and leaked */
-    if (psRsaCopyKey(&g_reuseRSAKey, &ssl->sec.cert->publicKey.key.rsa) < 0)
-    {
-        return MATRIXSSL_ERROR;
-    }
-}
-#   endif
     /* RSA closed the pool on second pass */
     /* CHANGE NOTE: This comment looks specific to async and this
         pool is not being closed in clearPkaAfter if set to NULL here
@@ -1927,13 +1872,6 @@ ok:
         }
 # endif /* USE_TLS_1_1 */
 
-# ifdef USE_ZLIB_COMPRESSION
-        /* Lastly, add the zlib overhead for the FINISHED message */
-        if (ssl->compression)
-        {
-            messageSize += MAX_ZLIB_COMPRESSED_OH;
-        }
-# endif
         if ((out->buf + out->size) - out->end < messageSize)
         {
             *requiredLen = messageSize;
@@ -2061,13 +1999,6 @@ ok:
             }
 #  endif    /* USE_TLS_1_1 */
 
-#  ifdef USE_ZLIB_COMPRESSION
-            /* Lastly, add the zlib overhead for the FINISHED message */
-            if (ssl->compression)
-            {
-                messageSize += MAX_ZLIB_COMPRESSED_OH;
-            }
-#  endif
             if ((out->buf + out->size) - out->end < messageSize)
             {
                 *requiredLen = messageSize;
@@ -2269,13 +2200,6 @@ ok:
                 }
             }
 #  endif    /* USE_TLS_1_1 */
-#  ifdef USE_ZLIB_COMPRESSION
-            /* Lastly, add the zlib overhead for the FINISHED message */
-            if (ssl->compression)
-            {
-                messageSize += MAX_ZLIB_COMPRESSED_OH;
-            }
-#  endif
             /*
               The actual buffer size test to hold this flight
             */
@@ -3103,230 +3027,6 @@ int32_t writeRecordHeader(ssl_t *ssl, uint8_t type, uint8_t hsType,
 }
 
 
-# ifdef USE_ZLIB_COMPRESSION
-static int32 encryptCompressedRecord(ssl_t *ssl, int32 type, int32 messageSize,
-    unsigned char *pt, sslBuf_t *out, unsigned char **c)
-{
-    unsigned char *encryptStart, *dataToMacAndEncrypt;
-    int32 rc, ptLen, divLen, modLen, dataToMacAndEncryptLen;
-    int32 zret, ztmp;
-    int32 padLen;
-
-
-    encryptStart = out->end + ssl->recordHeadLen;
-    if (ssl->flags & SSL_FLAGS_AEAD_W)
-    {
-        encryptStart += AEAD_NONCE_LEN(ssl); /* Move past the plaintext nonce */
-        ssl->outRecType = (unsigned char) type;
-    }
-    ptLen = *c - encryptStart;
-
-#  ifdef USE_TLS_1_1
-    if (ACTV_VER(ssl, v_tls_explicit_iv) && (ssl->enBlockSize > 1))
-    {
-        /* Do not compress IV */
-        if (type == SSL_RECORD_TYPE_APPLICATION_DATA)
-        {
-            /* FUTURE: Application data is passed in with real pt from user but
-                with the length of the explict IV added already. Can just
-                encrypt IV in-siture now since the rest of the encypts will be
-                coming from zlibBuffer */
-            rc = ssl->encrypt(ssl, encryptStart, encryptStart,
-                ssl->enBlockSize);
-            if (rc < 0)
-            {
-                psTraceIntInfo("Error encrypting IV: %d\n", rc);
-                return MATRIXSSL_ERROR;
-            }
-            ptLen -= ssl->enBlockSize;
-            encryptStart += ssl->enBlockSize;
-        }
-        else
-        {
-            /* Handshake messages have been passed in with plaintext that
-                begins with the explicit IV and size included.  Can just
-                encrypt IV in-situ now since the rest of the encypts will be
-                coming from zlibBuffer */
-            rc = ssl->encrypt(ssl, pt, pt, ssl->enBlockSize);
-            if (rc < 0)
-            {
-                psTraceIntInfo("Error encrypting IV: %d\n", rc);
-                return MATRIXSSL_ERROR;
-            }
-            pt += ssl->enBlockSize;
-            ptLen -= ssl->enBlockSize;
-            encryptStart += ssl->enBlockSize;
-        }
-    }
-#  endif
-
-    /* Compression is done only on the data itself so the prior work that
-        was just put into message size calcuations and padding length will
-        need to be done again after deflate */
-    ssl->zlibBuffer = psMalloc(ssl->bufferPool, ptLen + MAX_ZLIB_COMPRESSED_OH);
-    Memset(ssl->zlibBuffer, 0, ptLen + MAX_ZLIB_COMPRESSED_OH);
-    if (ssl->zlibBuffer == NULL)
-    {
-        psTraceErrr("Error allocating compression buffer\n");
-        return MATRIXSSL_ERROR;
-    }
-    dataToMacAndEncrypt = ssl->zlibBuffer;
-    dataToMacAndEncryptLen = ssl->deflate.total_out; /* tmp for later */
-    /* psTraceBytes("pre deflate", pt, ptLen); */
-    ssl->deflate.avail_out = ptLen + MAX_ZLIB_COMPRESSED_OH;
-    ssl->deflate.next_out = dataToMacAndEncrypt;
-    ssl->deflate.avail_in = ztmp = ptLen;
-    ssl->deflate.next_in = pt;
-
-    /* FUTURE: Deflate would need to be in a smarter loop if large amounts
-        of data are ever passed through here */
-    if ((zret = deflate(&ssl->deflate, Z_SYNC_FLUSH)) != Z_OK)
-    {
-        psTraceIntInfo("ZLIB deflate error %d\n", zret);
-        psFree(ssl->zlibBuffer, ssl->bufferPool); ssl->zlibBuffer = NULL;
-        return MATRIXSSL_ERROR;
-    }
-    if (ssl->deflate.avail_in != 0)
-    {
-        psTraceIntInfo("ZLIB didn't deflate %d bytes in single pass\n", ptLen);
-        psFree(ssl->zlibBuffer, ssl->bufferPool); ssl->zlibBuffer = NULL;
-        deflateEnd(&ssl->deflate);
-        return MATRIXSSL_ERROR;
-    }
-
-    dataToMacAndEncryptLen = ssl->deflate.total_out - dataToMacAndEncryptLen;
-    /* psTraceBytes("post deflate", dataToMacAndEncrypt,
-        dataToMacAndEncryptLen); */
-    if (dataToMacAndEncryptLen > ztmp)
-    {
-        /* Case where compression grew the data.  Push out end */
-        *c += dataToMacAndEncryptLen - ztmp;
-    }
-    else
-    {
-        /* Compression did good job to shrink. Pull back in */
-        *c -= ztmp - dataToMacAndEncryptLen;
-    }
-
-    /* Can now calculate new padding length */
-    padLen = psPadLenPwr2(dataToMacAndEncryptLen + ssl->enMacSize,
-        ssl->enBlockSize);
-
-    /* Now see how this has changed the data lengths */
-    ztmp = dataToMacAndEncryptLen + ssl->recordHeadLen + ssl->enMacSize + padLen;
-
-#  ifdef USE_TLS_1_1
-    if (ACTV_VER(ssl, v_tls_explicit_iv) && (ssl->enBlockSize > 1))
-    {
-        ztmp += ssl->enBlockSize;
-    }
-#  endif
-
-    if (ssl->flags & SSL_FLAGS_AEAD_W)
-    {
-        psAssert(padLen == 0);
-        /* This += works fine because padLen will be zero because enBlockSize
-            and enMacSize are 0 */
-        ztmp += AEAD_TAG_LEN(ssl) + AEAD_NONCE_LEN(ssl);
-
-    }
-
-    /* Possible the length hasn't changed if compression didn't do much */
-    if (messageSize != ztmp)
-    {
-        messageSize = ztmp;
-        ztmp -= ssl->recordHeadLen;
-        out->end[3] = (ztmp & 0xFF00) >> 8;
-        out->end[4] = ztmp & 0xFF;
-    }
-
-    if (type == SSL_RECORD_TYPE_HANDSHAKE)
-    {
-        sslUpdateHSHash(ssl, pt, ptLen);
-    }
-
-    if (ssl->generateMac)
-    {
-        *c += ssl->generateMac(ssl, (unsigned char) type,
-            dataToMacAndEncrypt, dataToMacAndEncryptLen, *c);
-    }
-
-    *c += sslWritePad(*c, (unsigned char) padLen);
-
-    if (ssl->flags & SSL_FLAGS_AEAD_W)
-    {
-        *c += AEAD_TAG_LEN(ssl); /* c is tracking end of record here and the
-                                    tag has not yet been accounted for */
-    }
-
-    /* Will always be non-insitu since the compressed data is in zlibBuffer.
-        Requres two encrypts, one for plaintext and one for the
-        any < blockSize remainder of the plaintext and the mac and pad  */
-    if (ssl->cipher->blockSize > 1)
-    {
-        divLen = dataToMacAndEncryptLen & ~(ssl->cipher->blockSize - 1);
-        modLen = dataToMacAndEncryptLen & (ssl->cipher->blockSize - 1);
-    }
-    else
-    {
-        if (ssl->flags & SSL_FLAGS_AEAD_W)
-        {
-            divLen = dataToMacAndEncryptLen + AEAD_TAG_LEN(ssl);
-            modLen = 0;
-        }
-        else
-        {
-            divLen = dataToMacAndEncryptLen;
-            modLen = 0;
-        }
-    }
-    if (divLen > 0)
-    {
-        rc = ssl->encrypt(ssl, dataToMacAndEncrypt, encryptStart,
-            divLen);
-        if (rc < 0)
-        {
-            psFree(ssl->zlibBuffer, ssl->bufferPool); ssl->zlibBuffer = NULL;
-            deflateEnd(&ssl->deflate);
-            psTraceIntInfo("Error encrypting 2: %d\n", rc);
-            return MATRIXSSL_ERROR;
-        }
-    }
-    if (modLen > 0)
-    {
-        Memcpy(encryptStart + divLen, dataToMacAndEncrypt + divLen,
-            modLen);
-    }
-    rc = ssl->encrypt(ssl, encryptStart + divLen,
-        encryptStart + divLen, modLen + ssl->enMacSize + padLen);
-
-    if (rc < 0 || (*c - out->end != messageSize))
-    {
-        psFree(ssl->zlibBuffer, ssl->bufferPool); ssl->zlibBuffer = NULL;
-        deflateEnd(&ssl->deflate);
-        psTraceIntInfo("Error encrypting 3: %d\n", rc);
-        return MATRIXSSL_ERROR;
-    }
-    psFree(ssl->zlibBuffer, ssl->bufferPool); ssl->zlibBuffer = NULL;
-    /* Will not need the context any longer since FINISHED is the only
-        supported message */
-    deflateEnd(&ssl->deflate);
-
-#  ifdef USE_DTLS
-/*
-    Waited to increment record sequence number until completely finished
-    with the encoding because the HMAC in DTLS uses the rsn of current record
- */
-    if (ACTV_VER(ssl, v_dtls_any))
-    {
-        dtlsIncrRsn(ssl);
-    }
-#  endif /* USE_DTLS */
-
-    return MATRIXSSL_SUCCESS;
-}
-# endif /* USE_ZLIB_COMPRESSION */
-
 /******************************************************************************/
 /*
     Flights are encypted after they are fully written so this function
@@ -3456,23 +3156,6 @@ int32 encryptRecord(ssl_t *ssl, int32 type, int32 hsMsgType,
 {
     unsigned char *encryptStart;
     int32 rc, ptLen, divLen, modLen;
-
-# ifdef USE_ZLIB_COMPRESSION
-    /* In the current implementation, MatrixSSL will only internally handle
-        the compression and decompression of the FINISHED message.  Application
-        data will be compressed and decompressed by the caller.
-        Re-handshakes are not supported and this would have been caught
-        earlier in the state machine so if the record type is HANDSHAKE we
-        can be sure this is the FINISHED message
-
-        This should allow compatibility with SSL implementations that support
-        ZLIB compression */
-    if (ssl->flags & SSL_FLAGS_WRITE_SECURE && ssl->compression &&
-        type == SSL_RECORD_TYPE_HANDSHAKE)
-    {
-        return encryptCompressedRecord(ssl, type, messageSize, pt, out, c);
-    }
-# endif
 
     encryptStart = out->end + ssl->recordHeadLen;
 
@@ -3970,18 +3653,7 @@ static int32 writeServerHello(ssl_t *ssl, sslBuf_t *out)
  */
     *c = (ssl->cipher->ident & 0xFF00) >> 8; c++;
     *c = ssl->cipher->ident & 0xFF; c++;
-#  ifdef USE_ZLIB_COMPRESSION
-    if (ssl->compression)
-    {
-        *c = 1; c++;
-    }
-    else
-    {
-        *c = 0; c++;
-    }
-#  else
     *c = 0; c++;
-#  endif
 
     if (extLen != 0)
     {
@@ -5318,7 +4990,6 @@ static int32 writeAlert(ssl_t *ssl, unsigned char level,
         return tls13EncodeAlert(ssl, description, out, requiredLen);
     }
 # endif
-
     psTracePrintAlertEncodeInfo(ssl, description);
 
     c = out->end;
@@ -5580,10 +5251,6 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
     /* Calculate the size of the message up front, and write header */
     messageSize = ssl->recordHeadLen + ssl->hshakeHeadLen +
                   5 + SSL_HS_RANDOM_SIZE + ssl->sessionIdLen + cipherLen + cookieLen;
-
-#  ifdef USE_ZLIB_COMPRESSION
-    messageSize += 1;
-#  endif
 
     /* Extension lengths */
     extLen = 0;
@@ -5999,14 +5666,8 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
 /*
     Compression.  Length byte and 0 for 'none' and possibly 1 for zlib
  */
-#  ifdef USE_ZLIB_COMPRESSION
-    *c = 2; c++;
-    *c = 0; c++;
-    *c = 1; c++;
-#  else
     *c = 1; c++;
     *c = 0; c++;
-#  endif
 
 #  ifdef USE_DTLS
     if (ACTV_VER(ssl, v_dtls_any))
@@ -8387,3 +8048,4 @@ int32 sslWritePad(unsigned char *p, unsigned char padLen)
 
 /******************************************************************************/
 
+#endif /* USE_TLS_1_3_ONLY */

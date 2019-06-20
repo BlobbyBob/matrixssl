@@ -41,10 +41,12 @@
     - USE_TLS versions must 'stack' for compiling purposes
         - must enable TLS if enabling TLS 1.1
         - must enable TLS 1.1 if enabling TLS 1.2
+      However, TLS 1.3 can be enabled without the earlier versions by using
+      defining USE_TLS_1_3_ONLY.
+
     - Use the DISABLE_TLS_ defines to disallow specific protocols at runtime
         that have been enabled via USE_TLS_.
-    - There is no DISABLE_TLS_ for the latest version of the protocol.  If
-        you don't want to use that version disable the USE_TLS_ define instead
+
     The USE_TLS_1_x_AND_ABOVE simplifies this configuration.
     @security To enable SSL3.0, see below.
  */
@@ -54,9 +56,15 @@
 # define DISABLE_SSLV3  /**< DO NOT DISABLE, undef below if required
                            @security NIST_SHALL_NOT */
 
-/* This looks a bit clumsy, because TLS 1.3 code still requires a separate
-   define (USE_TLS_1_3) to enable. */
-#  if defined USE_TLS_1_2_AND_ABOVE
+#  if defined USE_TLS_1_3_ONLY
+#    define USE_TLS_1_3
+#    undef USE_TLS_1_2
+#    undef USE_TLS_1_1
+#    undef USE_TLS
+#    define DISABLE_TLS_1_2
+#    define DISABLE_TLS_1_1
+#    define DISABLE_TLS_1_0
+#  elif defined USE_TLS_1_2_AND_ABOVE
 #   ifndef DISABLE_TLS_1_3
 #    define USE_TLS_1_3
 #   endif

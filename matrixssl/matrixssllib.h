@@ -219,10 +219,6 @@ extern "C" {
     Include matrixssl external crypto provider layer headers.
  */
 
-# ifdef USE_ZLIB_COMPRESSION
-#  include "zlib.h"
-# endif
-
 # if defined(USE_AES_GCM) || defined(USE_AES_CCM) || defined(USE_CHACHA20_POLY1305_IETF)
 #  define USE_AEAD_CIPHER
 # endif
@@ -485,7 +481,7 @@ typedef struct
 # define HMAC_CREATE 1
 # define HMAC_VERIFY 2
 
-# ifdef USE_TLS_1_2
+# if defined(USE_TLS_1_2) || defined(USE_TLS_1_3)
 /**
    enum {
     none(0), md5(1), sha1(2), sha224(3), sha256(4), sha384(5), sha512(6), (255)
@@ -531,7 +527,7 @@ static inline uint16_t HASH_SIG_MASK(uint8_t hash, uint8_t sig)
     hash = 1 << (hash & 0x7);
     return sig == HASH_SIG_RSA ? hash : ((uint16_t) hash << 8);
 }
-# endif /* USE_TLS_1_2 */
+# endif /* USE_TLS_1_2 || USE_TLS_1_3 */
 
 /* SSL/TLS protocol message sizes */
 # define SSL_HS_RANDOM_SIZE          32
@@ -574,7 +570,9 @@ static inline uint16_t HASH_SIG_MASK(uint8_t hash, uint8_t sig)
 # endif
 
 /* Based on settings, define the highest TLS version available */
-# if defined(USE_TLS_1_2) && !defined(DISABLE_TLS_1_2)
+# if defined(USE_TLS_1_3)
+#  define TLS_HIGHEST_MINOR  TLS_1_3_MIN_VER
+# elif defined(USE_TLS_1_2) && !defined(DISABLE_TLS_1_2)
 #  define TLS_HIGHEST_MINOR  TLS_1_2_MIN_VER
 # elif defined(USE_TLS_1_1) && !defined(DISABLE_TLS_1_1)
 #  define TLS_HIGHEST_MINOR  TLS_1_1_MIN_VER
@@ -831,6 +829,7 @@ typedef struct
 
 # ifdef USE_TLS_1_3
     unsigned char tls13EarlySecret[MAX_TLS_1_3_HASH_SIZE];
+    unsigned char tls13EarlySecretSha384[MAX_TLS_1_3_HASH_SIZE];
     unsigned char tls13ExtBinderSecret[MAX_TLS_1_3_HASH_SIZE];
     unsigned char tls13EarlyTrafficSecretClient[MAX_TLS_1_3_HASH_SIZE];
     unsigned char tls13HandshakeSecret[MAX_TLS_1_3_HASH_SIZE];
@@ -863,6 +862,7 @@ typedef struct
     unsigned char tls13TrHashSnapshotCH1[MAX_TLS_1_3_HASH_SIZE];
     unsigned char tls13TrHashSnapshotCHtoSH[MAX_TLS_1_3_HASH_SIZE];
     unsigned char tls13TrHashSnapshotCHWithoutBinders[MAX_TLS_1_3_HASH_SIZE];
+    unsigned char tls13TrHashSnapshotCHWithoutBindersSha384[MAX_TLS_1_3_HASH_SIZE];
     unsigned char tls13ExtBinderKey[MAX_TLS_1_3_HASH_SIZE];
     unsigned char tls13FinishedKey[MAX_TLS_1_3_HASH_SIZE];
     unsigned char tls13VerifyData[MAX_TLS_1_3_HASH_SIZE];
@@ -943,7 +943,7 @@ typedef struct
 # endif
 
 # ifdef USE_NATIVE_TLS_HS_HASH
-#  ifndef USE_ONLY_TLS_1_2
+#  if !defined(USE_ONLY_TLS_1_2) && !defined(USE_TLS_1_3_ONLY)
     psMd5Sha1_t msgHashMd5Sha1;
 #  endif
 # endif
@@ -1135,7 +1135,12 @@ struct ssl
 
     sslSec_t sec;                   /* Security structure */
 
-    sslKeys_t *keys;                /* SSL public and private - keys confiured. */
+# ifdef ENABLE_MASTER_SECRET_EXPORT
+    unsigned char masterSecret[SSL_HS_MASTER_SIZE];
+    psSizeL_t hsMasterSecretLen;
+# endif /* ENABLE_MASTER_SECRET_EXPORT */
+
+    sslKeys_t *keys;                /* SSL public and private - keys configured. */
 # ifdef USE_BUFFERED_HS_HASH
     psBuf_t hsMsgBuf;
     psSizeL_t hsMsgCHtoCKELen;
@@ -1239,10 +1244,8 @@ struct ssl
 
     /* Pointer to the currently active read and write ciphers.
        Currently only used with ChaCha20 suites. */
-# ifdef USE_CHACHA20_POLY1305_IETF_CIPHER_SUITE
     const sslCipherSpec_t *activeReadCipher;
     const sslCipherSpec_t *activeWriteCipher;
-# endif
 
     /*  Symmetric cipher callbacks
 
@@ -1330,6 +1333,8 @@ struct ssl
     psCipher16_t *tls13ClientCipherSuites;
     uint8_t tls13ClientCipherSuitesLen;
     psBool_t tls13CiphersuitesEnabledClient;
+    psBool_t tls13CHContainsSha256Suite;
+    psBool_t tls13CHContainsSha384Suite;
     unsigned char *tls13CertRequestContext;
     psSize_t tls13CertRequestContextLen;
     psBool_t tls13GotCertificateRequest;
@@ -1435,13 +1440,6 @@ struct ssl
     int ecdsaSizeChange;             /* retransmits for ECDSA sig */
 # endif /* USE_DTLS */
 
-# ifdef USE_ZLIB_COMPRESSION
-    int32 compression;
-    z_stream inflate;
-    z_stream deflate;
-    unsigned char *zlibBuffer;     /* scratch pad for inflate/deflate data */
-# endif
-
     struct
     {
 # ifdef USE_CLIENT_SIDE_SSL
@@ -1469,11 +1467,13 @@ struct ssl
         uint32 got_cookie : 1;
         uint32 got_elliptic_points : 1;
 # endif
-        uint32 got_supported_versions : 1; /* server only; but 1bit only */
-        uint32 got_key_share : 1;          /* server only; but 1bit only */
-        uint32 got_pre_shared_key : 1;     /* server only; but 1bit only */
 
+        uint32 got_supported_versions : 1;
+
+        uint32 got_key_share : 1;
+        uint32 got_pre_shared_key : 1;
         uint32 got_early_data : 1;
+
         /* Set if the extension was negotiated successfully */
         uint32 sni : 1;
         uint32 truncated_hmac : 1;
@@ -1593,10 +1593,6 @@ PSPUBLIC int32 matrixSslGetRehandshakeCredits(ssl_t *ssl);
 PSPUBLIC void matrixSslAddRehandshakeCredits(ssl_t *ssl, int32 credits);
 # endif
 
-# ifdef USE_ZLIB_COMPRESSION
-PSPUBLIC int32 matrixSslIsSessionCompressionOn(ssl_t *ssl);
-# endif
-
 # ifdef USE_ECC
 int32_t matrixSslGenEphemeralEcKey(
         sslKeys_t *keys,
@@ -1663,8 +1659,9 @@ extern int32 parseClientHelloExtensions(ssl_t *ssl, unsigned char **cp,
                                         unsigned short len);
 extern int32 parseClientKeyExchange(ssl_t *ssl, int32 hsLen, unsigned char **cp,
                                     unsigned char *end);
-extern int32 checkClientHelloVersion(ssl_t *ssl);
-extern int32 checkSupportedVersions(ssl_t *ssl);
+extern int32_t checkClientHelloVersion(ssl_t *ssl);
+extern int32_t checkSupportedVersions(ssl_t *ssl);
+extern int32_t tlsServerNegotiateVersion(ssl_t *ssl);
 #  ifndef USE_ONLY_PSK_CIPHER_SUITE
 #   ifdef USE_CLIENT_AUTH
 extern int32 parseCertificateVerify(ssl_t * ssl,
@@ -1773,6 +1770,12 @@ extern int accountForEcdsaSizeChange(ssl_t *ssl,
         int hsMsg);
 # endif /* USE_ONLY_PSK_CIPHER_SUITE */
 
+# if defined(USE_TLS_1_2) || defined(USE_TLS_1_3)
+int32_t tlsParseSupportedGroups(ssl_t *ssl,
+        const unsigned char *c,
+        unsigned short extLen);
+# endif
+
 # ifdef USE_TLS_1_3
 /* Parsing. */
 extern int32 matrixSslDecodeTls13(ssl_t *ssl,
@@ -1790,9 +1793,14 @@ extern int32_t tls13ParseServerHelloExtensions(ssl_t *ssl,
         psParseBuf_t *pb);
 extern int32_t tls13ParsePreSharedKey(ssl_t *ssl,
         psParseBuf_t *pb);
+extern int32_t tls13ParseKeyShare(ssl_t *ssl,
+        psParseBuf_t *pb,
+        psBool_t allowStateChange);
 extern int32_t tls13ParsePskKeyExchangeModes(ssl_t *ssl,
         psParseBuf_t *pb);
 extern int32_t tls13ParseCookie(ssl_t *ssl,
+        psParseBuf_t *pb);
+extern int32_t tls13ParseServerName(ssl_t *ssl,
         psParseBuf_t *pb);
 extern int32_t tls13ParseSignatureAlgorithms(ssl_t *ssl,
         const unsigned char **c,
@@ -1811,7 +1819,8 @@ extern int32_t tls13ParseStatusRequest(ssl_t *ssl,
         psParseBuf_t *extBuf);
 extern int32_t tls13ParseExtensions(ssl_t *ssl,
         psParseBuf_t *pb,
-        unsigned char hsMsgType);
+        unsigned char hsMsgType,
+        psBool_t allowStateChange);
 
 /* Encoding. */
 extern int32 tls13WriteClientHello(ssl_t *ssl,
@@ -1839,6 +1848,12 @@ extern int32_t tls13WriteHsRecordHeader(ssl_t *ssl,
         const unsigned char *end,
         unsigned char **encryptStart,
         unsigned char **encryptEnd);
+extern int32_t tls13EncodeResponse(ssl_t *ssl,
+        psBuf_t *out,
+        uint32 *requiredLen);
+extern int32_t tls13EncryptMessage(ssl_t *ssl,
+        flightEncode_t *msg,
+        unsigned char **end);
 extern psSizeL_t tls13GetPadLen(ssl_t *ssl,
         psSizeL_t len);
 extern int32_t tls13EncodeAppData(ssl_t *ssl,
@@ -2613,6 +2628,12 @@ void psPrintPskKeyExchangeMode(psSize_t indentLevel,
         const char *where,
         psk_key_exchange_mode_e mode,
         psBool_t addNewLine);
+void psPrintPskIdentity(psSize_t indentLevel,
+        const char *where,
+        unsigned char *id,
+        psSizeL_t idLen,
+        ssl_t *ssl,
+        psBool_t addNewLine);
 void psPrintTranscriptHashUpdate(ssl_t *ssl,
         unsigned char *in,
         psSizeL_t inLen,
@@ -2671,6 +2692,8 @@ void psPrintTranscriptHashUpdate(ssl_t *ssl,
     psPrintCertSubject(indentLevel, ssl, cert, indexInChain)
 #  define psTracePrintPskKeyExchangeMode(indentLevel, where, mode, addNewLine) \
     psPrintPskKeyExchangeMode(indentLevel, where, mode, addNewLine)
+#  define psTracePrintPskIdentity(indentLevel, where, id, idLen, ssl, addNewline) \
+    psPrintPskIdentity(indentLevel, where, id, idLen, ssl, addNewline)
 #  define psTracePrintTranscriptHashUpdate(ssl, in, inLen, hashAlg) \
     psPrintTranscriptHashUpdate(ssl, in, inLen, hashAlg)
 # else /* Do not produce code without USE_SSL_INFORMATIONAL_TRACE. */
@@ -2702,6 +2725,7 @@ void psPrintTranscriptHashUpdate(ssl_t *ssl,
 #  define psTracePrintHsState(state, addNewline)
 #  define psTracePrintCertSubject(indentLevel, ssl, cert, indexInChain)
 #  define psTracePrintPskKeyExchangeMode(indentLevel, where, mode, addNewLine)
+#  define psTracePrintPskIdentity(indentLevel, where, id, idLen, ssl, addNewline)
 #  define psTracePrintTranscriptHashUpdate(ssl, in, inLen, hashAlg)
 # endif /* USE_SSL_INFORMATIONAL_TRACE */
 

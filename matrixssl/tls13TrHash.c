@@ -168,6 +168,7 @@ int32_t tls13TranscriptHashUpdate(ssl_t *ssl,
 {
     int32_t alg;
 
+# ifndef USE_TLS_1_3_ONLY
     /* Also the < 1.3 hash must be updated before we know that
        we end up with TLS1.3 */
 
@@ -180,6 +181,7 @@ int32_t tls13TranscriptHashUpdate(ssl_t *ssl,
     {
         sslUpdateHSHash(ssl, in, len);
     }
+# endif /* USE_TLS_1_3_ONLY */
 
     if (ssl->cipher == NULL || ssl->cipher->ident == SSL_NULL_WITH_NULL_NULL)
     {
@@ -268,6 +270,9 @@ int32_t tls13TranscriptHashSnapshotAlg(ssl_t *ssl,
             psSha256Sync(&ssl->sec.tls13msgHashSha256, 0);
             sha256 = ssl->sec.tls13msgHashSha256;
             psSha256Final(&sha256, out);
+# ifdef DEBUG_TLS_1_3_TRANSCRIPT_HASH
+            psTraceBytes("Transcript-Hash SHA-256 snapshot", out, 32);
+# endif
         }
         break;
     case OID_SHA384_ALG:
@@ -277,6 +282,9 @@ int32_t tls13TranscriptHashSnapshotAlg(ssl_t *ssl,
             psSha384Sync(&ssl->sec.tls13msgHashSha384, 0);
             sha384 = ssl->sec.tls13msgHashSha384;
             psSha384Final(&sha384, out);
+# ifdef DEBUG_TLS_1_3_TRANSCRIPT_HASH
+            psTraceBytes("Transcript-Hash SHA-384 snapshot", out, 48);
+# endif
         }
         break;
     default:

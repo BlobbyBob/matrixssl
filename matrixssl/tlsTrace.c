@@ -498,6 +498,7 @@ void psPrintHex(psSize_t indentLevel,
     }
 }
 
+# ifndef USE_TLS_1_3_ONLY
 void psPrintSigAlgs(psSize_t indentLevel,
         const char *where,
         uint16_t sigAlgs,
@@ -553,6 +554,7 @@ void psPrintSigAlgs(psSize_t indentLevel,
         tlsTrace("\n");
     }
 }
+# endif /* USE_TLS_1_3_ONLY */
 
 void psPrintTls13SigAlg(psSize_t indentLevel,
         const char *where,
@@ -796,7 +798,7 @@ void psPrintNegotiatedProtocolVersion(psSize_t indentLevel,
         ver = v_undefined;
     }
 
-    psTracePrintProtocolVersionNew(indentLevel,
+    psPrintProtocolVersionNew(indentLevel,
             where,
             ver,
             PS_TRUE);
@@ -1431,7 +1433,7 @@ void psPrintCertSubject(psSize_t indentLevel,
 
     tlsTraceIndent(indentLevel, NULL);
 
-    if (psX509GetOnelineDN(&cert->subject, &dn, &dn_len) < 0)
+    if (psX509GetOnelineDN(&cert->subject, &dn, &dn_len, 0) < 0)
     {
         psAssert(0);
     }
@@ -1469,6 +1471,36 @@ void psPrintPskKeyExchangeMode(psSize_t indentLevel,
     {
         tlsTrace("unknown");
     }
+
+    if (addNewLine)
+    {
+        tlsTrace("\n");
+    }
+}
+
+void psPrintPskIdentity(psSize_t indentLevel,
+        const char *where,
+        unsigned char *id,
+        psSizeL_t idLen,
+        ssl_t *ssl,
+        psBool_t addNewLine)
+{
+    char buf[32] = {0};
+
+    tlsTraceIndent(indentLevel, NULL);
+
+    if (where)
+    {
+        tlsTraceStr("%s: ", where);
+    }
+
+    if (idLen >= sizeof(buf))
+    {
+        idLen = sizeof(buf) - 1;
+    }
+    psMem2Str(buf, id, idLen);
+
+    tlsTraceStr("%s", buf);
 
     if (addNewLine)
     {
@@ -1519,6 +1551,9 @@ void psPrintCiphersuiteName(psSize_t indentLevel,
 
     switch (cipherId)
     {
+    case SSL_NULL_WITH_NULL_NULL:
+        tlsTrace("undefined or NULL\n");
+        break;
     case SSL_RSA_WITH_NULL_MD5:
         tlsTrace("SSL_RSA_WITH_NULL_MD5");
         break;
@@ -1871,12 +1906,15 @@ void matrixSslPrintHSDetails(ssl_t *ssl)
 {
     if (ssl->hsState == SSL_HS_DONE)
     {
+        psCipher16_t cipherIdent;
+        matrixSslGetNegotiatedCiphersuite(ssl, &cipherIdent);
+
         tlsTrace("\n");
-        psTracePrintProtocolVersionNew(INDENT_CONN_ESTABLISHED,
+        psPrintProtocolVersionNew(INDENT_CONN_ESTABLISHED,
                 NULL, GET_ACTV_VER(ssl), PS_FALSE);
         tlsTrace(" connection established: ");
-        psTracePrintCiphersuiteName(INDENT_CONN_ESTABLISHED,
-                NULL, ssl->cipher->ident, PS_TRUE);
+        psPrintCiphersuiteName(INDENT_CONN_ESTABLISHED,
+                NULL, cipherIdent, PS_TRUE);
 
         if (MATRIX_IS_SERVER(ssl))
         {
@@ -1912,7 +1950,7 @@ void matrixSslPrintHSDetails(ssl_t *ssl)
                 {
                     tlsTrace("  Keyex mode: PSK with (EC)DHE\n");
                     tlsTrace("  Group: ");
-                    psTracePrintTls13NamedGroup(INDENT_CONN_ESTABLISHED,
+                    psPrintTls13NamedGroup(INDENT_CONN_ESTABLISHED,
                             NULL,
                             ssl->tls13NegotiatedGroup,
                             PS_TRUE);
@@ -1922,7 +1960,7 @@ void matrixSslPrintHSDetails(ssl_t *ssl)
             {
                 tlsTrace("  Keyex mode: (EC)DHE\n");
                 tlsTrace("  Keyex group: ");
-                psTracePrintTls13NamedGroup(INDENT_CONN_ESTABLISHED,
+                psPrintTls13NamedGroup(INDENT_CONN_ESTABLISHED,
                         NULL,
                         ssl->tls13NegotiatedGroup,
                         PS_TRUE);
@@ -1940,7 +1978,7 @@ void matrixSslPrintHSDetails(ssl_t *ssl)
                     {
                         tlsTrace("  Client sig alg: ");
                     }
-                    psTracePrintTls13SigAlg(INDENT_CONN_ESTABLISHED,
+                    psPrintTls13SigAlg(INDENT_CONN_ESTABLISHED,
                             NULL,
                             ssl->sec.tls13CvSigAlg,
                             PS_FALSE,
@@ -1953,7 +1991,7 @@ void matrixSslPrintHSDetails(ssl_t *ssl)
                     {
                         tlsTrace("  Client key: ");
                     }
-                    psTracePrintPubKeyTypeAndSize(ssl,
+                    psPrintPubKeyTypeAndSize(ssl,
                             &ssl->keys->identity->privKey);
                 }
                 if (ssl->sec.tls13PeerCvSigAlg != 0)
@@ -1966,7 +2004,7 @@ void matrixSslPrintHSDetails(ssl_t *ssl)
                     {
                         tlsTrace("  Server sig alg: ");
                     }
-                    psTracePrintTls13SigAlg(INDENT_CONN_ESTABLISHED,
+                    psPrintTls13SigAlg(INDENT_CONN_ESTABLISHED,
                             NULL,
                             ssl->sec.tls13PeerCvSigAlg,
                             PS_FALSE,
@@ -1980,7 +2018,7 @@ void matrixSslPrintHSDetails(ssl_t *ssl)
                     {
                         tlsTrace("  Server key: ");
                     }
-                    psTracePrintPubKeyTypeAndSize(ssl,
+                    psPrintPubKeyTypeAndSize(ssl,
                             &ssl->sec.cert->publicKey);
 #   endif /* USE_CERT_PARSE */
                 }
@@ -2014,7 +2052,7 @@ void matrixSslPrintHSDetails(ssl_t *ssl)
                     if (ssl->keys && ssl->chosenIdentity)
                     {
                         tlsTrace("  Server key: ");
-                        psTracePrintPubKeyTypeAndSize(ssl,
+                        psPrintPubKeyTypeAndSize(ssl,
                                 &ssl->chosenIdentity->privKey);
                     }
                     if (ssl->flags & SSL_FLAGS_CLIENT_AUTH)
@@ -2032,7 +2070,7 @@ void matrixSslPrintHSDetails(ssl_t *ssl)
                             && ssl->chosenIdentity)
                     {
                         tlsTrace("  Client key: ");
-                        psTracePrintPubKeyTypeAndSize(ssl,
+                        psPrintPubKeyTypeAndSize(ssl,
                                 &ssl->chosenIdentity->privKey);
                     }
                     tlsTrace("  Server key: ");

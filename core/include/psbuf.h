@@ -326,7 +326,8 @@ int32_t psDynBufAppendTlsVector(psDynBuf_t *db,
 
 /* Start parsing static data using psParseBuf_t. */
 int32_t psParseBufFromStaticData(psParseBuf_t *pb,
-                                 const void *data, size_t len);
+        const void *data,
+        size_t len);
 
 /* Check if there is sufficient data to parse left. */
 static inline int psParseCanRead(const psParseBuf_t *pb, size_t nbytes)
@@ -451,7 +452,8 @@ static __inline psResSize_t psParseBufParseTlsVector(psParseBuf_t *pb,
 
 static __inline int psParseBufTryParseOctets(psParseBuf_t *pb,
         size_t num_octets,
-        unsigned char *parsed_octets)
+        unsigned char *parsed_octets,
+        psBool_t store_value)
 {
     size_t i;
 
@@ -462,7 +464,10 @@ static __inline int psParseBufTryParseOctets(psParseBuf_t *pb,
 
     for (i = 0; i < num_octets; i++)
     {
-        parsed_octets[i] = (unsigned char)*pb->buf.start;
+        if (store_value)
+        {
+            parsed_octets[i] = (unsigned char)*pb->buf.start;
+        }
         pb->buf.start++;
     }
 
@@ -525,6 +530,12 @@ static __inline void psParseForward(psParseBuf_t *pb,
         size_t num_bytes)
 {
     pb->buf.start += num_bytes;
+}
+
+static __inline void psParseRewind(psParseBuf_t *pb,
+        size_t num_bytes)
+{
+    pb->buf.start -= num_bytes;
 }
 
 /* Check if there is sufficient data to parse left. */

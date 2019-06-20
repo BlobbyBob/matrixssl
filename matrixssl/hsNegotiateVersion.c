@@ -290,6 +290,7 @@ psProtocolVersion_t psVerGetHighestTls(psProtocolVersion_t ver)
     return psVerGetHighest(ver, 0);
 }
 
+# ifdef USE_SERVER_SIDE_SSL
 int32_t checkClientHelloVersion(ssl_t *ssl)
 {
     psProtocolVersion_t clientHighest;
@@ -350,6 +351,7 @@ out_ok:
     SET_NGTD_VER(ssl, negotiatedVer);
     return PS_SUCCESS;
 }
+# endif /* USE_SERVER_SIDE_SSL */
 
 /** Check whether the protocol version selected by the server can
     be supported for this handshake.
@@ -358,6 +360,7 @@ out_ok:
     from ServerHello.server_version (called ServerHello.legacy_version
     in TLS 1.3).
 */
+# ifdef USE_CLIENT_SIDE_SSL
 int32_t checkServerHelloVersion(ssl_t *ssl)
 {
     psProtocolVersion_t serverVer;
@@ -380,8 +383,40 @@ int32_t checkServerHelloVersion(ssl_t *ssl)
     SET_NGTD_VER(ssl, serverVer);
     return MATRIXSSL_SUCCESS;
 }
+# endif /* USE_CLIENT_SIDE_SSL */
+
+# ifdef USE_SERVER_SIDE_SSL
+int32_t tlsServerNegotiateVersion(ssl_t *ssl)
+{
+#  ifdef USE_TLS_1_3_ONLY
+    if (ssl->extFlags.got_supported_versions)
+    {
+        return checkSupportedVersions(ssl);
+    }
+    else
+    {
+        psTraceErrr("Unable to negotiate TLS 1.3 without the " \
+                "supported_versions extension.\n " \
+                "We have been configured to only support TLS 1.3\n " \
+                "(#define USE_TLS_1_3_ONLY)\n");
+        ssl->err = SSL_ALERT_PROTOCOL_VERSION;
+        return MATRIXSSL_ERROR;
+    }
+#  endif
+#  ifdef USE_TLS_1_3
+    if (ssl->extFlags.got_supported_versions)
+    {
+        return checkSupportedVersions(ssl);
+    }
+#  endif
+
+    /* No supported_versions; try to negotiate based on legacy_version. */
+    return checkClientHelloVersion(ssl);
+}
+# endif /* USE_SERVER_SIDE_SSL */
 
 # ifdef USE_TLS_1_3
+#  ifdef USE_SERVER_SIDE_SSL
 int32_t checkSupportedVersions(ssl_t *ssl)
 {
     int32 rc;
@@ -401,6 +436,18 @@ int32_t checkSupportedVersions(ssl_t *ssl)
         forbiddenVer[i++] = TLS_1_3_DRAFT_28_VER;
         forbiddenVer[i++] = TLS_1_3_VER;
         forbiddenVerLen = i;
+    }
+    else
+    {
+        /* If TLS 1.3 (RFC version) is negotiable, then we have to select
+           it, regardless of our and the peer's priorities. Otherwise,
+           we will trigger the TLS 1.3 downgrade protection mechanism
+           and the handshake will fail. */
+        if (SUPP_VER(ssl, v_tls_1_3) && PEER_SUPP_VER(ssl, v_tls_1_3))
+        {
+            SET_NGTD_VER(ssl, v_tls_1_3);
+            return PS_SUCCESS;
+        }
     }
 
     /* Choose version from the intersection of our and the client's
@@ -423,6 +470,7 @@ int32_t checkSupportedVersions(ssl_t *ssl)
 
     return PS_SUCCESS;
 }
+#  endif /* USE_SERVER_SIDE_SSL */
 
 /* Check the TLS 1.3 downgrade protection mechanism. */
 int32_t performTls13DowngradeCheck(ssl_t *ssl)

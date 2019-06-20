@@ -98,6 +98,10 @@ typedef struct x509DomainComponent
 /* Number of null-bytes to terminate parsed string-type DN attributes with. */
 #   define DN_NUM_TERMINATING_NULLS 2
 
+/* Number of attribute types supported
+   (only one per type stored save domainComponent and orgUnit) */
+#   define DN_NUM_ATTRIBUTE_TYPES_MAX 22
+
 /*
     DN attributes are used outside the X509 area for cert requests,
     which have been included in the RSA portions of the code
@@ -146,8 +150,6 @@ typedef struct
     psSize_t commonNameLen;
     short serialNumberType;
     psSize_t serialNumberLen;
-    short domainComponentType;
-    psSize_t domainComponentLen;
 #   ifdef USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD
     short localityType;
     psSize_t localityLen;
@@ -178,6 +180,8 @@ typedef struct
     short emailType;
     psSize_t emailLen;
 #   endif /* USE_EXTRA_DN_ATTRIBUTES */
+
+    int32 attributeOrder[DN_NUM_ATTRIBUTE_TYPES_MAX];
 
 } x509DNattributes_t;
 
@@ -742,6 +746,9 @@ extern int32_t psX509GetConcatenatedDomainComponent(
 #  endif /* USE_CERT_PARSE */
 
 #  ifdef USE_FULL_CERT_PARSE
+/* Certificate DN output flags */
+#  define CERT_DN_USE_ORIGINAL_ATTRIBUTE_ORDER  0x01
+
 /** Create a concatenated string containing all the supported fields of a DN
     component.
 
@@ -755,10 +762,12 @@ extern int32_t psX509GetConcatenatedDomainComponent(
     @param[out] out_str Pointer to the memory address where the resulting string
     will be allocated and copied to. Caller is responsible for freeing.
     @param[out] out_str_len Length of the resulting string.
+    @param[in] flags The DN output option flags.
  */
 extern int32_t psX509GetOnelineDN(const x509DNattributes_t *DN,
         char **out_str,
-        size_t *out_str_len);
+        size_t *out_str_len,
+        uint32_t flags);
 #  endif /* USE_FULL_CERT_PARSE */
 
 #  ifdef USE_OCSP_RESPONSE
@@ -956,6 +965,10 @@ extern int32_t psOcspRequestWriteOld(psPool_t *pool, psX509Cert_t *cert,
 /* Uninitialize OCSP response. */
 void psOcspResponseUninit(psOcspResponse_t *res);
 
+#  else /* USE_OCSP_RESPONSE */
+/* The following is always needed by matrixsslApiTypes.h, which always
+   declares everything regardless of compile-time config. */
+struct psOcspResponse;
 #  endif /* USE_OCSP_RESPONSE */
 
 #  ifdef USE_OCSP_REQUEST

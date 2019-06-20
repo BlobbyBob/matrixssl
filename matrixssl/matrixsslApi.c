@@ -1635,7 +1635,7 @@ DECODE_MORE:
         }
         else
         {
-            psTraceErrr("Encoding error. Possible wrong flight messagSize\n");
+            psTraceErrr("Encoding error. Possible wrong flight messageSize\n");
             return PS_PROTOCOL_FAIL;    /* error in our encoding */
         }
         goto DECODE_MORE;
@@ -1692,12 +1692,6 @@ DECODE_MORE:
         if (ACTV_VER(ssl, v_dtls_any))
         {
             ssl->appDataExch = 1;
-        }
-#endif
-#ifdef USE_ZLIB_COMPRESSION
-        if (ssl->compression > 0)
-        {
-            return MATRIXSSL_APP_DATA_COMPRESSED;
         }
 #endif
         return MATRIXSSL_APP_DATA;
@@ -1886,14 +1880,6 @@ int32_t matrixSslEncodeRehandshake(ssl_t *ssl, sslKeys_t *keys,
 #  ifdef DISABLE_DTLS_CLIENT_CHANGE_CIPHER_FROM_GCM_TO_GCM
 #  endif  /* DISABLE_DTLS_CLIENT_CHANGE_CIPHER_FROM_GCM_TO_GCM */
 
-#  ifdef USE_ZLIB_COMPRESSION
-    /* Re-handshakes are not currently supported for compressed sessions. */
-    if (ssl->compression > 0)
-    {
-        psTraceErrr("Re-handshakes not supported for compressed sessions\n");
-        return PS_UNSUPPORTED_FAIL;
-    }
-#  endif
 /*
     The only explicit option that can be passsed in is
     SSL_OPTION_FULL_HANDSHAKE to indicate no resumption is allowed
@@ -2200,17 +2186,6 @@ int32 matrixSslSentData(ssl_t *ssl, uint32 bytes)
     return rc;
 }
 
-# ifdef USE_ZLIB_COMPRESSION
-int32 matrixSslIsSessionCompressionOn(ssl_t *ssl)
-{
-    if (ssl->compression > 0)
-    {
-        return PS_TRUE;
-    }
-    return PS_FALSE;
-}
-# endif
-
 # ifdef USE_TLS_1_3
 int32_t matrixSslSetTls13BlockPadding(ssl_t *ssl, psSizeL_t blockSize)
 {
@@ -2235,6 +2210,11 @@ int32_t matrixSslSetTls13BlockPadding(ssl_t *ssl, psSizeL_t blockSize)
 sslKeys_t *matrixSslGetKeys(ssl_t *ssl)
 {
     return ssl->keys;
+}
+
+void *matrixSslGetUserPtr(ssl_t *ssl)
+{
+    return ssl->userPtr;
 }
 
 psProtocolVersion_t matrixSslGetNegotiatedVersion(ssl_t *ssl)
@@ -2265,4 +2245,68 @@ char *matrixSslGetExpectedName(const ssl_t *ssl)
 {
     return ssl->expectedName;
 }
+
+int32 matrixSslGetNegotiatedCiphersuite(ssl_t *ssl, psCipher16_t *cipherIdent)
+{
+    if (!ssl || !cipherIdent)
+    {
+        return PS_ARG_FAIL;
+    }
+
+    if (ssl->cipher == NULL)
+    {
+        return PS_FAILURE;
+    }
+
+    *cipherIdent = ssl->cipher->ident;
+
+    return PS_SUCCESS;
+}
+
+int32 matrixSslGetActiveCiphersuite(
+        ssl_t *ssl,
+        psCipher16_t *activeReadCipher,
+        psCipher16_t *activeWriteCipher)
+{
+    if (!ssl || !activeReadCipher || !activeWriteCipher)
+    {
+        return PS_ARG_FAIL;
+    }
+
+    if (ssl->activeReadCipher == NULL ||
+        ssl->activeWriteCipher == NULL)
+    {
+        return PS_FAILURE;
+    }
+
+    *activeReadCipher = ssl->activeReadCipher->ident;
+    *activeWriteCipher = ssl->activeWriteCipher->ident;
+
+    return PS_SUCCESS;
+}
+
+# ifdef ENABLE_MASTER_SECRET_EXPORT
+int32 matrixSslGetMasterSecret(
+        ssl_t *ssl,
+        unsigned char **masterSecret,
+        psSizeL_t *hsMasterSecretLen)
+{
+    if (!ssl || !hsMasterSecretLen)
+    {
+        return PS_ARG_FAIL;
+    }
+
+    *hsMasterSecretLen = ssl->hsMasterSecretLen;
+
+    if (ssl->hsMasterSecretLen == 0)
+    {
+        return PS_FAILURE;
+    }
+
+    *masterSecret = ssl->masterSecret;
+
+    return PS_SUCCESS;
+}
+# endif /* ENABLE_MASTER_SECRET_EXPORT */
+
 /******************************************************************************/

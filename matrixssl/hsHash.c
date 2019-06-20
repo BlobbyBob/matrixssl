@@ -34,6 +34,8 @@
 
 #include "matrixsslImpl.h"
 
+#ifndef USE_TLS_1_3_ONLY
+
 #ifndef USE_BUFFERED_HS_HASH
 
 #ifdef USE_NATIVE_TLS_HS_HASH
@@ -143,7 +145,8 @@ int32_t sslUpdateHSHash(ssl_t *ssl, const unsigned char *in, psSize_t len)
 # ifdef USE_DTLS
     if (ACTV_VER(ssl, v_dtls_any))
     {
-        /* Don't update handshake hashes on resends.  Already been through here */
+        /* Don't update handshake hashes on resends. Already been through
+           here. */
         if (ssl->retransmit)
         {
             return 0;
@@ -559,5 +562,12 @@ void sslFreeHSHash(ssl_t *ssl)
 #endif /* USE_NATIVE_TLS_HS_HASH */
 
 #endif /* USE_BUFFERED_HS_HASH */
+
+#else /* USE_TLS_1_3_ONLY */
+void sslFreeHSHash(ssl_t *ssl)
+{
+    (void)ssl;
+}
+#endif /* USE_TLS_1_3_ONLY */
 
 /******************************************************************************/

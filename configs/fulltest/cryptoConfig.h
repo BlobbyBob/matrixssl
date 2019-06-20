@@ -75,6 +75,9 @@
 
 #  define USE_BURN_STACK/**< @security Zero sensitive data from the stack. */
 
+/* Allow extraction of the master key via the API */
+#  define ENABLE_MASTER_SECRET_EXPORT
+
 /******************************************************************************/
 /**
     Public-Key Algorithm Support.
@@ -179,7 +182,7 @@
     SHA1 using TLS 1.2 and SHA2 based ciphersuites, and interacting
     only with newer certificates.
  */
-/* #define USE_SHA224         *//**< @note Used only for cert signature */
+#  define USE_SHA224/**< @note Used only for cert signature */
 #  define USE_SHA256/**< @note Required for TLS 1.2 and above */
 #  define USE_HMAC_SHA256
 #  define USE_SHA384/**< @pre USE_SHA512 */

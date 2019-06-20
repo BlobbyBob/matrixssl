@@ -81,7 +81,6 @@ static int32 initSupportedGroups(ssl_t *ssl, sslSessOpts_t *options);
 static int32 initSignatureAlgorithms(ssl_t *ssl, sslSessOpts_t *options);
 
 extern int32 getDefaultSigAlgs(ssl_t *ssl);
-extern psBool_t psIsSigAlgSupported(uint16_t sigAlg);
 #ifdef USE_TLS_1_3
 extern int32 tls13GetDefaultSigAlgsCert(ssl_t *ssl);
 extern int32 tls13GetDefaultGroups(ssl_t *ssl);
@@ -283,14 +282,14 @@ int32_t matrixSslSessOptsSetSigAlgsCert(sslSessOpts_t *options,
         return PS_ARG_FAIL;
     }
 
-    /* Set the signature_algorithms to support. */
+    /* Set the signature_algorithms to support (for cert verification). */
     for (i = 0; i < sigAlgsLen; i++)
     {
         if (i >= TLS_MAX_SIGNATURE_ALGORITHMS || sigAlgs[i] == 0)
         {
             return PS_ARG_FAIL;
         }
-        if (!psIsSigAlgSupported(sigAlgs[i]))
+        if (!psIsSigAlgSupported(sigAlgs[i], PS_SIG_ALG_FLAG_VERIFY))
         {
             psTraceIntInfo("matrixSslSessOptsSetSigAlgsCert: " \
                     "unsupported sig_alg: %hu\n", sigAlgs[i]);
@@ -361,17 +360,21 @@ int32_t matrixSslSessOptsSetSigAlgs(sslSessOpts_t *options,
         return PS_ARG_FAIL;
     }
 
-    /* Set the signature_algorithms to support. */
+    /* Set the signature_algorithms to support (for verification). */
     for (i = 0; i < sigAlgsLen; i++)
     {
         if (i >= TLS_MAX_SIGNATURE_ALGORITHMS || sigAlgs[i] == 0)
         {
             return PS_ARG_FAIL;
         }
-        if (!psIsSigAlgSupported(sigAlgs[i]))
+        if (!psIsSigAlgSupported(sigAlgs[i], PS_SIG_ALG_FLAG_VERIFY))
         {
-            psTraceIntInfo("matrixSslSessOptsSetSigAlgs: " \
-                    "unsupported sig_alg: %hu\n", sigAlgs[i]);
+            psTraceErrr("matrixSslSessOptsSetSigAlgs: unsupported sigalg\n");
+            psTracePrintTls13SigAlg(0,
+                    "Tried to use an unsupported sigalg",
+                    sigAlgs[i],
+                    PS_FALSE,
+                    PS_TRUE);
             return PS_ARG_FAIL;
         }
         options->supportedSigAlgs[i] = sigAlgs[i];
@@ -837,11 +840,13 @@ void matrixSslDeleteSession(ssl_t *ssl)
 
     /* Synchronize all digests, in case some of them have been updated, but
        not finished. */
+#ifndef USE_TLS_1_3_ONLY
 #ifdef  USE_TLS_1_2
     psSha256Sync(NULL, 1);
 #else /* !USE_TLS_1_2 */
     psSha1Sync(NULL, 1);
 #endif /* USE_TLS_1_2 */
+#endif
 
     sslFreeHSHash(ssl);
 
@@ -2180,6 +2185,13 @@ void sslResetContext(ssl_t *ssl)
 static int wildcardMatch(char *wild, char *s)
 {
     char *c, *e;
+
+    if (wild == NULL)
+    {
+        /* This could be because the cert does not have the DN field
+           that we are trying to check. */
+        return -1;
+    }
 
     c = wild;
     if (*c == '*')

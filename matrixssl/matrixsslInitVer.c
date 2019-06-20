@@ -411,14 +411,15 @@ int32 initSupportedVersions(ssl_t *ssl, sslSessOpts_t *options)
       - If client, we shall encode the first ClientHello according
         in the TLS 1.3 ClientHello format.
     */
-    if (MATRIX_IS_CLIENT(ssl))
+    if (highestSupported == v_undefined)
     {
-        if (highestSupported == v_undefined)
-        {
-            highestSupported = psVerGetHighestTls(GET_SUPP_VER(ssl));
-        }
-        SET_ACTV_VER(ssl, highestSupported);
+        highestSupported = psVerGetHighestTls(GET_SUPP_VER(ssl));
     }
+    if (highestSupported & v_tls_1_3_any)
+    {
+        ssl->hsState = SSL_HS_TLS_1_3_START;
+    }
+    SET_ACTV_VER(ssl, highestSupported);
 
     return MATRIXSSL_SUCCESS;
 }

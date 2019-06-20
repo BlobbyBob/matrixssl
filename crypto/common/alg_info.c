@@ -87,6 +87,8 @@ psResSize_t psSigAlgToHashLen(int32_t sigAlg)
     case OID_SHA1_ECDSA_SIG:
     case OID_SHA1_DSA_SIG:
         return SHA1_HASH_SIZE;
+    case OID_SHA224_ECDSA_SIG:
+        return SHA224_HASH_SIZE;
     case OID_SHA256_RSA_SIG:
     case OID_SHA256_ECDSA_SIG:
         return SHA256_HASH_SIZE;
@@ -110,6 +112,14 @@ psResSize_t psSigAlgToHashLen(int32_t sigAlg)
     case PKCS1_SHA384_ID:
         return SHA384_HASH_SIZE;
     case PKCS1_SHA512_ID:
+        return SHA512_HASH_SIZE;
+# endif
+# ifdef USE_ED25519
+    case OID_ED25519_KEY_ALG:
+        /* Ed25519 doesn't use pre-hash, but uses SHA-512 internally.
+           There's no point in using the returned value anywhere, because
+           no pre-hash needs to be computed. Still, return something to
+           avoid branches in calling code. */
         return SHA512_HASH_SIZE;
 # endif
     default:
@@ -184,7 +194,7 @@ int32_t psHashLenToSigAlg(psSize_t hash_len,
             signatureAlgorithm = OID_SHA1_ECDSA_SIG;
         }
         break;
-# if 0
+# ifdef USE_SHA224
     case SHA224_HASH_SIZE:
         if (key_type == PS_RSA)
         {
@@ -424,12 +434,12 @@ psBool_t psIsEcdheGroup(uint16_t namedGroup)
     }
 }
 
-psBool_t psIsSigAlgSupported(uint16_t sigAlg)
+psBool_t psIsSigAlgSupported(uint16_t sigAlg, uint32_t flags)
 {
     psBool_t supported = PS_FALSE;
-    psBool_t isNonFips = PS_FALSE; /* TRUE if not allowed in FIPS mode for
-                                 signature generation. */
+    psBool_t isNonFips = PS_FALSE; /* TRUE if not allowed in FIPS mode. */
     psBool_t canUsePss = PS_FALSE;
+    psBool_t sha1Based = PS_FALSE;
 
     (void)canUsePss;
 
@@ -444,7 +454,7 @@ psBool_t psIsSigAlgSupported(uint16_t sigAlg)
     if (sigAlg == sigalg_rsa_pkcs1_sha1)
     {
         supported = PS_TRUE;
-        isNonFips = PS_TRUE;
+        sha1Based = PS_TRUE;
     }
 # endif
 # ifdef USE_SHA256
@@ -495,6 +505,7 @@ psBool_t psIsSigAlgSupported(uint16_t sigAlg)
     if (sigAlg == sigalg_ecdsa_sha1)
     {
         supported = PS_TRUE;
+        sha1Based = PS_TRUE;
     }
 # endif
 # ifdef USE_SHA256
@@ -528,6 +539,19 @@ psBool_t psIsSigAlgSupported(uint16_t sigAlg)
         supported = PS_FALSE;
     }
 #endif
+
+    if (sha1Based)
+    {
+        /*
+          Generating SHA-1 based signatures is forbidden in FIPS mode.
+          Verification is still allowed though.
+        */
+        if (!(flags & PS_SIG_ALG_FLAG_VERIFY))
+        {
+            isNonFips = PS_TRUE;
+        }
+    }
+
     return supported;
 }
 

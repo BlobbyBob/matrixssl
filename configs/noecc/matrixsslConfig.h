@@ -202,13 +202,15 @@ extern "C" {
 /**
     Configure Support for TLS protocol versions.
     Define one of:
+        USE_TLS_1_3_ONLY      (TLS 1.3 only)
         USE_TLS_1_2_AND_ABOVE (TLS 1.2 and 1.3)
         USE_TLS_1_1_AND_ABOVE (TLS 1.1, 1.2 and 1.3)
         USE_TLS_1_0_AND_ABOVE (TLS 1.0, 1.1, 1.2 and 1.3)
     @note There is no option for enabling SSL3.0 at this level
  */
 #   define USE_TLS_1_1_AND_ABOVE/**< @security default 1_1_AND_ABOVE */
-/* #define USE_TLS_1_2_AND_ABOVE  *//**< @security better than 1_1_AND_ABOVE if no backwards compatiblity concerns */
+/* #define USE_TLS_1_2_AND_ABOVE  *//**< @security better, if no backwards compatibility concerns */
+/* #define USE_TLS_1_3_ONLY       *//**< @security best, if no backwards compatibility concerns */
 /* #define USE_TLS_1_0_AND_ABOVE  *//**< @security no longer recommended. */
 
 /** Enable support for session resumption in TLS 1.3. */

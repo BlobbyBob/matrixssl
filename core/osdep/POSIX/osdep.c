@@ -43,6 +43,7 @@
 
 #include "coreApi.h"
 #include "osdep.h"
+#include "psreadwriteutil.h"
 
 #ifdef POSIX
 /******************************************************************************/
@@ -413,7 +414,7 @@ int32 psGetEntropy(unsigned char *bytes, uint32 size, void *userPtr)
                 sanity++;
                 continue;
             }
-            else if (errno == EAGAIN)
+            else if (psCheckWouldBlock(errno))
             {
                 break;
             }

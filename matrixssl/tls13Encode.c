@@ -492,12 +492,24 @@ resumedWrite:
             {
                 return rc;
             }
-            rc = tls13TranscriptHashSnapshot(ssl,
+	    /* Every PSK is associated with a hash algorithm, which can be
+	       either 1) the default (SHA-256), 2) fixed at derivation time
+	       (for resumption PSKs) or 3) explicitly specified by the user
+	       during load time (for external PSKs). */
+            rc = tls13TranscriptHashSnapshotAlg(ssl,
+                    OID_SHA256_ALG,
                     ssl->sec.tls13TrHashSnapshotCHWithoutBinders);
-            if (rc < 0)
-            {
-                return rc;
-            }
+	    if (rc < 0)
+	    {
+		return rc;
+	    }
+            rc = tls13TranscriptHashSnapshotAlg(ssl,
+                    OID_SHA384_ALG,
+                    ssl->sec.tls13TrHashSnapshotCHWithoutBindersSha384);
+	    if (rc < 0)
+	    {
+		return rc;
+	    }
             /* Now compute and fill in the final binder values. */
             rc = tls13FillInPskBinders(ssl, bindersStart);
             if (rc < 0)
@@ -1042,9 +1054,17 @@ static int32 tls13WriteCertificate(ssl_t *ssl, sslBuf_t *out)
         extDataLen = 0;
 
 # ifdef USE_OCSP_RESPONSE
-        /* Add the OCSP status request extension, if requested.
+        /* Add the OCSP status request extension, if requested, and if
+           we have a response available.
            Only support adding the extension for our own (server) cert. */
-        if (ssl->extFlags.status_request == 1 && c == ssl->chosenIdentity->cert)
+        if (ssl->extFlags.status_request == 1
+                && c == ssl->chosenIdentity->cert
+                && ssl->keys
+# ifdef USE_SERVER_SIDE_SSL
+                && ssl->keys->OCSPResponseBuf
+                && ssl->keys->OCSPResponseBufLen > 0
+# endif /* USE_SERVER_SIDE_SSL */
+                )
         {
             psDynBufInit(ssl->hsPool, &extBuf, 1024);
             rc = tls13WriteOCSPStatusRequest(ssl,
@@ -1538,13 +1558,22 @@ static inline
 psBool_t clientKeyShareOk(ssl_t *ssl)
 {
 # ifdef USE_ECC
-    if (ssl->sec.eccKeyPub != NULL) return PS_TRUE;
+    if (ssl->sec.eccKeyPub != NULL)
+    {
+        return PS_TRUE;
+    }
 # endif
 # ifdef USE_DH
-    if (ssl->sec.dhKeyPub != NULL)  return PS_TRUE;
+    if (ssl->sec.dhKeyPub != NULL)
+    {
+        return PS_TRUE;
+    }
 # endif
 # ifdef USE_X25519
-    if (ssl->sec.x25519KeyPub != NULL) return PS_TRUE;
+    if (ssl->sec.x25519KeyPub != NULL)
+    {
+        return PS_TRUE;
+    }
 # endif
     return PS_FALSE;
 }
@@ -1960,7 +1989,6 @@ void tls13ResetState(ssl_t *ssl)
             0, sizeof(ssl->sec.keySelect.peerCertSigAlgs));
     ssl->sec.keySelect.peerCertSigAlgsLen = 0;
 # endif
-    RESET_ACTV_VER(ssl);
     Memset(ssl->sec.seq, 0, sizeof(ssl->sec.seq));
     Memset(ssl->sec.remSeq, 0, sizeof(ssl->sec.remSeq));
 }
@@ -2041,14 +2069,9 @@ int32_t tls13EncryptMessage(ssl_t *ssl,
     case SSL_HS_SERVER_HELLO:
         if (ssl->hsState == SSL_HS_TLS_1_3_START)
         {
-            /* This was actually a HelloRetryRequest.
-               Now we need to start over and negotiate TLS 1.3 anew. */
+            /* This was actually a HelloRetryRequest. Prepare to receive
+               a second ClientHello. */
             tls13ResetState(ssl);
-            /* Return to the <1.3 code path. We must do this because:
-               1) we wish to start version negotiation from scratch
-               2) we have no TLS 1.3-specific ClientHello parsing function.
-            */
-            ssl->hsState = SSL_HS_CLIENT_HELLO;
         }
         else
         {
@@ -2371,6 +2394,7 @@ int32 tls13WriteClientHello(ssl_t *ssl, sslBuf_t *out,
     psSize_t cipherSuitesLen;
     unsigned char *cipherSuites;
     psSize_t messageSize;
+
     sslInitHSHash(ssl);
 
     psTracePrintHsMessageCreate(ssl, SSL_HS_CLIENT_HELLO);
@@ -2427,6 +2451,8 @@ int32 tls13WriteClientHello(ssl_t *ssl, sslBuf_t *out,
                 PS_FALSE);
         psDynBufAppendOctets(&chBuf, cipherSuites, cipherSuitesLen);
         psFree(cipherSuites, ssl->hsPool);
+	ssl->tls13CHContainsSha256Suite = PS_TRUE;
+	ssl->tls13CHContainsSha384Suite = PS_TRUE;
     }
     else
     {
@@ -2473,6 +2499,23 @@ int32 tls13WriteClientHello(ssl_t *ssl, sslBuf_t *out,
                 dataLen);
         psFree(data, ssl->hsPool);
     }
+
+    /* Store info on which ciphersuite hash algorithms were included
+       in the list. This affects which PSKs we can choose to offer.
+       Not relying on the user to give us compatible ciphersuite and
+       PSK lists. */
+    for (i = 0; i < ssl->tls13ClientCipherSuitesLen; i++)
+    {
+	if (ssl->tls13ClientCipherSuites[i] == TLS_AES_256_GCM_SHA384)
+	{
+	    ssl->tls13CHContainsSha384Suite = PS_TRUE;
+	}
+	else
+	{
+	    ssl->tls13CHContainsSha256Suite = PS_TRUE;
+	}
+    }
+
     /* uint8 legacy_compression_method */
     psDynBufAppendTlsVector(&chBuf, 1, (1 << 8) - 2, &compressionMethod, 1);
 

@@ -118,32 +118,10 @@ int32_t tlsParseSignatureAlgorithms(ssl_t *ssl,
         extLen -= 2;
     }
 
-#  ifdef USE_TLS_1_3
-    /* Debug print issue: at this point, protocol version has not been
-       negotiated yet (TLS 1.3 can be chosen only after parsing the
-       supported_versions extensions). Thus, we are not sure whether
-       the signature algorithm IDs should be interpreted as TLS 1.3 or
-       1.2 IDs. */
-    psTracePrintTls13SigAlgList(INDENT_EXTENSION,
-            "signature_algorithms",
-            keySelect->peerSigAlgs,
-            keySelect->peerSigAlgsLen,
-            PS_TRUE);
-    /* Copy the signature_algorithms also to signature_algorithms_cert. If
-       we later receive the _cert extension it will override */
-    if (keySelect->peerSigAlgsLen > 0 && keySelect->peerCertSigAlgsLen == 0)
-    {
-        Memcpy(keySelect->peerCertSigAlgs,
-                keySelect->peerSigAlgs,
-                sizeof(keySelect->peerSigAlgs));
-        keySelect->peerCertSigAlgsLen = keySelect->peerSigAlgsLen;
-    }
-#  else
     psTracePrintSigAlgs(INDENT_EXTENSION,
             "signature_algorithms",
             ssl->hashSigAlg,
             PS_FALSE);
-#  endif
 
     return MATRIXSSL_SUCCESS;
 
@@ -153,6 +131,86 @@ out_decode_error:
 # endif /* USE_ONLY_PSK_CIPHER_SUITE */
 }
 #endif /* USE_TLS_1_2 */
+
+# if defined(USE_TLS_1_2) || defined(USE_TLS_1_3)
+#  ifdef USE_ECC_CIPHER_SUITE
+int32_t tlsParseSupportedGroups(ssl_t *ssl,
+        const unsigned char *c,
+        unsigned short extLen)
+{
+    unsigned short dataLen;
+    uint32 ecFlags;
+
+
+    psAssert(MATRIX_IS_SERVER(ssl));
+
+    psTracePrintExtensionParse(ssl, EXT_ELLIPTIC_CURVE);
+    /* Minimum is 2 b dataLen and 2 b cipher */
+    if (extLen < 4)
+    {
+        psTraceErrr("Invalid ECC Curve len\n");
+        ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
+        return MATRIXSSL_ERROR;
+    }
+    dataLen = *c << 8; c++;
+    dataLen += *c; c++;
+    extLen -= 2;
+    if (dataLen > extLen || dataLen < 2 || (dataLen & 1))
+    {
+        psTraceErrr("Malformed ECC Curve extension\n");
+        ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
+        return MATRIXSSL_ERROR;
+    }
+    /* Matching EC curve logic */
+    ecFlags = IS_RECVD_EXT; /* Flag if we got it */
+    ssl->ecInfo.ecCurveId = 0;
+    psTracePrintTls13NamedGroupList(INDENT_EXTENSION,
+            "supported_groups/elliptic_curves",
+            c, dataLen,
+            ssl,
+            PS_FALSE);
+    while (dataLen >= 2 && extLen >= 2)
+    {
+        unsigned short curveId;
+
+        curveId = *c << 8; c++;
+        curveId += *c; c++;
+        dataLen -= 2;
+        extLen -= 2;
+# ifdef USE_TLS_1_3
+        if (tls13AddPeerSupportedGroup(ssl, curveId) < 0)
+        {
+            ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
+            return MATRIXSSL_ERROR;
+        }
+# endif /* USE_TLS_1_3 */
+        /*
+          Find the curves that are in common between client and server.
+          ssl->ecInfo.ecFlags defaults to all curves compiled into the library.
+        */
+        if (psTestUserEcID(curveId, ssl->ecInfo.ecFlags) == 0)
+        {
+            /*
+              Client sends curves in priority order, so choose the first
+              one we have in common. If ECDHE, it will be used after
+              this CLIENT_HELLO parse as the ephemeral key gen curve.
+              If ECDH, it will be used to find a matching cert, and for
+              key exchange.
+            */
+            if (ecFlags == IS_RECVD_EXT)
+            {
+                ssl->ecInfo.ecCurveId = curveId;
+            }
+            ecFlags |= curveIdToFlag(curveId);
+        }
+    }
+
+    ssl->ecInfo.ecFlags = ecFlags;
+
+    return MATRIXSSL_SUCCESS;
+}
+# endif /* USE_ECC_CIPHER_SUITE */
+#endif /* USE_TLS_1_2 || USE_TLS_1_3 */
 
 /******************************************************************************/
 /*
@@ -304,19 +362,9 @@ int32 parseClientHelloExtensions(ssl_t *ssl, unsigned char **cp, unsigned short 
         if (ssl->secureRenegotiationFlag == PS_FALSE &&
             ssl->myVerifyDataLen == 0)
         {
-#   ifdef USE_TLS_1_3
-            /* If the client only offers TLS 1.3, legacy renegotation
-               is not going to happen in any case, so do not require
-               renegotiation_info or the SCSV. */
-            if (!peerOnlySupportsTls13(ssl))
-            {
-#   endif
             psTraceErrr("Client doesn't support renegotiation hello\n");
             ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
             return MATRIXSSL_ERROR;
-#   ifdef USE_TLS_1_3
-            }
-#   endif
         }
 #  endif /* REQUIRE_SECURE_REHANDSHAKES */
         if (ssl->secureRenegotiationFlag == PS_TRUE &&
@@ -355,22 +403,9 @@ static int ClientHelloExt(ssl_t *ssl,
     int32_t rc;
 # ifdef USE_ECC_CIPHER_SUITE
     unsigned short dataLen;
-    uint32 ecFlags;
 # elif defined USE_OCSP_RESPONSE
     unsigned short dataLen;
 # endif /* USE_ECC_CIPHER_SUITE || USE_OCSP_RESPONSE */
-# ifdef USE_TLS_1_3
-    psParseBuf_t extDataBuf;
-
-    /* According TLS 1.3 draft 24, section 4.2.11, pre_shared_key
-       MUST be the last extension in ClientHello. It clearly was not
-       the last one if we arrived here again after parsing. */
-    if (ssl->extFlags.got_pre_shared_key)
-    {
-        ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-        return MATRIXSSL_ERROR;
-    }
-# endif /* USE_TLS_1_3 */
 
     switch (extType)
     {
@@ -588,18 +623,6 @@ static int ClientHelloExt(ssl_t *ssl,
         break;
 # endif /* USE_TLS_1_2 */
 
-# ifdef USE_TLS_1_3
-    /**************************************************************************/
-    case EXT_SIGNATURE_ALGORITHMS_CERT:
-        rc = tls13ParseSignatureAlgorithms(ssl, &c, extLen, PS_TRUE);
-        if (rc < 0)
-        {
-            ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
-            return rc;
-        }
-        break;
-# endif
-
 # ifdef USE_STATELESS_SESSION_TICKETS
     /**************************************************************************/
 
@@ -677,276 +700,26 @@ static int ClientHelloExt(ssl_t *ssl,
 # endif /* USE_STATELESS_SESSION_TICKETS */
 
 # ifdef USE_TLS_1_3
-    case EXT_PRE_SHARED_KEY:
-        (void)psParseBufFromStaticData(&extDataBuf,
-                c, extLen);
-        rc = tls13ParsePreSharedKey(ssl, &extDataBuf);
-        if (rc < 0)
-        {
-            return rc;
-        }
-        ssl->extFlags.got_pre_shared_key = 1;
-        break;
-    case EXT_PSK_KEY_EXCHANGE_MODES:
-        (void)psParseBufFromStaticData(&extDataBuf,
-                c, extLen);
-        rc = tls13ParsePskKeyExchangeModes(ssl, &extDataBuf);
-        if (rc < 0)
-        {
-            return rc;
-        }
-        ssl->extFlags.got_psk_key_exchange_modes = 1;
-        break;
-    case EXT_EARLY_DATA:
-        psTracePrintExtensionParse(ssl, EXT_EARLY_DATA);
-        if (!ssl->tls13IncorrectDheKeyShare)
-        {
-            ssl->extFlags.got_early_data = 1;
-        }
-        else
-        {
-            /* early_data extension should not be included to CH after HRR
-               so ignore it */
-            ssl->extFlags.got_early_data = 0;
-        }
-        break;
-    case EXT_COOKIE:
-        (void)psParseBufFromStaticData(&extDataBuf,
-                c, extLen);
-        rc = tls13ParseCookie(ssl, &extDataBuf);
-        if (rc < 0)
-        {
-            return rc;
-        }
-        ssl->extFlags.got_cookie = 1;
-        break;
-# ifndef USE_ONLY_PSK_CIPHER_SUITE
-    case EXT_KEY_SHARE:
-    case EXT_KEY_SHARE_PRE_DRAFT_23:
-        psTracePrintExtensionParse(ssl, EXT_KEY_SHARE);
-        /*
-          enum {
-            unallocated_RESERVED(0x0000),
-
-            // Elliptic Curve Groups (ECDHE)
-            obsolete_RESERVED(0x0001..0x0016),
-            secp256r1(0x0017), secp384r1(0x0018), secp521r1(0x0019),
-            obsolete_RESERVED(0x001A..0x001C),
-            x25519(0x001D), x448(0x001E),
-
-            // Finite Field Groups (DHE)
-            ffdhe2048(0x0100), ffdhe3072(0x0101), ffdhe4096(0x0102),
-            ffdhe6144(0x0103), ffdhe8192(0x0104),
-
-            // Reserved Code Points
-            ffdhe_private_use(0x01FC..0x01FF),
-            ecdhe_private_use(0xFE00..0xFEFF),
-            obsolete_RESERVED(0xFF01..0xFF02),
-            (0xFFFF)
-        } NamedGroup;
-
-          struct {
-            NamedGroup group;
-            opaque key_exchange<1..2^16-1>;
-          } KeyShareEntry;
-
-          struct {
-            KeyShareEntry client_shares<0..2^16-1>;
-          } KeyShareClientHello;
-        */
-
-        /*
-          Minimum length: 7 ==
-          2 (client_shares length)
-          + 2 (NamedGroup)
-          + 2 (key_exchange length)
-          + 1 (min bytes in key_exchange data)
-        */
-        if (extLen < 7)
-        {
-            psTraceErrr("Malformed key_share extension\n");
-            ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
-            return MATRIXSSL_ERROR;
-        }
-        else
-        {
-            /* KeyShareEntry client_shares<0..2^16-1>; */
-            psSizeL_t clientSharesLen = 0;
-            psBool_t importedPeerPubValue = PS_FALSE;
-            psSize_t n = psParseTlsVariableLengthVec(c, c + extLen,
-                    0, (1 << 16) - 1,
-                    &clientSharesLen);
-
-            psTraceIndent(INDENT_EXTENSION,
-                    "Groups in ClientHello.key_share:\n");
-
-            if (n <= 0 || clientSharesLen < 1)
-            {
-                psTraceErrr("Malformed key_share extension\n");
-                ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
-                return MATRIXSSL_ERROR;
-            }
-            c += n;
-            extLen -= n;
-
-            while (clientSharesLen > 0)
-            {
-                psSizeL_t keyExchangeLen = 0;
-                psSize_t n;
-                psBool_t foundSupportedCurve = PS_FALSE;
-                unsigned short groupName;
-
-                /* 2-byte NamedGroup ID */
-                if (extLen < 2)
-                {
-                    psTraceErrr("Malformed key_share extension\n");
-                    ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
-                    return MATRIXSSL_ERROR;
-                }
-                groupName = *c << 8; c++;
-                groupName += *c; c++;
-                extLen -= 2;
-                clientSharesLen -= 2;
-
-                psTracePrintTls13NamedGroup(INDENT_EXTENSION + 1,
-                        NULL, groupName, PS_TRUE);
-                if (tls13AddPeerKeyShareGroup(ssl, groupName) < 0)
-                {
-                    ssl->err = SSL_ALERT_INTERNAL_ERROR;
-                    return MATRIXSSL_ERROR;
-                }
-                if (tls13WeSupportGroup(ssl, groupName))
-                {
-                    psTracePrintTls13NamedGroup(INDENT_NEGOTIATED_PARAM,
-                            "Found supported group",
-                            groupName,
-                            PS_TRUE);
-                    foundSupportedCurve = PS_TRUE;
-                }
-
-                /* opaque key_exchange<1..2^16-1>; */
-                n = psParseTlsVariableLengthVec(c, c + extLen,
-                        1, (1 << 16) - 1,
-                        &keyExchangeLen);
-                if (n <= 0 || keyExchangeLen < 1)
-                {
-                    psTraceErrr("Malformed key_share extension\n");
-                    ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
-                    return MATRIXSSL_ERROR;
-                }
-
-                c += n;
-                extLen -= n;
-                clientSharesLen -= n;
-
-                /* Import the first public value that we can support. */
-                if (foundSupportedCurve && !importedPeerPubValue)
-                {
-                    rc = tls13ImportPublicValue(ssl,
-                            c,
-                            keyExchangeLen,
-                            groupName);
-                    if (rc < 0)
-                    {
-                        return rc;
-                    }
-
-                    /* We will still iterate over the rest of the entries,
-                       but will not try to import another public value. */
-                    importedPeerPubValue = PS_TRUE;
-                    ssl->tls13NegotiatedGroup = groupName;
-                }
-
-                c += keyExchangeLen;
-                extLen -= keyExchangeLen;
-                clientSharesLen -= keyExchangeLen;
-            }
-        }
-        ssl->extFlags.got_key_share = 1;
-        break;
-# endif /* USE_ONLY_PSK_CIPHER_SUITE */
     case EXT_SUPPORTED_VERSIONS:
-        /* This is defined in TLS 1.3 draft 22, but TLS 1.2 implementations
+        /* This is defined in RFC 8446, but TLS 1.2 implementations
            SHOULD also be able to parse this. */
         rc = tls13ParseSupportedVersions(ssl, &c, extLen);
         if (rc < 0)
         {
             return rc;
         }
-        psTracePrintSupportedVersionsList(INDENT_HS_MSG,
-                "ClientHello.supported_versions",
-                ssl, PS_TRUE, PS_FALSE);
         break;
 # endif /* USE_TLS_1_3 */
 
 # ifdef USE_ECC_CIPHER_SUITE
-    /**************************************************************************/
-
     case EXT_ELLIPTIC_CURVE:
-        psTracePrintExtensionParse(ssl, EXT_ELLIPTIC_CURVE);
-        /* Minimum is 2 b dataLen and 2 b cipher */
-        if (extLen < 4)
+        rc = tlsParseSupportedGroups(ssl, c, extLen);
+        if (rc < 0)
         {
-            psTraceErrr("Invalid ECC Curve len\n");
             ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
             return MATRIXSSL_ERROR;
         }
-        dataLen = *c << 8; c++;
-        dataLen += *c; c++;
-        extLen -= 2;
-        if (dataLen > extLen || dataLen < 2 || (dataLen & 1))
-        {
-            psTraceErrr("Malformed ECC Curve extension\n");
-            ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
-            return MATRIXSSL_ERROR;
-        }
-        /* Matching EC curve logic */
-        ecFlags = IS_RECVD_EXT; /* Flag if we got it */
-        ssl->ecInfo.ecCurveId = 0;
-        psTracePrintTls13NamedGroupList(INDENT_EXTENSION,
-                "supported_groups/elliptic_curves",
-                c, dataLen,
-                ssl,
-                PS_FALSE);
-        while (dataLen >= 2 && extLen >= 2)
-        {
-            unsigned short curveId;
-
-            curveId = *c << 8; c++;
-            curveId += *c; c++;
-            dataLen -= 2;
-            extLen -= 2;
-# ifdef USE_TLS_1_3
-            if (tls13AddPeerSupportedGroup(ssl, curveId) < 0)
-            {
-                ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
-                return MATRIXSSL_ERROR;
-            }
-# endif /* USE_TLS_1_3 */
-/*
-            Find the curves that are in common between client and server.
-            ssl->ecInfo.ecFlags defaults to all curves compiled into the library.
- */
-            if (psTestUserEcID(curveId, ssl->ecInfo.ecFlags) == 0)
-            {
-/*
-                Client sends curves in priority order, so choose the first
-                one we have in common. If ECDHE, it will be used after
-                this CLIENT_HELLO parse as the ephemeral key gen curve.
-                If ECDH, it will be used to find a matching cert, and for
-                key exchange.
- */
-                if (ecFlags == IS_RECVD_EXT)
-                {
-                    ssl->ecInfo.ecCurveId = curveId;
-                }
-                ecFlags |= curveIdToFlag(curveId);
-            }
-        }
-        ssl->ecInfo.ecFlags = ecFlags;
         break;
-
-    /**************************************************************************/
 
     case EXT_ELLIPTIC_POINTS:
         psTracePrintExtensionParse(ssl, EXT_ELLIPTIC_POINTS);
@@ -968,7 +741,7 @@ static int ClientHelloExt(ssl_t *ssl,
             is all we are looking for at the moment */
         if (Memchr(c, '\0', dataLen) == NULL)
         {
-            psTraceErrr("ECC Uncommpressed Points missing\n");
+            psTraceErrr("ECC Uncompressed Points missing\n");
             ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
             return MATRIXSSL_ERROR;
         }

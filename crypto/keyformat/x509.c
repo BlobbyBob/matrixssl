@@ -2068,6 +2068,7 @@ int32_t psX509GetConcatenatedDomainComponent(const x509DNattributes_t *DN,
 */
 static int32_t concatenate_dn(psPool_t *pool,
     const x509DNattributes_t *dn,
+    psBool_t useOriginalAttributeOrder,
     char **out_str,
     size_t *out_str_len)
 {
@@ -2244,105 +2245,209 @@ static int32_t concatenate_dn(psPool_t *pool,
         p += dn->field ## Len - DN_NUM_TERMINATING_NULLS;     \
     }
 
-    /*
-       The ifdefs are a bit messy, because we wish to use the same
-       print order as OpenSSL. MatrixSSL divides the fields
-       into ifdef-wrapped groups differently.
-     */
-    PRINT_FIELD(country);
-    PRINT_FIELD(state);
-#  ifdef USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD
-    PRINT_FIELD(locality);
-#  endif /* USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD */
-    PRINT_FIELD(organization);
-    num_ous = psX509GetNumOrganizationalUnits(dn);
-    if (num_ous > 0)
-    {
-        int i;
-        for (i = 0; i < num_ous; i++)
-        {
-            orgUnit = psX509GetOrganizationalUnit(dn, i);
-            if (orgUnit == NULL)
-            {
-                psFree(str, pool);
-                return PS_FAILURE;
-            }
-            if (first_field)
-            {
-                first_field = 0;
-            }
-            else
-            {
-                *p++ = ',';
-            } *p++ = ' ';
-            Memcpy(p, organizationalUnit_prefix,
-                Strlen(organizationalUnit_prefix));
-            p += Strlen(organizationalUnit_prefix);
-            Memcpy(p, orgUnit->name, orgUnit->len - DN_NUM_TERMINATING_NULLS);
-            p += orgUnit->len - DN_NUM_TERMINATING_NULLS;
-        }
-    }
-    PRINT_FIELD(commonName);
-#  ifdef USE_EXTRA_DN_ATTRIBUTES
-    PRINT_FIELD(name);
-#  endif /* USE_EXTRA_DN_ATTRIBUTES */
-#  ifdef USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD
-    PRINT_FIELD(givenName);
-    PRINT_FIELD(surname);
-#  endif /* USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD */
-#  ifdef USE_EXTRA_DN_ATTRIBUTES
-    /**/
-    num_dcs = psX509GetNumDomainComponents(dn);
-    if (num_dcs > 0)
-    {
-        int i;
-        x509DomainComponent_t *dc;
+    const int32 openSslAttributeOrder[] = {
+        ATTRIB_COUNTRY_NAME,
+        ATTRIB_STATE_PROVINCE,
 
-        for (i = 0; i < num_dcs; i++)
+#  ifdef USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD
+        ATTRIB_LOCALITY,
+#  endif    /* USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD */
+
+        ATTRIB_ORGANIZATION,
+        ATTRIB_ORG_UNIT,
+        ATTRIB_COMMON_NAME,
+
+#  ifdef USE_EXTRA_DN_ATTRIBUTES
+        ATTRIB_NAME,
+#  endif    /* USE_EXTRA_DN_ATTRIBUTES */
+
+#  ifdef USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD
+        ATTRIB_GIVEN_NAME,
+        ATTRIB_SURNAME,
+#  endif    /* USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD */
+
+#  ifdef USE_EXTRA_DN_ATTRIBUTES
+        ATTRIB_DOMAIN_COMPONENT,
+        ATTRIB_EMAIL,
+#  endif    /* USE_EXTRA_DN_ATTRIBUTES */
+
+        ATTRIB_SERIALNUMBER,
+
+#  ifdef USE_EXTRA_DN_ATTRIBUTES
+        ATTRIB_STREET_ADDRESS,
+#  endif    /* USE_EXTRA_DN_ATTRIBUTES */
+
+#  ifdef USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD
+        ATTRIB_TITLE,
+#  endif    /* USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD */
+
+#  ifdef USE_EXTRA_DN_ATTRIBUTES
+        ATTRIB_POSTAL_ADDRESS,
+        ATTRIB_TELEPHONE_NUMBER,
+#  endif    /* USE_EXTRA_DN_ATTRIBUTES */
+
+#  ifdef USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD
+        ATTRIB_PSEUDONYM,
+        ATTRIB_GEN_QUALIFIER,
+        ATTRIB_INITIALS,
+#  endif    /* USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD */
+
+        ATTRIB_DN_QUALIFIER,
+
+#  ifdef USE_EXTRA_DN_ATTRIBUTES
+        ATTRIB_UID,
+#  endif    /* USE_EXTRA_DN_ATTRIBUTES */
+    };
+
+    const int32_t *attributeOrder;
+    uint32_t numAttributes;
+    unsigned int i;
+
+    if (useOriginalAttributeOrder)
+    {
+        attributeOrder = dn->attributeOrder;
+        numAttributes = DN_NUM_ATTRIBUTE_TYPES_MAX;
+    }
+    else
+    {
+        attributeOrder = openSslAttributeOrder;
+        numAttributes =
+            sizeof(openSslAttributeOrder) / sizeof(openSslAttributeOrder[0]);
+    }
+
+    for (i = 0; i < numAttributes; i++)
+    {
+        switch (attributeOrder[i])
         {
-            if (first_field)
+        case ATTRIB_COUNTRY_NAME:
+            PRINT_FIELD(country);
+            break;
+        case ATTRIB_ORGANIZATION:
+            PRINT_FIELD(organization);
+            break;
+        case ATTRIB_ORG_UNIT:
+            num_ous = psX509GetNumOrganizationalUnits(dn);
+            if (num_ous > 0)
             {
-                first_field = 0;
+                int i;
+                for (i = 0; i < num_ous; i++)
+                {
+                    orgUnit = psX509GetOrganizationalUnit(dn, i);
+                    if (orgUnit == NULL)
+                    {
+                        psFree(str, pool);
+                        return PS_FAILURE;
+                    }
+                    if (first_field)
+                    {
+                        first_field = 0;
+                    }
+                    else
+                    {
+                        *p++ = ',';
+                        *p++ = ' ';
+                    }
+                    Memcpy(p, organizationalUnit_prefix,
+                           Strlen(organizationalUnit_prefix));
+                    p += Strlen(organizationalUnit_prefix);
+                    Memcpy(p, orgUnit->name,
+                           orgUnit->len - DN_NUM_TERMINATING_NULLS);
+                    p += orgUnit->len - DN_NUM_TERMINATING_NULLS;
+                }
             }
-            else
+            break;
+        case ATTRIB_DN_QUALIFIER:
+            PRINT_FIELD(dnQualifier);
+            break;
+        case ATTRIB_STATE_PROVINCE:
+            PRINT_FIELD(state);
+            break;
+        case ATTRIB_COMMON_NAME:
+            PRINT_FIELD(commonName);
+            break;
+        case ATTRIB_SERIALNUMBER:
+            PRINT_FIELD(serialNumber);
+            break;
+#  ifdef USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD
+        case ATTRIB_LOCALITY:
+            PRINT_FIELD(locality);
+            break;
+        case ATTRIB_TITLE:
+            PRINT_FIELD(title);
+            break;
+        case ATTRIB_SURNAME:
+            PRINT_FIELD(surname);
+            break;
+        case ATTRIB_GIVEN_NAME:
+            PRINT_FIELD(givenName);
+            break;
+        case ATTRIB_INITIALS:
+            PRINT_FIELD(initials);
+            break;
+        case ATTRIB_PSEUDONYM:
+            PRINT_FIELD(pseudonym);
+            break;
+        case ATTRIB_GEN_QUALIFIER:
+            PRINT_FIELD(generationQualifier);
+            break;
+#  endif    /* USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD */
+#  ifdef USE_EXTRA_DN_ATTRIBUTES
+        case ATTRIB_DOMAIN_COMPONENT:
+            /**/
+            num_dcs = psX509GetNumDomainComponents(dn);
+            if (num_dcs > 0)
             {
-                *p++ = ',';
-            } *p++ = ' ';
-            Memcpy(p, domainComponent_prefix,
-                Strlen(domainComponent_prefix));
-            p += Strlen(domainComponent_prefix);
-            dc = psX509GetDomainComponent(dn, i);
-            if (dc == NULL)
-            {
-                psFree(str, pool);
-                return PS_FAILURE;
+                int i;
+                x509DomainComponent_t *dc;
+
+                for (i = 0; i < num_dcs; i++)
+                {
+                    if (first_field)
+                    {
+                        first_field = 0;
+                    }
+                    else
+                    {
+                        *p++ = ',';
+                        *p++ = ' ';
+                    }
+                    Memcpy(p, domainComponent_prefix,
+                           Strlen(domainComponent_prefix));
+                    p += Strlen(domainComponent_prefix);
+                    dc = psX509GetDomainComponent(dn, i);
+                    if (dc == NULL)
+                    {
+                        psFree(str, pool);
+                        return PS_FAILURE;
+                    }
+                    Memcpy(p, dc->name, dc->len - DN_NUM_TERMINATING_NULLS);
+                    p += dc->len - DN_NUM_TERMINATING_NULLS;
+                }
             }
-            Memcpy(p, dc->name, dc->len - DN_NUM_TERMINATING_NULLS);
-            p += dc->len - DN_NUM_TERMINATING_NULLS;
+            break;
+        case ATTRIB_STREET_ADDRESS:
+            PRINT_FIELD(streetAddress);
+            break;
+        case ATTRIB_POSTAL_ADDRESS:
+            PRINT_FIELD(postalAddress);
+            break;
+        case ATTRIB_TELEPHONE_NUMBER:
+            PRINT_FIELD(telephoneNumber);
+            break;
+        case ATTRIB_UID:
+            PRINT_FIELD(uid);
+            break;
+        case ATTRIB_NAME:
+            PRINT_FIELD(name);
+            break;
+        case ATTRIB_EMAIL:
+            PRINT_FIELD(email);
+            break;
+#  endif    /* USE_EXTRA_DN_ATTRIBUTES */
+        default:
+            break;
         }
     }
-    PRINT_FIELD(email);
-#  endif /* USE_EXTRA_DN_ATTRIBUTES */
-    PRINT_FIELD(serialNumber);
-#  ifdef USE_EXTRA_DN_ATTRIBUTES
-    PRINT_FIELD(streetAddress);
-#  endif /* USE_EXTRA_DN_ATTRIBUTES */
-#  ifdef USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD
-    PRINT_FIELD(title);
-#  endif /* USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD */
-#  ifdef USE_EXTRA_DN_ATTRIBUTES
-    PRINT_FIELD(postalAddress);
-    PRINT_FIELD(telephoneNumber);
-#  endif /* USE_EXTRA_DN_ATTRIBUTES */
-#  ifdef USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD
-    PRINT_FIELD(pseudonym);
-    PRINT_FIELD(generationQualifier);
-    PRINT_FIELD(initials);
-#  endif /* USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD */
-    PRINT_FIELD(dnQualifier);
-#  ifdef USE_EXTRA_DN_ATTRIBUTES
-    PRINT_FIELD(uid);
-#  endif /* USE_EXTRA_DN_ATTRIBUTES */
 
     psAssert(total_len == (p - str));
 
@@ -2355,15 +2460,27 @@ static int32_t concatenate_dn(psPool_t *pool,
 
 int32_t psX509GetOnelineDN(const x509DNattributes_t *DN,
     char **out_str,
-    size_t *out_str_len)
+    size_t *out_str_len,
+    uint32_t flags)
 {
+    psBool_t useOriginalAttributeOrder = PS_FALSE;
+
+    if (flags & CERT_DN_USE_ORIGINAL_ATTRIBUTE_ORDER)
+    {
+        useOriginalAttributeOrder = PS_TRUE;
+    }
+
     if (out_str == NULL  || out_str_len == NULL)
     {
         return PS_ARG_FAIL;
     }
     if (DN)
     {
-        return concatenate_dn(NULL, DN, out_str, out_str_len);
+        return concatenate_dn(NULL,
+                   DN,
+                   useOriginalAttributeOrder,
+                   out_str,
+                   out_str_len);
     }
     else
     {
@@ -3059,7 +3176,7 @@ const char *psSprintAsnOid(
         strcpy(out, "(Illegal OID)");
         return out;
     }
-    
+
     mem = asnFormatOid(
             (psPool_t*) MATRIX_NO_POOL,
             (const unsigned char *) oid,
@@ -5014,6 +5131,11 @@ int32_t psX509GetDNAttributes(psPool_t *pool, const unsigned char **pp,
 #   error USE_SHA1 or USE_SHA256 must be defined
 #  endif
 
+    for (i = 0; i < DN_NUM_ATTRIBUTE_TYPES_MAX; i++)
+    {
+        attribs->attributeOrder[i] = 0;
+    }
+
     dnStart = p;
     if (getAsnSequence(&p, len, &llen) < 0)
     {
@@ -5282,6 +5404,8 @@ oid_parsing_done:
             return PS_UNSUPPORTED_FAIL;
         }
 
+        psBool_t attributeStored = PS_TRUE;
+
         switch (id)
         {
         case ATTRIB_COUNTRY_NAME:
@@ -5479,10 +5603,32 @@ oid_parsing_done:
 #  endif    /* USE_EXTRA_DN_ATTRIBUTES */
         default:
             /* Not a MUST support, so just ignore unknown */
+            attributeStored = PS_FALSE;
             psFree(stringOut, pool);
             stringOut = NULL;
             break;
         }
+
+        if (attributeStored)
+        {
+            for (i = 0; i < DN_NUM_ATTRIBUTE_TYPES_MAX; i++)
+            {
+                if (attribs->attributeOrder[i] == id)
+                {
+                    /* Likely multiple domainComponent or orgUnit, for any
+                       other attribute we store only one so we can skip
+                       order too. */
+                    break;
+                }
+
+                if (attribs->attributeOrder[i] == 0)
+                {
+                    attribs->attributeOrder[i] = id;
+                    break;
+                }
+            }
+        }
+
         if (moreInSet)
         {
             goto MORE_IN_SET;

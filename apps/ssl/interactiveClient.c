@@ -885,7 +885,6 @@ psRes_t getServerName(
     char server_name_prompt[256];
     char buf[256];
     int buf_len = sizeof(buf);
-    char *name;
     int got_it = 0;
     int rc;
 
@@ -969,7 +968,6 @@ int main(int argc, char **argv)
     psSize_t numCiphersuites;
     char serverAddress[39];
     char serverName[256] = { '\0' };
-    int serverNameLen = sizeof(serverName);
     int serverAddressLen;
     int serverPort;
     unsigned char *sniExtData;

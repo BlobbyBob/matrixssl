@@ -3,8 +3,9 @@
  *      @version $Format:%h%d$
  *
  *      Simple MatrixSSL blocking server example.
- *      - TLS 1.2 only
- *      - P-256 and ECDSA only
+ *      - TLS 1.2 and TLS 1.3 only
+ *      - P-256 only
+ *      - ECDSA or RSA key transport
  *      - Only 1 simultaneous connection.
  */
 /*
@@ -36,7 +37,7 @@
 
 #include "matrixssl/matrixsslApi.h"
 
-# if defined(USE_SERVER_SIDE_SSL) && defined(USE_TLS_1_2) && defined(USE_SECP256R1) && defined(USE_SHA256) && defined(USE_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256)
+# if defined(USE_SERVER_SIDE_SSL) && (defined(USE_TLS_1_2) || defined(USE_TLS_1_3)) && defined(USE_SECP256R1) && defined(USE_SHA256) && (defined(USE_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256) || defined(USE_TLS_AES_128_GCM_SHA256))
 
 # include <sys/types.h>
 # include <sys/socket.h>
@@ -140,7 +141,9 @@ int main(int argc, char **argv)
 # ifdef USE_TLS_1_3
         v_tls_1_3,
 # endif
+# ifdef USE_TLS_1_2
         v_tls_1_2
+# endif
     };
     int32_t versionsLen = sizeof(versions)/sizeof(versions[0]);
     sslSessOpts_t opts;
@@ -459,6 +462,7 @@ int load_keys(sslKeys_t *keys)
     matrixSslLoadKeysOpts_t keyOpts;
 
     (void)privAssetRsa;
+    (void)privAssetEcdsa;
 
 # ifdef LOAD_PRIVKEY_ASSET
     privAssetEcdsa = getLongTermPrivAsset(PS_ECC);
@@ -609,9 +613,11 @@ uint32_t getLongTermPrivAsset(int keyType)
 # else
 int main(int argc, char **argv)
 {
-    printf("This test requires USE_SERVER_SIDE_SSL, USE_TLS_1_2, "\
+    printf("This test requires USE_SERVER_SIDE_SSL "\
+            "USE_TLS_1_2 or USE_TLS_1_3, "\
             "USE_SECP256R1, USE_SHA256 and " \
-            "USE_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256.\n");
+            "USE_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 or " \
+            "USE_TLS_AES_128_GCM_SHA256.\n");
     return 1;
 }
-# endif /* USE_SERVER_SIDE_SSL && USE_TLS_1_2 && USE_SECP256R1 && USE_SHA256 && USE_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 */
+# endif /* USE_SERVER_SIDE_SSL && (USE_TLS_1_2 || USE_TLS_1_3) && USE_SECP256R1 && USE_SHA256 && USE_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 || USE_TLS_AES_128_GCM_SHA256) && USE_SERVER_SIDE_SSL */

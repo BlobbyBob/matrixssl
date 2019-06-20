@@ -43,8 +43,8 @@ extern "C" {
 /*
     Start with compile-time checks for the necessary proto and crypto support.
  */
-# if !defined(USE_TLS) && defined(DISABLE_SSLV3)
-#  error "Must enable a protocol: USE_TLS enabled or DISABLE_SSLV3 disabled"
+# if !defined(USE_TLS_1_3_ONLY) && !defined(USE_TLS) && defined(DISABLE_SSLV3)
+#  error "Must enable a protocol: USE_TLS or USE_TLS_1_3_ONLY enabled or DISABLE_SSLV3 disabled"
 # endif
 
 # ifdef USE_DTLS
@@ -116,12 +116,13 @@ extern "C" {
     SHA1 and MD5 are essential elements for SSL key derivation during protocol
  */
 # ifndef USE_MD5SHA1
-#  if defined(USE_TLS_1_2) && defined(DISABLE_TLS_1_0) && defined(DISABLE_TLS_1_1) \
-    && defined(DISABLE_SSLV3)
-#   define USE_ONLY_TLS_1_2
-#  else
-#   error "Must enable USE_MD5SHA1 in cryptoConfig.h for < TLS 1.2"
-#  endif
+#  ifdef USE_TLS_1_2
+#   if defined(DISABLE_TLS_1_0) && defined(DISABLE_TLS_1_1)  && defined(DISABLE_SSLV3)
+#    define USE_ONLY_TLS_1_2
+#   else
+#    error "Must enable USE_MD5SHA1 in cryptoConfig.h for < TLS 1.2"
+#   endif
+#  endif /* USE_TLS_1_2 */
 # endif
 
 # if !defined USE_CLIENT_SIDE_SSL && !defined USE_SERVER_SIDE_SSL
@@ -246,6 +247,31 @@ extern "C" {
         USE_ECC_CIPHER_SUITE is a subset of DHE_CIPHER to determine ECC key
         REQUIRE_DH_PARAMS is a subset of DHE_CIPHER to use 'normal' dh params
  */
+# ifdef USE_TLS_1_3
+
+#  if defined(USE_TLS_AES_256_GCM_SHA384) || defined(USE_TLS_AES_128_GCM_SHA256)
+#    define USE_DHE_CIPHER_SUITE
+#    ifdef USE_RSA
+#     define USE_RSA_CIPHER_SUITE
+#    endif
+#    ifdef USE_ECC
+#     define USE_ECDSA_CIPHER_SUITE
+#     define USE_ECC_CIPHER_SUITE
+#    endif
+#    define USE_AES_CIPHER_SUITE
+#    define USE_TLS_1_3_CIPHER_SUITE
+#  endif
+
+#  ifdef USE_TLS_CHACHA20_POLY1305_SHA256
+#    define USE_DHE_CIPHER_SUITE
+#    define USE_ECDSA_CIPHER_SUITE
+#    define USE_ECC_CIPHER_SUITE
+#    define USE_CHACHA20_POLY1305_IETF_CIPHER_SUITE
+#    define USE_TLS_1_3_CIPHER_SUITE
+#  endif
+
+# endif /* USE_TLS_1_3 */
+
 # ifdef USE_TLS_1_2
 #  ifndef USE_TLS_1_1
 #   error "Enable USE_TLS_1_1 in matrixsslConfig.h for TLS_1_2 support"
@@ -266,28 +292,6 @@ extern "C" {
 #   define USE_ECC_CIPHER_SUITE
 #   define USE_CHACHA20_POLY1305_IETF_CIPHER_SUITE
 #  endif
-
-# if defined(USE_TLS_AES_256_GCM_SHA384) || defined(USE_TLS_AES_128_GCM_SHA256)
-#   define USE_DHE_CIPHER_SUITE
-#   ifdef USE_RSA
-#    define USE_RSA_CIPHER_SUITE
-#   endif
-#   ifdef USE_ECC
-#    define USE_ECDSA_CIPHER_SUITE
-#    define USE_ECC_CIPHER_SUITE
-#   endif
-#   define USE_AES_CIPHER_SUITE
-#   define USE_TLS_1_3_CIPHER_SUITE
-# endif
-
-
-# ifdef USE_/* TLS_CHACHA20_POLY1305_SHA256 */
-#   define USE_DHE_CIPHER_SUITE
-#   define USE_ECDSA_CIPHER_SUITE
-#   define USE_ECC_CIPHER_SUITE
-#   define USE_CHACHA20_POLY1305_IETF_CIPHER_SUITE
-#   define USE_TLS_1_3_CIPHER_SUITE
-# endif
 
 #  ifdef USE_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
 #   ifndef USE_RSA

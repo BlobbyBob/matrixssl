@@ -345,6 +345,11 @@ int32_t tlsExtendedDeriveKeys(ssl_t *ssl)
         psTraceBytes("ssl->sec.masterSecret", ssl->sec.masterSecret, 48);
 #   endif
 
+#   ifdef ENABLE_MASTER_SECRET_EXPORT
+        memcpy(ssl->masterSecret, ssl->sec.masterSecret, SSL_HS_MASTER_SIZE);
+        ssl->hsMasterSecretLen = SSL_HS_MASTER_SIZE;
+#   endif /* ENABLE_MASTER_SECRET_EXPORT */
+
 #  ifdef USE_DTLS
     if (ACTV_VER(ssl, v_dtls_any))
     {
@@ -765,6 +770,8 @@ int32 sslCreateKeys(ssl_t *ssl)
     return sslDeriveKeys(ssl);
 #  endif /* DISABLE_SSLV3 */
 # endif  /* USE_TLS */
+
+    return PS_UNSUPPORTED_FAIL;
 }
 
 /******************************************************************************/
@@ -780,9 +787,7 @@ int32 sslActivateReadCipher(ssl_t *ssl)
     ssl->decrypt = ssl->cipher->decrypt;
     ssl->verifyMac = ssl->cipher->verifyMac;
     ssl->nativeDeMacSize = ssl->cipher->macSize;
-# ifdef USE_CHACHA20_POLY1305_IETF_CIPHER_SUITE
     ssl->activeReadCipher = ssl->cipher;
-# endif
 
     if (ssl->extFlags.truncated_hmac)
     {
@@ -893,9 +898,7 @@ int32 sslActivateWriteCipher(ssl_t *ssl)
     ssl->encrypt = ssl->cipher->encrypt;
     ssl->generateMac = ssl->cipher->generateMac;
     ssl->nativeEnMacSize = ssl->cipher->macSize;
-# ifdef USE_CHACHA20_POLY1305_IETF_CIPHER_SUITE
     ssl->activeWriteCipher = ssl->cipher;
-# endif
 
     if (ssl->extFlags.truncated_hmac)
     {

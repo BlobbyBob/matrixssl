@@ -791,6 +791,7 @@ int32_t tls13FillInPskBinders(ssl_t *ssl,
     psSize_t binderKeyLen;
     unsigned char binderValue[MAX_TLS_1_3_HASH_SIZE];
     psTls13Psk_t *psk;
+    unsigned char *trHashSnapshot;
     int32_t hmacAlg, hmacLen;
     psHmac_t ctx;
 
@@ -805,8 +806,17 @@ int32_t tls13FillInPskBinders(ssl_t *ssl,
         hmacAlg = tls13GetPskHmacAlg(psk);
         hmacLen = tls13GetPskHashLen(psk);
 
+# ifdef DEBUG_TLS_1_3_ENCODE_EXTENSIONS
         psTraceBytes("PSK identity", psk->pskId, psk->pskIdLen);
         psTraceBytes("PSK key", psk->pskKey, psk->pskLen);
+# endif
+
+        trHashSnapshot = ssl->sec.tls13TrHashSnapshotCHWithoutBinders;
+        if (hmacAlg == HMAC_SHA384)
+        {
+            trHashSnapshot =
+                ssl->sec.tls13TrHashSnapshotCHWithoutBindersSha384;
+        }
 
         /* Jump over length octet: opaque PskBinderEntry<32..255>; */
         p += 1;
@@ -835,8 +845,7 @@ int32_t tls13FillInPskBinders(ssl_t *ssl,
 
 # ifdef DEBUG_TLS_1_3_ENCODE_EXTENSIONS
         psTraceBytes("binder key", binderKey, binderKeyLen);
-        psTraceBytes("snapshot hs hash",
-                ssl->sec.tls13TrHashSnapshotCHWithoutBinders, hmacLen);
+        psTraceBytes("snapshot hs hash", trHashSnapshot, hmacLen);
 # endif
         /*
           binder value =
@@ -846,7 +855,7 @@ int32_t tls13FillInPskBinders(ssl_t *ssl,
                 hmacAlg,
                 binderKey,
                 hmacLen,
-                ssl->sec.tls13TrHashSnapshotCHWithoutBinders,
+                trHashSnapshot,
                 hmacLen,
                 binderValue);
         if (rc < 0)
@@ -919,6 +928,26 @@ int32_t tls13WritePreSharedKey(ssl_t *ssl,
         psDynBufInit(ssl->hsPool, &binderBuf, 128);
         while (psk != NULL)
         {
+	    /* Don't try to offer a PSK that is associated with a hash
+	       algorithm that is not supported in the ciphersuite list
+	       we sent, as this could lead to handshake failure if the
+	       server tries to validate the corresponding binder. */
+	    if (tls13GetPskHmacAlg(psk) == HMAC_SHA384)
+	    {
+		if (!ssl->tls13CHContainsSha384Suite)
+		{
+		    goto next_psk;
+		}
+	    }
+	    else
+	    {
+		/* SHA-256 is the default. */
+		if (!ssl->tls13CHContainsSha256Suite)
+		{
+		    goto next_psk;
+		}
+	    }
+
             rc = tls13WritePskIdentity(ssl, &idBuf, psk);
             if (rc < 0)
             {
@@ -929,6 +958,7 @@ int32_t tls13WritePreSharedKey(ssl_t *ssl,
             {
                 goto out_internal_failure;
             }
+	next_psk:
             psk = psk->next;
         }
 

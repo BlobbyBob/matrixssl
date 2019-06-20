@@ -85,7 +85,7 @@ void tls13ClearSecret(unsigned char *secret,
     Memset(secret, 0, secretLen);
 # else
     (void)secret;
-    (void)secretLen);
+    (void)secretLen;
 # endif
 }
 
@@ -156,6 +156,7 @@ int32_t tls13GenerateEarlySecret(ssl_t *ssl,
     psSize_t pskValLen;
     int32_t hmacAlg;
     psResSize_t hashLen;
+    unsigned char *earlySecretBuf;
     psSize_t earlySecretLen;
     int32_t rc;
 
@@ -197,13 +198,18 @@ int32_t tls13GenerateEarlySecret(ssl_t *ssl,
         return hashLen;
     }
     earlySecretLen = hashLen;
+    earlySecretBuf = ssl->sec.tls13EarlySecret;
+    if (hashLen == 48)
+    {
+        earlySecretBuf = ssl->sec.tls13EarlySecretSha384;
+    }
 
     rc = psHkdfExtract(hmacAlg,
             zeroSalt,
             hashLen,
             pskVal,
             pskValLen,
-            ssl->sec.tls13EarlySecret,
+            earlySecretBuf,
             &earlySecretLen);
     if (rc < 0)
     {
@@ -212,7 +218,7 @@ int32_t tls13GenerateEarlySecret(ssl_t *ssl,
     psAssert(earlySecretLen == hashLen);
 
 #ifdef DEBUG_TLS_1_3_KEY_DERIVE
-    psTraceBytes("Early Secret", ssl->sec.tls13EarlySecret, hashLen);
+    psTraceBytes("Early Secret", earlySecretBuf, hashLen);
 #endif
 
     ssl->sec.tls13KsState.generateEarlySecretDone = 1;
@@ -225,6 +231,7 @@ int32_t tls13DeriveEarlySecrets(ssl_t *ssl,
         psTls13Psk_t *psk)
 {
     psSize_t secretLen, hashLen;
+    unsigned char *earlySecret;
     unsigned char zeroByte = 0;
     int32_t hmacAlg, rc;
     const char *label;
@@ -253,10 +260,16 @@ int32_t tls13DeriveEarlySecrets(ssl_t *ssl,
             labelLen = extBinderLabelLen;
         }
 
+        earlySecret = ssl->sec.tls13EarlySecret;
+        if (hashLen == 48)
+        {
+            earlySecret = ssl->sec.tls13EarlySecretSha384;
+        }
+
         /* Derive-Secret(Early Secret, "ext|res_binder", "") */
         rc = tls13DeriveSecret(ssl,
                 hmacAlg,
-                ssl->sec.tls13EarlySecret,
+                earlySecret,
                 secretLen,
                 label,
                 labelLen,
@@ -275,6 +288,7 @@ int32_t tls13DeriveEarlySecrets(ssl_t *ssl,
 int32_t tls13DeriveHandshakeTrafficSecrets(ssl_t *ssl)
 {
     unsigned char derivedSecret[MAX_TLS_1_3_HASH_SIZE];
+    unsigned char *earlySecret;
     unsigned char *sharedSecret;
     int32_t hmacAlg = tls13GetCipherHmacAlg(ssl);
     psResSize_t secretLen = psGetOutputBlockLength(hmacAlg);
@@ -290,7 +304,8 @@ int32_t tls13DeriveHandshakeTrafficSecrets(ssl_t *ssl)
     }
 
     if (secretLen < 0)
-    { /* this is an error code */
+    {
+        /* This is an error code */
         return secretLen;
     }
     rc = tls13DeriveEarlySecrets(ssl,
@@ -300,10 +315,16 @@ int32_t tls13DeriveHandshakeTrafficSecrets(ssl_t *ssl)
         return rc;
     }
 
+    earlySecret = ssl->sec.tls13EarlySecret;
+    if (secretLen == 48)
+    {
+        earlySecret = ssl->sec.tls13EarlySecretSha384;
+    }
+
     /* Derive-Secret(Early Secret, "derived", "") */
     rc = tls13DeriveSecret(ssl,
             hmacAlg,
-            ssl->sec.tls13EarlySecret,
+            earlySecret,
             secretLen,
             derivedLabel,
             derivedLabelLen,
@@ -315,6 +336,7 @@ int32_t tls13DeriveHandshakeTrafficSecrets(ssl_t *ssl)
         return rc;
     }
     tls13ClearSecret(ssl->sec.tls13EarlySecret, secretLen);
+    tls13ClearSecret(ssl->sec.tls13EarlySecretSha384, secretLen);
 
 #ifdef DEBUG_TLS_1_3_KEY_DERIVE
     psTraceBytes("\"derived\" secret", derivedSecret, secretLen);
@@ -450,6 +472,12 @@ int32_t tls13DeriveAppTrafficSecrets(ssl_t *ssl)
 #ifdef DEBUG_TLS_1_3_KEY_DERIVE
     psTraceBytes("Master Secret", ssl->sec.tls13MasterSecret, secretLen);
 #endif
+
+#ifdef ENABLE_MASTER_SECRET_EXPORT
+    psAssert(secretLen <= SSL_HS_MASTER_SIZE);
+    memcpy(ssl->masterSecret, ssl->sec.tls13MasterSecret, secretLen);
+    ssl->hsMasterSecretLen = secretLen;
+#endif /* ENABLE_MASTER_SECRET_EXPORT */
 
     psAssert(hsSecretLen == secretLen);
     tls13ClearSecret(derivedSecret, secretLen);
@@ -657,6 +685,7 @@ int32_t tls13DeriveHandshakeKeys(ssl_t *ssl)
 int32_t tls13DeriveEarlyDataSecret(ssl_t *ssl, psTls13Psk_t *psk)
 {
     int32_t hmacAlg;
+    unsigned char *earlySecret;
     unsigned char *trHash;
     psSize_t secretLen;
     int32_t rc;
@@ -676,6 +705,8 @@ int32_t tls13DeriveEarlyDataSecret(ssl_t *ssl, psTls13Psk_t *psk)
     hmacAlg = tls13GetPskHmacAlg(psk);
     secretLen = tls13GetPskHashLen(psk);
 
+    earlySecret = ssl->sec.tls13EarlySecret;
+
     if (hmacAlg == HMAC_SHA256)
     {
         trHash = ssl->sec.tls13TrHashSnapshotCH;
@@ -683,6 +714,7 @@ int32_t tls13DeriveEarlyDataSecret(ssl_t *ssl, psTls13Psk_t *psk)
     else
     {
         trHash = ssl->sec.tls13TrHashSnapshotCHSha384;
+        earlySecret = ssl->sec.tls13EarlySecretSha384;
     }
 
 # ifdef DEBUG_TLS_1_3_KEY_DERIVE
@@ -693,7 +725,7 @@ int32_t tls13DeriveEarlyDataSecret(ssl_t *ssl, psTls13Psk_t *psk)
     /* Derive-Secret(Early Secret, "c e traffic", "") */
     rc = tls13DeriveSecret(ssl,
             hmacAlg,
-            ssl->sec.tls13EarlySecret,
+            earlySecret,
             secretLen,
             cEarlyTrafficLabel,
             earlyTrafficLabelLen,

@@ -75,6 +75,9 @@
 
 /* #define USE_BURN_STACK  *//**< @security Zero sensitive data from the stack. */
 
+/* Allow extraction of the master key via the API */
+/* #define ENABLE_MASTER_SECRET_EXPORT */
+
 /******************************************************************************/
 /**
     Public-Key Algorithm Support.

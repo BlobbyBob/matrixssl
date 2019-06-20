@@ -2,7 +2,7 @@
  *      @file    hsDecode.c
  *      @version $Format:%h%d$
  *
- *      SSL/TLS handshake message parsing
+ *      SSL/TLS handshake message parsing for TLS 1.2 and below.
  */
 /*
  *      Copyright (c) 2013-2018 INSIDE Secure Corporation
@@ -34,12 +34,14 @@
 
 #include "matrixsslImpl.h"
 
-#ifdef USE_ECC
-#  define USE_ECC_EPHEMERAL_KEY_CACHE
-#endif
+# ifndef USE_TLS_1_3_ONLY
 
-#define COMPRESSION_METHOD_NULL                0x0
-#define COMPRESSION_METHOD_DEFLATE     0x1
+# ifdef USE_ECC
+#   define USE_ECC_EPHEMERAL_KEY_CACHE
+# endif
+
+# define COMPRESSION_METHOD_NULL                0x0
+# define COMPRESSION_METHOD_DEFLATE     0x1
 
 /* Errors from these routines must either be MATRIXSSL_ERROR or PS_MEM_FAIL */
 
@@ -278,12 +280,6 @@ int32 parseClientHello(ssl_t *ssl, unsigned char **cp, unsigned char *end)
                 }
             }
 # endif
-# ifdef USE_TLS_1_3
-            if (isTls13Ciphersuite(cipher))
-            {
-                ssl->gotTls13CiphersuiteInCH = PS_TRUE;
-            }
-# endif /* USE_TLS_1_3 */
             /** If TLS_FALLBACK_SCSV appears in ClientHello.cipher_suites and the
                highest protocol version supported by the server is higher than
                the version indicated in ClientHello.client_version, the server
@@ -300,7 +296,7 @@ int32 parseClientHello(ssl_t *ssl, unsigned char **cp, unsigned char *end)
             }
         }
 
-        /*      Compression parameters */
+        /* Compression parameters */
         if (end - c < 1)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
@@ -330,53 +326,7 @@ int32 parseClientHello(ssl_t *ssl, unsigned char **cp, unsigned char *end)
             psTraceErrr("No compression.null proposed\n");
             return MATRIXSSL_ERROR;
         }
-# ifdef USE_ZLIB_COMPRESSION
-        while (compLen > 0)
-        {
-            /* Client wants it and we have it.  Enable if we're not already
-                in a compression state.  FUTURE: Could be re-handshake */
-            if (ssl->compression == 0)
-            {
-                if (*c++ == 0x01)
-                {
-                    ssl->inflate.zalloc = NULL;
-                    ssl->inflate.zfree = NULL;
-                    ssl->inflate.opaque = NULL;
-                    ssl->inflate.avail_in = 0;
-                    ssl->inflate.next_in = NULL;
-                    if (inflateInit(&ssl->inflate) != Z_OK)
-                    {
-                        psTraceErrr("inflateInit fail.  No compression\n");
-                    }
-                    else
-                    {
-                        ssl->deflate.zalloc = Z_NULL;
-                        ssl->deflate.zfree = Z_NULL;
-                        ssl->deflate.opaque = Z_NULL;
-                        if (deflateInit(&ssl->deflate,
-                                Z_DEFAULT_COMPRESSION) != Z_OK)
-                        {
-                            psTraceErrr("deflateInit fail.  No compression\n");
-                            inflateEnd(&ssl->inflate);
-                        }
-                        else
-                        {
-                            /* Init good.  Let's enable it */
-                            ssl->compression = 1;
-                        }
-                    }
-                }
-                compLen--;
-            }
-            else
-            {
-                c++;
-                compLen--;
-            }
-        }
-# else
         c += compLen;
-# endif
         rc = parseClientHelloExtensions(ssl, &c, end - c);
         if (rc < 0)
         {
@@ -1750,34 +1700,6 @@ int32 parseServerHello(ssl_t *ssl, int32 hsLen, unsigned char **cp,
     case COMPRESSION_METHOD_NULL:
         /* No compression */
         break;
-# ifdef USE_ZLIB_COMPRESSION
-    case COMPRESSION_METHOD_DEFLATE:
-        ssl->inflate.zalloc = NULL;
-        ssl->inflate.zfree = NULL;
-        ssl->inflate.opaque = NULL;
-        ssl->inflate.avail_in = 0;
-        ssl->inflate.next_in = NULL;
-        if (inflateInit(&ssl->inflate) != Z_OK)
-        {
-            psTraceInfo("inflateInit fail. No compression\n");
-        }
-        else
-        {
-            ssl->deflate.zalloc = Z_NULL;
-            ssl->deflate.zfree = Z_NULL;
-            ssl->deflate.opaque = Z_NULL;
-            if (deflateInit(&ssl->deflate, Z_DEFAULT_COMPRESSION) != Z_OK)
-            {
-                psTraceInfo("deflateInit fail.  No compression\n");
-                inflateEnd(&ssl->inflate);
-            }
-            else
-            {
-                ssl->compression = 1; /* Both contexts initialized */
-            }
-        }
-        break;
-# endif /* USE_ZLIB_COMPRESSION */
     default:
         ssl->err = SSL_ALERT_DECODE_ERROR;
         psTraceErrr("zlib compression not enabled.\n");
@@ -3356,5 +3278,7 @@ STRAIGHT_TO_USER_CALLBACK:
 }
 # endif /* USE_CLIENT_SIDE_SSL || USE_CLIENT_AUTH */
 #endif  /* !USE_ONLY_PSK_CIPHER_SUITE */
+
+#endif /* USE_TLS_1_3_ONLY */
 
 /******************************************************************************/

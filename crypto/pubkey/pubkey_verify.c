@@ -46,7 +46,9 @@ psRes_t psVerifySig(psPool_t *pool,
     psBool_t *verifyResult,
     psVerifyOptions_t *opts)
 {
+# ifdef USE_RSA
     unsigned char out[SHA512_HASH_SIZE] = { 0 };
+# endif
 # ifdef USE_ECC
     int32 eccRet;
 # endif

@@ -49,10 +49,6 @@ LDFLAGS+=$(LDFLAGS_INTERNAL)
 # Extra dependencies
 MATRIXSSL_CONFIG:=$(shell make parse-config --directory $(MATRIXSSL_ROOT)/matrixssl)
 
-ifneq (,$(findstring USE_ZLIB_COMPRESSION, $(MATRIXSSL_CONFIG)))
-LDFLAGS+=-lz
-endif
-
 include $(MATRIXSSL_ROOT)/common.mk
 
 # Linked files

@@ -306,6 +306,7 @@ int32_t tls13Sign(psPool_t *pool,
 # ifdef USE_ED25519
     case sigalg_ed25519:
         /* No pre-hashing used with Ed25519. */
+        hashSigAlg = 0;
         sigAlgOid = OID_ED25519_KEY_ALG;
         break;
 # endif

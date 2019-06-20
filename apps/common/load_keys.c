@@ -456,6 +456,10 @@ int32 loadECDH_ECDSAExampleKeys(sslKeys_t *keys)
 #ifdef USE_PSK_CIPHER_SUITE
 int32 loadExamplePreSharedKeys(sslKeys_t *keys)
 {
+# ifdef USE_TLS_1_3_ONLY
+    (void)keys;
+    return PS_SUCCESS;
+# else
     int32 rc;
     size_t key_n;
 
@@ -472,6 +476,7 @@ int32 loadExamplePreSharedKeys(sslKeys_t *keys)
     }
 
     return PS_SUCCESS;
+# endif
 }
 
 int32 loadPreSharedKeys(sslKeys_t *keys)

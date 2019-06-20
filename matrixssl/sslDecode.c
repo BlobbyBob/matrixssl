@@ -40,24 +40,25 @@
 
 #define SSL_MAX_IGNORED_MESSAGE_COUNT   1024
 
+#ifndef USE_TLS_1_3_ONLY
 static int32 parseSSLHandshake(ssl_t *ssl, char *inbuf, uint32 len);
+static int32_t matrixSslDecodeTls12AndBelow(ssl_t *ssl,
+        unsigned char **buf, uint32 *len,
+        uint32 size,
+        uint32 *remaining,
+        uint32 *requiredLen,
+        int32 *error,
+        unsigned char *alertLevel,
+        unsigned char *alertDescription);
+# ifdef LUCKY13
+static int32 addCompressCount(ssl_t *ssl, int32 padLen);
+# endif
+#endif
 
 #ifdef USE_CERT_CHAIN_PARSING
 static int32 parseSingleCert(ssl_t *ssl, unsigned char *c, unsigned char *end,
                              int32 certLen);
 #endif /* USE_CERT_CHAIN_PARSING */
-
-#ifdef LUCKY13
-static int32 addCompressCount(ssl_t *ssl, int32 padLen);
-#endif
-
-#ifdef USE_ZLIB_COMPRESSION
-/* Does not need to be a large value because we're only inflating the 16
-    byte FINISHED message.  In fact, compression will grow 16 bytes but
-    this is a good reminder that FUTURE support will need to account for
-    likely data growth here */
-# define MATRIX_INFLATE_FINISHED_OH  128
-#endif
 
 static inline
 psResSize_t parseSslv2RecordHdr(ssl_t *ssl,
@@ -292,7 +293,7 @@ psResSize_t handleRecordHdr(ssl_t *ssl,
 
 /******************************************************************************/
 /*
-    Parse incoming data per http://wp.netscape.com/eng/ssl3
+    Parse incoming records.
 
     Input parameters to decode:
     .   buf points to the start of data to decode
@@ -341,36 +342,21 @@ psResSize_t handleRecordHdr(ssl_t *ssl,
  *      call decode again if more encrypted data remaining
 
  */
-int32 matrixSslDecode(ssl_t *ssl, unsigned char **buf, uint32 *len,
-    uint32 size, uint32 *remaining, uint32 *requiredLen,
-    int32 *error, unsigned char *alertLevel,
-    unsigned char *alertDescription)
+int32 matrixSslDecode(ssl_t *ssl,
+        unsigned char **buf,
+        uint32 *len,
+        uint32 size,
+        uint32 *remaining,
+        uint32 *requiredLen,
+        int32 *error,
+        unsigned char *alertLevel,
+        unsigned char *alertDescription)
 {
-    unsigned char *c, *p, *end, *pend, *decryptedStart, *origbuf;
-    unsigned char *mac;
-    unsigned char macError;
-    int32 rc;
-    unsigned char padLen;
+    int32_t rc = PS_FAILURE;
 
-# ifdef USE_CLIENT_SIDE_SSL
-    sslSessOpts_t options;
-# endif
-    psBuf_t tmpout;
-#ifdef USE_CERT_CHAIN_PARSING
-    int32 certlen, i, nextCertLen;
-#endif /* USE_CERT_CHAIN_PARSING */
-#ifdef USE_ZLIB_COMPRESSION
-    int32 preInflateLen, postInflateLen, currLen;
-    int zret;
-#endif
-#ifdef USE_TLS_1_3
-    psBool_t useOutbufForResponse = PS_FALSE;
-#endif
-
-/*
-    If we've had a protocol error, don't allow further use of the session
- */
     *error = PS_SUCCESS;
+
+    /* If we've had a protocol error, don't allow further use of the session */
     if (ssl->flags & SSL_FLAGS_ERROR || ssl->flags & SSL_FLAGS_CLOSED)
     {
         psTraceErrr("Can't use matrixSslDecode on closed/error-flagged sess\n");
@@ -378,12 +364,9 @@ int32 matrixSslDecode(ssl_t *ssl, unsigned char **buf, uint32 *len,
         return MATRIXSSL_ERROR;
     }
 
-#ifdef USE_TLS_1_3
-    if (USING_TLS_1_3(ssl))
+# ifdef USE_TLS_1_3
+    if (ACTV_VER(ssl, v_tls_1_3_any))
     {
-        /* TLS 1.3 specific decode path. Note that if we're the server
-           and just about to decode ClientHello, we have not negotiated
-           TLS 1.3 yet and thus will not take the TLS 1.3 path yet. */
         rc = matrixSslDecodeTls13(ssl,
                 buf,
                 len,
@@ -397,33 +380,50 @@ int32 matrixSslDecode(ssl_t *ssl, unsigned char **buf, uint32 *len,
         {
             return rc;
         }
-        psAssert(rc == SSL_NO_TLS_1_3);
-
-        if (MATRIX_IS_CLIENT(ssl))
-        {
-            /*
-              Check for possibility to fail early on an unsupported downgrade.
-              If version range was specified via the supportedVersions list
-              and only TLS 1.3 versions are present in that list, there's no
-              point in trying to continue if the server chose <1.3.
-              Note that his check is only an optimization; we will check
-              for illegal downgrades later after having parsed the
-              entire ServerHello. Without this check, we could fail for
-              an obscure reason, such as the ServerHello not containing
-              renegotiation_info extension if the client sent it.*/
-            if (!SUPP_VER(ssl, v_tls_legacy))
-            {
-                psTraceErrr("Server tried to downgrade to an earlier" \
-                        " version, but we only support TLS 1.3\n");
-                ssl->err = SSL_ALERT_PROTOCOL_VERSION;
-                origbuf = *buf;
-                goto encodeResponse;
-            }
-        }
-        /*
-          Pre-TLS 1.3 version negotiated.*/
+        psTraceInfo("TLS 1.3 not supported, falling back to legacy path\n");
     }
-#endif /* USE_TLS_1_3 */
+# endif
+
+# ifndef USE_TLS_1_3_ONLY
+    return matrixSslDecodeTls12AndBelow(ssl,
+            buf,
+            len,
+            size,
+            remaining,
+            requiredLen,
+            error,
+            alertLevel,
+            alertDescription);
+# endif
+
+    return MATRIXSSL_SUCCESS;
+}
+
+# ifndef USE_TLS_1_3_ONLY
+static
+int32_t matrixSslDecodeTls12AndBelow(ssl_t *ssl,
+        unsigned char **buf, uint32 *len,
+        uint32 size,
+        uint32 *remaining,
+        uint32 *requiredLen,
+        int32 *error,
+        unsigned char *alertLevel,
+        unsigned char *alertDescription)
+{
+
+    unsigned char *c, *p, *end, *pend, *decryptedStart, *origbuf;
+    unsigned char *mac;
+    unsigned char macError;
+    int32 rc;
+    unsigned char padLen;
+
+# ifdef USE_CLIENT_SIDE_SSL
+    sslSessOpts_t options;
+# endif
+    psBuf_t tmpout;
+#ifdef USE_CERT_CHAIN_PARSING
+    int32 certlen, i, nextCertLen;
+#endif /* USE_CERT_CHAIN_PARSING */
 
     origbuf = *buf; /* Save the original buffer location */
 
@@ -1191,147 +1191,6 @@ ADVANCE_TO_APP_DATA:
         pend = mac = decryptedStart + ssl->rec.len;
     }
 
-#ifdef USE_ZLIB_COMPRESSION
-    /* Currently only supporting compression of FINISHED message.
-        Compressed application data is handled outside MatrixSSL.
-        Re-handshakes are not allowed with compression and we've
-        incremented ssl->compression if we've already been through here
-        so we'll know */
-    if (ssl->compression == 2 && ssl->flags & SSL_FLAGS_READ_SECURE &&
-        ssl->rec.type == SSL_RECORD_TYPE_HANDSHAKE)
-    {
-        ssl->err = SSL_ALERT_INTERNAL_ERROR;
-        psTraceErrr("Re-handshakes not supported on compressed sessions\n");
-        goto encodeResponse;
-    }
-    if (ssl->compression && ssl->flags & SSL_FLAGS_READ_SECURE &&
-        ssl->rec.type == SSL_RECORD_TYPE_HANDSHAKE)
-    {
-        /* TODO - handle the cases below where the buffer has to grow */
-        currLen = ssl->inflate.total_out;
-        preInflateLen = (int32) (pend - p);
-        ssl->zlibBuffer = psMalloc(ssl->bufferPool, preInflateLen +
-            MATRIX_INFLATE_FINISHED_OH);
-        if (ssl->zlibBuffer == NULL)
-        {
-            ssl->err = SSL_ALERT_INTERNAL_ERROR;
-            psTraceErrr("Couldn't allocate compressed scratch pad\n");
-            goto encodeResponse;
-        }
-        Memset(ssl->zlibBuffer, 0, preInflateLen + MATRIX_INFLATE_FINISHED_OH);
-        if (preInflateLen > 0)   /* zero length record possible */
-        {   /* psTraceBytes("pre inflate", decryptedStart, preInflateLen); */
-            ssl->inflate.next_in = decryptedStart;
-            ssl->inflate.avail_in = preInflateLen;
-            ssl->inflate.next_out = ssl->zlibBuffer;
-            ssl->inflate.avail_out = SSL_MAX_PLAINTEXT_LEN;
-            if ((zret = inflate(&ssl->inflate, Z_SYNC_FLUSH)) != Z_OK)
-            {
-                ssl->err = SSL_ALERT_INTERNAL_ERROR;
-                psFree(ssl->zlibBuffer, ssl->bufferPool); ssl->zlibBuffer = NULL;
-                inflateEnd(&ssl->inflate);
-                psTraceIntInfo("ZLIB inflate failed %d\n", zret);
-                goto encodeResponse;
-            }
-            if (ssl->inflate.avail_in != 0)
-            {
-                ssl->err = SSL_ALERT_INTERNAL_ERROR;
-                psFree(ssl->zlibBuffer, ssl->bufferPool); ssl->zlibBuffer = NULL;
-                inflateEnd(&ssl->inflate);
-                psTraceErrr("ZLIB inflate didn't work in one pass\n");
-                goto encodeResponse;
-            }
-            postInflateLen = ssl->inflate.total_out - currLen;
-
-            /* psTraceBytes("post inflate", ssl->zlibBuffer,
-                postInflateLen); */
-
-            if (postInflateLen <= preInflateLen)
-            {
-                /* Easy case where compressed data was actually larger.
-                    Don't need to update c or inlen because the next
-                    good data is already correctly being pointed to */
-                Memcpy(p, ssl->zlibBuffer, postInflateLen);
-                mac = p + postInflateLen;
-                pend = mac;
-            }
-            else
-            {
-                /* Data expanded.  Fit it in the buffer and update all
-                    the associated lengths and pointers
-
-                    Add back in the MAC and pad to preInflate so we're
-                    looking at the useful boundaries of the buffers */
-                preInflateLen += (int32) (c - mac);
-                /* reusing currLen var.  Now the difference in lengths */
-                currLen = postInflateLen - preInflateLen;
-                if ((int32) (c - ssl->inbuf) == ssl->inlen)
-                {
-                    /* Good, this was the only data in the buffer.  Just
-                        check there is room to append */
-                    if ((ssl->insize - ssl->inlen) >= postInflateLen)
-                    {
-                        Memcpy(p, ssl->zlibBuffer, postInflateLen);
-                        c += currLen;
-                        mac = p + postInflateLen;
-                        pend = mac;
-                    }
-                    else
-                    {
-                        /* Only one here but not enough room to store it */
-                        ssl->err = SSL_ALERT_INTERNAL_ERROR;
-                        psFree(ssl->zlibBuffer, ssl->bufferPool);
-                        ssl->zlibBuffer = NULL;
-                        inflateEnd(&ssl->inflate);
-                        psTraceErrr("ZLIB buffer management needed\n");
-                        goto encodeResponse;
-                    }
-                }
-                else
-                {
-                    /* Push any existing data further back in the buffer to
-                        make room for this uncompressed length.  c pointing
-                        to start of next record that needs to be pushed
-                        back. currLen is how far to push back.
-                        p pointing to where zlibBuffer should copy
-                        to.  postInflateLen is amount to copy there. */
-                    if (currLen < (ssl->insize - ssl->inlen))
-                    {
-                        /* Good, fits in current buffer.  Move all valid
-                            data back currLen */
-                        Memmove(c + currLen, c,
-                            ssl->inlen - (int32) (c - ssl->inbuf));
-                        c += currLen;
-                        Memcpy(p, ssl->zlibBuffer, postInflateLen);
-                        mac = p + postInflateLen;
-                        pend = mac;
-                    }
-                    else
-                    {
-                        /* Need to realloc more space AND push the records
-                            back */
-                        ssl->err = SSL_ALERT_INTERNAL_ERROR;
-                        psFree(ssl->zlibBuffer, ssl->bufferPool);
-                        ssl->zlibBuffer = NULL;
-                        inflateEnd(&ssl->inflate);
-                        psTraceErrr("ZLIB buffer management needed\n");
-                        goto encodeResponse;
-                    }
-                }
-                /* Finally increase inlen and *len to account for it now */
-                ssl->inlen += currLen;
-                *len += currLen;
-                ssl->rec.len += currLen;
-            }
-        }
-        psFree(ssl->zlibBuffer, ssl->bufferPool); ssl->zlibBuffer = NULL;
-        /* Will not need the context any longer since FINISHED is the only
-            supported message */
-        inflateEnd(&ssl->inflate);
-        ssl->compression = 2;
-    }
-#endif /* USE_ZLIB_COMPRESSION */
-
     /* Check now for maximum plaintext length of 16kb. */
     if (ssl->maxPtFrag == 0xFF)   /* Still negotiating size */
     {
@@ -1499,11 +1358,7 @@ ADVANCE_TO_APP_DATA:
                 ssl->sid->sessionTicketState = SESS_TICKET_STATE_INIT;
 # endif         /* USE_PSK_CIPHER_SUITE */
             }
-# ifdef USE_TLS_1_3
-            else if (!ssl->tls13IncorrectDheKeyShare)
-# else
             else
-# endif
             {
                 ssl->err = SSL_ALERT_UNEXPECTED_MESSAGE;
                 psTraceIntInfo("Invalid CipherSpec order: %d\n", ssl->hsState);
@@ -1632,7 +1487,7 @@ ADVANCE_TO_APP_DATA:
                 expect to have any data remaining in the incoming buffer, since
                 the peer would be waiting for our response.
              */
-#if defined(ENABLE_FALSE_START) || defined(USE_TLS_1_3)
+#if defined(ENABLE_FALSE_START)
             if (c < origbuf + *len)
             {
                 /*
@@ -1643,7 +1498,6 @@ ADVANCE_TO_APP_DATA:
                     some values to support this case.
                     http://tools.ietf.org/html/draft-bmoeller-tls-falsestart-00
                  */
-# ifdef ENABLE_FALSE_START
                 if (*c == SSL_RECORD_TYPE_APPLICATION_DATA &&
                     ssl->hsState == SSL_HS_DONE &&
                     (ssl->flags & SSL_FLAGS_SERVER))
@@ -1654,30 +1508,6 @@ ADVANCE_TO_APP_DATA:
                     *buf = c;
                 }
                 else
-# endif /* ENABLE_FALSE_START */
-# ifdef USE_TLS_1_3
-                /* This case handles early data that can be received
-                   during the handshake. In that case we might need to use
-                   outbuf for encoding the response since inbuf still contains
-                   non-decoded packets. Note that SSL_FULL mechanism for outbuf
-                   is not supported so if the handshake flight grows > default
-                   buf size then handshake is aborted. This however should
-                   not happen with PSK since the flight is small. */
-                if ((ssl->sec.tls13ChosenPsk != NULL) &&
-                     (*c == SSL_RECORD_TYPE_APPLICATION_DATA ||
-                     *c == SSL_RECORD_TYPE_CHANGE_CIPHER_SPEC ) &&
-                     (ssl->hsState == SSL_HS_TLS_1_3_RECVD_CH ||
-                      ssl->hsState == SSL_HS_TLS_1_3_WAIT_EOED) &&
-                      (ssl->flags & SSL_FLAGS_SERVER))
-                {
-                    /* Outgoing data needs a buffer but there is still probably
-                       early_data in inbuf so use outbuf for outgoing data */
-                    useOutbufForResponse = PS_TRUE;
-                    *remaining = *len - (c - origbuf);
-                    *buf = c;
-                }
-                else
-# endif /* USE_TLS_1_3 */
                 {
                     /*
                         Implies successful parse of supposed last message in
@@ -1705,11 +1535,11 @@ ADVANCE_TO_APP_DATA:
                             in sslResetContext when     the HELLO_REQUEST was
                             received */
                         *buf = c;
-        #ifdef USE_CLIENT_SIDE_SSL
+# ifdef USE_CLIENT_SIDE_SSL
                         ssl->sec.anon = ssl->anonBk;
                         ssl->flags = ssl->flagsBk;
                         ssl->bFlags = ssl->bFlagsBk;
-        #endif
+# endif
                         ssl->hsState = SSL_HS_DONE;
                         return MATRIXSSL_SUCCESS;
                     }
@@ -1720,7 +1550,7 @@ ADVANCE_TO_APP_DATA:
                         psAssert(origbuf + *len == c);
                         *buf = origbuf;
                     }
-#if defined(ENABLE_FALSE_START) || defined(USE_TLS_1_3)
+#if defined(ENABLE_FALSE_START)
                 }
             }
             else
@@ -1750,36 +1580,6 @@ ADVANCE_TO_APP_DATA:
 
     case SSL_RECORD_TYPE_APPLICATION_DATA:
 
-#ifdef USE_TLS_1_3
-        if (ssl->tls13IncorrectDheKeyShare == PS_TRUE &&
-            ssl->hsState == SSL_HS_CLIENT_HELLO)
-        {
-/*
-             This is a special scenario where TLS1.3 HelloRetryRequest
-             was sent by us and we are waiting for new ClientHello.
-             If application data is received in this state then
-             it probably is TLS1.3 early data that was following the
-             original ClientHello. The spec chapter 4.2.19 says that
-             in this case we must ignore all such records.
-*/
-            /* Just skip over the data */
-            *buf = c;
-            *remaining = *len - (c - origbuf);
-
-            psTraceIntInfo("Skipped over %d bytes of unexpected application data.\n", c - origbuf);
-
-            if (*remaining > 0 || ssl->outlen == 0)
-            {
-                /* Still data to be processed in inbuf or
-                   nothing to be sent, so need more data */
-                return MATRIXSSL_SUCCESS;
-            }
-            /* There is probably our ServerHello in outbuf waiting
-               to be sent */
-            *len = 0;
-            return SSL_SEND_RESPONSE;
-        }
-#endif
 /*
         Data is in the out buffer, let user handle it
         Don't allow application data until handshake is complete, and we are
@@ -1887,24 +1687,6 @@ encodeResponse:
     }
     else
 # endif
-# ifdef USE_TLS_1_3
-    if (useOutbufForResponse && *buf != origbuf)
-    {
-        /*
-            Encode the output into ssl->outbuf in this case, rather than back
-            into origbuf, since there is still valid data in origbuf that
-            needs to be decoded later.
-            Other places in this function we do not reference the ssl inbuf
-            or outbuf directly, but this was the cleanest way for this hack.
-            Caller must test to see if *buf has been modified if
-            ssl->flags & SSL_FLAGS_FALSE_START
-         */
-        tmpout.buf = tmpout.start = tmpout.end = ssl->outbuf + ssl->outlen;
-        tmpout.size = ssl->outsize - ssl->outlen;
-        Memset(origbuf, 0x0, (*buf - origbuf)); /* SECURITY (see below) */
-    }
-    else
-# endif
     {
         psAssert(origbuf == *buf);
         tmpout.buf = tmpout.end = tmpout.start = origbuf;
@@ -1985,15 +1767,6 @@ encodeResponse:
         }
         else
 # endif
-# ifdef USE_TLS_1_3
-        if (useOutbufForResponse && *buf != origbuf)
-        {
-            /* Update outlen with the data we added */
-            ssl->outlen += tmpout.end - tmpout.buf;
-            return MATRIXSSL_SUCCESS;
-        }
-        else
-# endif
         {
             *remaining = 0;
             *len = tmpout.end - tmpout.buf;
@@ -2002,7 +1775,7 @@ encodeResponse:
     }
     if (rc == SSL_FULL)
     {
-# if defined(ENABLE_FALSE_START) || defined (USE_TLS_1_3)
+# if defined(ENABLE_FALSE_START)
         /* We don't support growing outbuf in the false start or early data case */
         if (*buf != origbuf)
         {
@@ -3175,6 +2948,7 @@ SKIP_HSHEADER_PARSE:
 
     return rc;
 }
+# endif /* USE_TLS_1_3_ONLY */
 
 /******************************************************************************/
 #if defined(USE_CLIENT_SIDE_SSL) || defined(USE_CLIENT_AUTH)

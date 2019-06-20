@@ -782,6 +782,12 @@ static int32 parseSafeContents(psPool_t *pool, unsigned char *password,
                  &tmpint)) < 0)
         {
             psTraceCrypto("Initial BagType parse failure\n");
+            if (rc == PS_PARSE_FAIL)
+            {
+                /* The error is probably due to decryption error.
+                   Issue the error as PS_AUTH_FAIL. */
+                rc = PS_AUTH_FAIL;
+            }
             return rc;
         }
         safeLen = (unsigned char *) p + tmpint;

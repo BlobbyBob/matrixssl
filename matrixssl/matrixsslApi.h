@@ -360,9 +360,22 @@ PSPUBLIC char* matrixSslGetExpectedName(
         const ssl_t *ssl);
 PSPUBLIC sslKeys_t *matrixSslGetKeys(
         ssl_t *ssl);
+PSPUBLIC void* matrixSslGetUserPtr(
+        ssl_t *ssl);
 PSPUBLIC psBool_t matrixSslTlsVersionRangeSupported(
         psProtocolVersion_t low,
         psProtocolVersion_t high);
+PSPUBLIC int32 matrixSslGetNegotiatedCiphersuite(
+        ssl_t *ssl,
+        psCipher16_t *cipherIdent);
+PSPUBLIC int32 matrixSslGetActiveCiphersuite(
+        ssl_t *ssl,
+        psCipher16_t *activeReadCipher,
+        psCipher16_t *activeWriteCipher);
+PSPUBLIC int32 matrixSslGetMasterSecret(
+        ssl_t *ssl,
+        unsigned char **masterSecret,
+        psSizeL_t *hsMasterSecretLen);
 
 /******************************************************************************/
 

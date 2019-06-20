@@ -3,6 +3,10 @@
  *      @version $Format:%h%d$
  *
  *      Simple MatrixSSL blocking client example.
+ *      - TLS 1.2 and TLS 1.3 only
+ *      - P-256 only
+ *      - ECDHE/ECDSA or RSA key transport
+ *      - Only 1 simultaneous connection.
  */
 /*
  *      Copyright (c) 2013-2018 INSIDE Secure Corporation
@@ -33,7 +37,7 @@
 
 #include "matrixssl/matrixsslApi.h"
 
-# if defined(USE_CLIENT_SIDE_SSL) && defined(USE_TLS_1_2) && (defined(USE_SECP256R1) || defined(USE_RSA)) && (defined(USE_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256) || defined(USE_TLS_RSA_WITH_AES_128_GCM_SHA256)) && defined(USE_IDENTITY_CERTIFICATES)
+# if defined(USE_CLIENT_SIDE_SSL) && (defined(USE_TLS_1_2) || defined(USE_TLS_1_3)) && (defined(USE_SECP256R1) || defined(USE_RSA)) && (defined(USE_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256) || defined(USE_TLS_RSA_WITH_AES_128_GCM_SHA256) || defined(USE_TLS_AES_128_GCM_SHA256)) && defined(USE_IDENTITY_CERTIFICATES)
 
 # include <sys/types.h>
 # include <sys/socket.h>
@@ -182,7 +186,9 @@ int main(int argc, char **argv)
 # ifdef USE_TLS_1_3
         v_tls_1_3,
 # endif
+# ifdef USE_TLS_1_2
         v_tls_1_2
+# endif
     };
     int32_t versionsLen = sizeof(versions)/sizeof(versions[0]);
     sslSessOpts_t opts;
