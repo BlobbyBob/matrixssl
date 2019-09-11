@@ -302,10 +302,58 @@ psParseUnknownPubKeyMem(psPool_t *pool,
 # ifdef USE_ECC
     if (rc < PS_SUCCESS)
     {
-        rc = getEcPubKey(pool,
-                         (const unsigned char **)&data, data_len,
+        const unsigned char *datac = data;
+        const unsigned char *end;
+
+        /* Typical ECC public key follows this structure (subset of X.509 certificate). */
+        /*
+          SubjectPublicKeyInfo  ::=  SEQUENCE  {
+          algorithm                       AlgorithmIdentifier,
+          subjectPublicKey        BIT STRING      }
+        */
+
+        /* The sequence and algorithm identifier are considered optional. */
+        if (data_len > 0 && *datac == (ASN_CONSTRUCTED | ASN_SEQUENCE))
+        {
+            int32 pubKeyAlgorithm;
+            psSize_t plen;
+
+            if ((rc = getAsnSequence(&datac, (uint32) data_len, &plen)) < 0)
+            {
+                psTraceCrypto("Couldn't get ASN sequence for pubKeyAlgorithm\n");
+                goto exit_free_data;
+            }
+            data_len = plen;
+            /* We will just parse one SEQUENCE.
+               This will allow compatibility with inputs containing multiple
+               keys or other inputs like certificate after the first key. */
+            end = datac + data_len;
+            if ((rc = getAsnAlgorithmIdentifier(&datac, (uint32) data_len,
+                                                &pubKeyAlgorithm, &plen)) < 0)
+            {
+                psTraceCrypto("Couldn't parse algorithm id for pubKeyAlgorithm\n");
+                goto exit_free_data;
+            }
+            data_len = (psSizeL_t) (end - datac);
+        }
+        rc = getEcPubKey(pool, &datac, data_len,
                          &pubkey->key.ecc, hashBuf);
-        if (rc < PS_SUCCESS)
+        if (rc == PS_SUCCESS)
+        {
+            /* keysize will be the size of the public ecc key (2 * privateLen) */
+            pubkey->keysize = psEccSize(&pubkey->key.ecc);
+            if (pubkey->keysize < (MIN_ECC_BITS / 8))
+            {
+                /* Ensure correct key size. */
+                psTraceIntCrypto("ECC key size < %d\n", MIN_ECC_BITS);
+                psClearPubKey(pubkey);
+                rc = PS_PARSE_FAIL;
+                goto exit_free_data;
+            }
+        }
+        /* Fallback: parse Ecc private key structure if
+           algorithm identifier was not found and getEcPubKey failed. */
+        if (rc < PS_SUCCESS && datac == keyBuf)
         {
             rc = psEccParsePrivKey(pool, data, data_len,
                                    &pubkey->key.ecc, NULL);
@@ -315,6 +363,7 @@ psParseUnknownPubKeyMem(psPool_t *pool,
             pubkey->type = PS_ECC;
         }
     }
+exit_free_data:
 # endif
 
 

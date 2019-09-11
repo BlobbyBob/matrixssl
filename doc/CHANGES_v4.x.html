@@ -9,6 +9,21 @@
 </head>
 <body>
 <h1 id="matrixssl-4.x-changelog">MatrixSSL 4.x changelog</h1>
+<h2 id="changes-between-4.2.1-and-4.2.2-august-2019">Changes between 4.2.1 and 4.2.2 [August 2019]</h2>
+<p>This version fixes a few security issues related to DTLS and handshake message length. It also defines the size of psBool_t to be equivalent to bool on both x86 and ARM platforms.</p>
+<ul>
+<li><p>TLS:</p>
+<ul>
+<li><p>Fixed vulenerabilities and bugs related to DTLS discovered by Jakub Botwicz (Samsung R&amp;D Poland).</p></li>
+<li><p>Limited handshake message length.</p></li>
+</ul></li>
+<li><p>Crypto</p>
+<ul>
+<li>Added support for parsing public keys in OpenSSL ECC DER/PEM format.<br />
+</li>
+<li>Fixed support for SHA224 RSA.</li>
+</ul></li>
+</ul>
 <h2 id="changes-between-4.2.0-and-4.2.1-june-2019">Changes between 4.2.0 and 4.2.1 [June 2019]</h2>
 <p>This version fixes an out of bounds read in ASN.1 handling found by Tyler Nighswander (ForAllSecure).</p>
 <h2 id="changes-between-4.1.0-and-4.2.0-may-2019">Changes between 4.1.0 and 4.2.0 [May 2019]</h2>

@@ -7142,6 +7142,279 @@ static int32 psEd25519Test(void)
 }
 #endif /* USE_ED25519 */
 
+# include "osdep_unistd.h"
+# include "osdep_stdio.h"
+
+# if defined(USE_RSA) || defined(USE_ECC)
+#  ifdef MATRIX_USE_FILE_SYSTEM
+#   ifdef USE_PRIVATE_KEY_PARSING
+int32 loadKeyPair(psPool_t *pool,
+    psPubKey_t *keyPair,
+    const char *key_filename)
+{
+    int32 keytype;
+
+    keytype = psParseUnknownPrivKey(pool,
+        1,
+        (char *) key_filename,
+        NULL,
+        keyPair);
+    if (keytype < 0)
+    {
+        Printf("psParseUnknownPrivKey failed\n");
+        return PS_FAILURE;
+    }
+
+    return PS_SUCCESS;
+}
+
+int32 loadKeyPub(psPool_t *pool,
+    psPubKey_t *keyPub,
+    const char *key_filename)
+{
+    int32 keytype;
+
+    keytype = psParseUnknownPubKey(pool,
+        1,
+        (char *) key_filename,
+        NULL,
+        keyPub);
+    if (keytype < 0)
+    {
+        /* Alternative path.
+           In current software either function should work. */
+        psPool_t *pool = NULL;
+        psRes_t rc;
+        unsigned char *buf;
+        psSizeL_t len;
+
+        Printf("(INFORMATIVE: psParseUnknownPubKey failed: "
+               "psParseUnknownPubKeyMem used instead)");
+
+        rc = psGetFileBuf(pool, key_filename, &buf, &len);
+        if (rc != PS_SUCCESS)
+        {
+            return PS_FAILURE;
+        }
+
+        rc = (psRes_t) psParseUnknownPubKeyMem(pool, buf, (int32) len,
+                                               NULL, keyPub);
+        psFree(buf, pool);
+        if (rc != PS_SUCCESS)
+        {
+            /* Successful key loading. */
+            return PS_FAILURE;
+        }
+        keytype = 2;
+    }
+    if (keytype != 2)
+    {
+        Printf("psParseUnknownPubKey(Mem): unexpected key type.\n");
+        return PS_FAILURE;
+    }
+
+    return PS_SUCCESS;
+}
+#   endif /* USE_PRIVATE_KEY_PARSING */
+#  endif /* MATRIX_USE_FILE_SYSTEM */
+# endif /* USE_RSA || USE_ECC */
+
+
+# ifdef USE_ECC
+#  ifdef USE_PEM_DECODE
+static int32_t psEccLoadPub_helper(void)
+{
+    FILE *file = NULL;
+    const char *public_key_filename = "testkeys/EC/256_EC_PUB.pem";
+    const char *private_key_filename = "testkeys/EC/256_EC_KEY.pem";
+    unsigned char testdata1[] = { 'a', 'b', 'c', 'd' };
+    unsigned char testdata2[] = { 'a', 'b', 'c', 'D' };
+    unsigned char sigbuf[128];
+    psPubKey_t public, private;
+    int32 rc;
+    psRes_t res;
+    psRes_t res1a;
+    psRes_t res1b;
+    psRes_t res2a;
+    psRes_t res2b;
+    psSize_t siglen = sizeof sigbuf;
+    psBool_t verify1a = PS_FALSE;
+    psBool_t verify2a = PS_FALSE;
+    psBool_t verify1b = PS_FALSE;
+    psBool_t verify2b = PS_FALSE;
+    unsigned char hashOut[SHA512_HASH_SIZE];
+    psSize_t hashOutLen = PS_SIZEOF(hashOut);
+
+    /* Note: this part of the test is dependent on path. */
+    for (;; )
+    {
+        char cwd_from_buf[512];
+        char cwd_to_buf[512];
+        char *cwd_from = NULL;
+        char *cwd_to = NULL;
+
+        file = Fopen(public_key_filename, "r");
+        if (file)
+        {
+            break;
+        }
+
+        cwd_from = getcwd(cwd_from_buf, sizeof(cwd_from_buf));
+
+        if (cwd_from == NULL) {
+            Printf("psEccLoadPub cannot locate current directory\n");
+            return PS_FAILURE;
+        }
+
+        if (chdir("..") != 0)
+        {
+            Printf("psEccLoadPub cannot locate test key files\n");
+            return PS_FAILURE;
+        }
+
+        cwd_to = getcwd(cwd_to_buf, sizeof(cwd_to_buf));
+
+        if (cwd_to == NULL) {
+            Printf("psEccLoadPub cannot locate current directory\n");
+            return PS_FAILURE;
+        }
+
+        /* If directory did not change, i.e. we are in root */
+        if (Strcmp(cwd_to, cwd_from) == 0) {
+            Printf("psEccLoadPub cannot locate %s\n", public_key_filename);
+            return PS_FAILURE;
+        }
+    }
+    Fclose(file);
+
+    Memset(&private, 0, sizeof private);
+    rc = loadKeyPair(MATRIX_NO_POOL, &private, private_key_filename);
+    if (rc != PS_SUCCESS)
+    {
+        Printf("Failed to load Ecc private key %s\n", private_key_filename);
+        return PS_FAILURE;
+    }
+
+    Memset(&public, 0, sizeof public);
+    rc = loadKeyPub(MATRIX_NO_POOL, &public, public_key_filename);
+    if (rc != PS_SUCCESS)
+    {
+        Printf("Failed to load Ecc private key %s\n", public_key_filename);
+        return PS_FAILURE;
+    }
+
+    /* Pairwise testing procedure: create signature and verify it
+       against proper data and improper data.
+       Do this twice: with public key of key pair and
+       with separate public key. */
+
+    res = psComputeHashForSig(testdata1,
+        PS_SIZEOF32(testdata1),
+        OID_SHA256_ECDSA_SIG,
+        hashOut,
+        &hashOutLen);
+
+    if (res != PS_SUCCESS)
+    {
+        Printf("Hash SHA-256 computation failed\n");
+        return PS_FAILURE;
+    }
+
+    res = psEccDsaSign(MATRIX_NO_POOL,
+        &private.key.ecc,
+        hashOut, hashOutLen,
+        sigbuf, &siglen,
+        0, NULL);
+
+    if (res != PS_SUCCESS)
+    {
+        Printf("ECC signature operation with NIST P-256 failed\n");
+        return PS_FAILURE;
+    }
+
+    res1a = psHashDataAndVerifySig(MATRIX_NO_POOL,
+        testdata1,
+        PS_SIZEOF32(testdata1),
+        sigbuf,
+        siglen,
+        &private,
+        OID_SHA256_ECDSA_SIG,
+        &verify1a,
+        NULL);
+
+    res2a = psHashDataAndVerifySig(MATRIX_NO_POOL,
+        testdata2,
+        PS_SIZEOF32(testdata2),
+        sigbuf,
+        siglen,
+        &private,
+        OID_SHA256_ECDSA_SIG,
+        &verify2a,
+        NULL);
+
+    if (res1a != PS_SUCCESS ||
+        (res2a != PS_FAILURE && res2a != PS_VERIFICATION_FAILED) ||
+        verify1a != PS_TRUE || verify2a != PS_FALSE)
+    {
+        Printf("Verify results unexpected (got %d %d %d %d)\n",
+            (int) res1a, (int) res2a, (int) verify1a, (int) verify2a);
+        return PS_FAILURE;
+    }
+
+    res1b = psHashDataAndVerifySig(MATRIX_NO_POOL,
+        testdata1,
+        PS_SIZEOF32(testdata1),
+        sigbuf,
+        siglen,
+        &public,
+        OID_SHA256_ECDSA_SIG,
+        &verify1b,
+        NULL);
+
+    res2b = psHashDataAndVerifySig(MATRIX_NO_POOL,
+        testdata2,
+        PS_SIZEOF32(testdata2),
+        sigbuf,
+        siglen,
+        &public,
+        OID_SHA256_ECDSA_SIG,
+        &verify2b,
+        NULL);
+
+    if (res1b != PS_SUCCESS ||
+        (res2b != PS_FAILURE && res2b != PS_VERIFICATION_FAILED) ||
+        verify1b != PS_TRUE || verify2b != PS_FALSE)
+    {
+        Printf("Verify results separate pk unexpected (got %d %d %d %d)\n",
+            (int) res1b, (int) res2b, (int) verify1b, (int) verify2b);
+
+        return PS_FAILURE;
+    }
+
+    psClearPubKey(&public);
+    psClearPubKey(&private);
+    return PS_SUCCESS;
+}
+
+static int32_t psEccLoadPub(void)
+{
+    int32_t rc;
+
+    _psTrace("  ECC key loading and usage test... ");
+    rc = psEccLoadPub_helper();
+    if (rc == PS_SUCCESS)
+    {
+        _psTrace(" SUCCESS\n");
+    }
+    else
+    {
+        _psTrace("FAILURE\n");
+    }
+    return rc;
+}
+#  endif /* USE_PEM_DECODE */
+# endif /* USE_ECC */
+
 /******************************************************************************/
 
 typedef struct
@@ -7325,6 +7598,13 @@ static test_t tests[] = {
     { NULL
 #endif
       , "***** ECC TESTS *****" },
+
+#if defined(USE_ECC) && defined(USE_PEM_DECODE)
+    { psEccLoadPub
+#else
+    { NULL
+#endif /* USE_ECC && USE_PEM_DECODE */
+      , "***** ECC LOAD PUBLIC KEY TEST *****" },
 
     { NULL
       , "***** PRF TESTS *****" },

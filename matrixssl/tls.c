@@ -1176,12 +1176,20 @@ int32_t findFromUint16Array(const uint16_t *a,
 
 psBool_t anyTls13VersionSupported(ssl_t *ssl)
 {
-    return SUPP_VER(ssl, v_tls_1_3_any);
+    if (SUPP_VER(ssl, v_tls_1_3_any))
+    {
+        return PS_TRUE;
+    }
+    return PS_FALSE;
 }
 
 psBool_t anyNonTls13VersionSupported(ssl_t *ssl)
 {
-    return SUPP_VER(ssl, v_tls_legacy);
+    if (SUPP_VER(ssl, v_tls_legacy))
+    {
+        return PS_TRUE;
+    }
+    return PS_FALSE;
 }
 
 # ifdef USE_TLS_1_3

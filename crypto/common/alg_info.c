@@ -87,6 +87,7 @@ psResSize_t psSigAlgToHashLen(int32_t sigAlg)
     case OID_SHA1_ECDSA_SIG:
     case OID_SHA1_DSA_SIG:
         return SHA1_HASH_SIZE;
+    case OID_SHA224_RSA_SIG:
     case OID_SHA224_ECDSA_SIG:
         return SHA224_HASH_SIZE;
     case OID_SHA256_RSA_SIG:

@@ -118,6 +118,7 @@ int32_t psParseUnknownPubKey(psPool_t *pool, int pemOrDer, char *keyfile,
     int keytype = -1;
     unsigned char *keyBuf;
     psSizeL_t keyBufLen;
+    psRes_t rc;
 
     /* flps_parseUnknownPubKey() is similar function.
        First try to invoke that. */
@@ -129,24 +130,47 @@ int32_t psParseUnknownPubKey(psPool_t *pool, int pemOrDer, char *keyfile,
         /* PEM file */
         keytype = psTryParsePubKeyFilePEM(pool, keyfile, password, pubkey);
 
-        if (keytype < 0)
+        if (keytype >= 0)
         {
-            psTraceStrCrypto("Unable to parse public key file %s\n", keyfile);
-            return PS_FAILURE;
+            /* psTryParsePubKeyFilePEM() succeeded. */
+            return keytype;
         }
+
+        /* Fallback: Try processing via psGetFileBuf() and
+           psParseUnknownPubKeyMem(). */
     }
-    else
+
+    /* DER file (or PEM file that failed parsing via
+       psTryParsePubKeyFilePEM()). */
+    if (psGetFileBuf(pool, keyfile, &keyBuf, &keyBufLen) < PS_SUCCESS)
     {
-        /* DER file. */
-        if (psGetFileBuf(pool, keyfile, &keyBuf, &keyBufLen) < PS_SUCCESS)
-        {
-            psTraceStrCrypto("Unable to open public key file %s\n", keyfile);
-            return -1;
-        }
-        /* Processing DER files not handled by current implementation of
-           the function the input shall be in PEM format. */
-        psFree(keyBuf, pool);
+        psTraceStrCrypto("Unable to open public key file %s\n", keyfile);
+        return -1;
     }
+    rc = (psRes_t) psParseUnknownPubKeyMem(pool, keyBuf, (int32) keyBufLen,
+                                           NULL, pubkey);
+    if (rc == PS_SUCCESS)
+    {
+#     ifdef USE_RSA
+        if (pubkey->type == PS_RSA)
+        {
+            keytype = 1;
+        }
+#     endif /* USE_RSA */
+#     ifdef USE_ECC
+        if (pubkey->type == PS_ECC)
+        {
+            keytype = 2;
+        }
+#     endif /* USE_ECC */
+        if (keytype == -1)
+        {
+            psTraceIntCrypto("Unexpected keytype identifier: %d\n",
+                             (int) pubkey->type);
+            psClearPubKey(pubkey);
+        }
+    }
+    psFree(keyBuf, pool);
 
     return keytype;
 }

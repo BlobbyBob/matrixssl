@@ -7869,6 +7869,12 @@ static int32 writeHelloVerifyRequest(ssl_t *ssl, sslBuf_t *out)
     Memcpy(c, ssl->srvCookie, DTLS_COOKIE_SIZE);
     c += DTLS_COOKIE_SIZE;
 
+    if ((ssl->srvCookie[0] | ssl->srvCookie[1] | ssl->srvCookie[2] | ssl->srvCookie[3]) == 0)
+    {
+        /* The cookie is invalid. Cannot encode. */
+        return PS_LIMIT_FAIL;
+    }
+    
     if ((rc = postponeEncryptRecord(ssl, SSL_RECORD_TYPE_HANDSHAKE,
              SSL_HS_HELLO_VERIFY_REQUEST, messageSize, padLen, encryptStart,
              out, &c)) < 0)

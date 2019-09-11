@@ -359,19 +359,35 @@ typedef int32_t psResSize_t;
    a negative value for failure. */
 typedef int32_t psRes_t;
 
+#  ifndef PSBOOL_T
+#   ifndef NO_C99_PSBOOL_T
+#    ifdef __STDC_VERSION__
+#     if __STDC_VERSION__ >= 199901L
+#      include "osdep_stdbool.h"
+#      define PSBOOL_T bool
+
+#      if defined(__arm__) || defined(__aarch32__) || defined(__aarch64__) || defined(__x86_64__) || defined(__i386__)
+extern int ensure_boolean_is_single_byte[2 - sizeof(bool)];
+#      endif
+#     endif
+#    endif
+#   endif
+#  endif
+
+#  ifndef PSBOOL_T
+#   if defined(__arm__) || defined(__aarch32__) || defined(__aarch64__) || defined(__x86_64__) || defined(__i386__)
+#    define PSBOOL_T unsigned char
+#   else
+#    define PSBOOL_T int /* Old default for boolean type. */
+#   endif
+#  endif
+
 /* An integer with boolean value PS_TRUE or PS_FALSE.
    The actual datatype used varies according to platform.
-   On C99 or later stdbool.h is used, otherwise integer. */
-#  ifdef __STDC_VERSION__
-#   if __STDC_VERSION__ >= 199901L
-#    include "osdep_stdbool.h"
-typedef bool psBool_t;
-#   else
-typedef int psBool_t;
-#   endif
-#  else
-typedef int psBool_t;
-#  endif
+   It is possible to provide type to use via PSBOOL_T.
+   On x86 and ARM platforms 8-bit character is used for compatibility
+   between C99 and earlier C standards. */
+typedef PSBOOL_T psBool_t;
 
 /******************************************************************************/
 /*

@@ -6629,6 +6629,7 @@ static int32_t ocspParseBasicResponse(psPool_t *pool, uint32_t len,
         if (cert_res < 0)
         {
             psX509FreeCert(res->OCSPResponseCert);
+            res->OCSPResponseCert = NULL;
             return PS_PARSE_FAIL;
         }
         p += cert_res;

@@ -103,7 +103,12 @@ int32_t dtlsComputeCookie(ssl_t *ssl, unsigned char *helloBytes, int32 helloLen)
 #  endif
     if (rc >= 0)
     {
-        /* Truncate hash output if necessary */
+        /* Truncate hash output if necessary;
+           Use the first four bytes as srvCookie valid indicator. */
+        if ((out[0] | out[1] | out[2] | out[3]) == 0)
+        {
+            out[0] = 1; /* All bits are zero: Set one bit. */
+        }
         Memcpy(ssl->srvCookie, out, DTLS_COOKIE_SIZE);
     }
     memzero_s(out, DTLS_COOKIE_SIZE);

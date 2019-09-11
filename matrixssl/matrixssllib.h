@@ -1504,6 +1504,7 @@ struct ssl
                               related to this session */
     void *userPtr;
     void *userDataPtr;
+    uint32_t fragLenStored; /* Used in DTLS along side fragTotal. */
 }; /* End of struct ssl { ... */
 
 typedef struct ssl ssl_t;

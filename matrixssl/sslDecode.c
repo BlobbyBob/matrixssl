@@ -780,6 +780,11 @@ SKIP_RECORD_PARSE:
                    on.  OpenSSL sends them separately but most wouldn't */
                 if (end != c)
                 {
+                    if (*c != SSL_RECORD_TYPE_HANDSHAKE)
+                    {
+                        /* Silently ignore packet. */
+                        return MATRIXSSL_SUCCESS;
+                    }
                     psAssert(*c == SSL_RECORD_TYPE_HANDSHAKE); /* Finished */
                     c += 11;                                   /* Skip type, version, epoch to get to length */
                     /* borrow rc since we will be leaving here anyway */
@@ -2283,6 +2288,7 @@ hsStateDetermined:
  */
     if (ssl->rec.majVer >= SSL3_MAJ_VER)
     {
+        uint32 hsLenMax;
         if (end - c < 3)
         {
             ssl->err = SSL_ALERT_DECODE_ERROR;
@@ -2293,6 +2299,44 @@ hsStateDetermined:
         hsLen = *c << 16; c++;
         hsLen += *c << 8; c++;
         hsLen += *c; c++;
+
+        if (ssl->hsState == SSL_HS_CLIENT_HELLO)
+        {
+            /* This is for Client Hello.
+               Note: "Client Hello" is determined according to 
+               expected state of server, rather than examining of the
+               message. Therefore, this limit applies to any first
+               protocol handshake message received. */
+#ifdef SSL_DEFAULT_IN_HS_SIZE_CLIENT_HELLO
+            hsLenMax = SSL_DEFAULT_IN_HS_SIZE_CLIENT_HELLO;
+#else
+            hsLenMax = 1024; /* Built-in default, in case MatrixSSL
+                                configuration does not override the size. */
+#endif
+        }
+        else
+        {
+            /* This is for other messages. Other messages can be
+               larger, due to possibility that they can include certificates.
+               Certificates can be (in theory) arbitrarily large,
+               but we need to provide a limit for certificate chain, because
+               otherwise arbitrary amount of memory could be allocated
+               . */
+#ifdef SSL_DEFAULT_IN_HS_SIZE
+            hsLenMax = SSL_DEFAULT_IN_HS_SIZE;
+#else
+            hsLenMax = 65536; /* Built-in default, in case MatrixSSL
+                                 configuration does not override the size. */
+#endif
+        }
+        if (hsLen > hsLenMax)
+        {
+            /* The (fragmented) packet is considered overly large and dropped.
+             */
+            ssl->err = SSL_ALERT_DECODE_ERROR;
+            psTraceInt("Maximum length exceeded (%d)\n", (int) hsLenMax);
+            return MATRIXSSL_ERROR;
+        }
 #ifdef USE_DTLS
         if (ACTV_VER(ssl, v_dtls_any))
         {
@@ -2342,6 +2386,7 @@ hsStateDetermined:
                         ssl->fragMessage = NULL;
                     }
                     ssl->fragMessage = psMalloc(ssl->hsPool, hsLen);
+                    ssl->fragLenStored = hsLen;
                     if (ssl->fragMessage == NULL)
                     {
                         return SSL_MEM_ERROR;
@@ -2378,6 +2423,20 @@ hsStateDetermined:
                         MAX_FRAGMENTS);
                     return PS_LIMIT_FAIL;
                 }
+
+/*
+                Verify the fragment belongs within fragMessage.
+*/
+                if (fragOffset + fragLen > hsLen ||
+                    fragOffset + fragLen > ssl->fragLenStored)
+                {
+                    /* Fragment outside proper area. */
+                    ssl->err = SSL_ALERT_DECODE_ERROR;
+                    psTraceIntDtls("Fragment outside range [0...%d]: ignored\n",
+                                   (int) hsLen);
+                    return MATRIXSSL_ERROR;
+                }
+                
 /*
                 Need to save the hs header info aside as well so that we may
                 pass the fragments through the handshake hash mechanism in

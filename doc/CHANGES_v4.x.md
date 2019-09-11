@@ -1,7 +1,25 @@
 # MatrixSSL 4.x changelog
 
+## Changes between 4.2.1 and 4.2.2 [August 2019]
+
+This version fixes a few security issues related to DTLS and
+handshake message length. It also defines the size of psBool_t
+to be equivalent to bool on both x86 and ARM platforms.
+
+- TLS:
+
+    * Fixed vulenerabilities and bugs related to DTLS discovered by
+      Jakub Botwicz (Samsung R&D Poland).
+
+    * Limited handshake message length.                                    
+
+- Crypto
+
+    * Added support for parsing public keys in OpenSSL ECC DER/PEM format.        
+    * Fixed support for SHA224 RSA.                                        
+
 ## Changes between 4.2.0 and 4.2.1 [June 2019]
- 
+
 This version fixes an out of bounds read in ASN.1 handling
 found by Tyler Nighswander (ForAllSecure).
 

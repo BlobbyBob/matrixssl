@@ -359,6 +359,11 @@ int32_t getAsnInteger(const unsigned char **pp, psSizeL_t size, int32_t *val)
         psTraceCrypto("ASN getInteger had limit failure\n");
         return PS_LIMIT_FAIL;
     }
+    if (vlen == 0)
+    {
+        psTraceCrypto("ASN getInteger parse error: empty V\n");
+        return PS_PARSE_FAIL;
+    }
     ui = 0;
 /*
     If high bit is set, it's a negative integer, so perform the two's compliment
