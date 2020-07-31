@@ -40,6 +40,12 @@
 # define NEED_PS_TIME_CONCRETE
 #endif
 
+#ifdef __APPLE__
+# ifndef _DARWIN_C_SOURCE
+#  define _DARWIN_C_SOURCE
+# endif
+#endif
+
 #include "app.h"
 #include "matrixssl/matrixsslApi.h"
 #include "core/psUtil.h"
@@ -327,6 +333,43 @@ static void displayStats(void)
     }
 }
 
+static
+int32_t print_connection_extra_details(ssl_t *ssl)
+{
+    int32_t rc = PS_SUCCESS;
+
+# ifdef ENABLE_MASTER_SECRET_EXPORT
+    {
+        unsigned char *masterSecret = NULL;
+        psSizeL_t hsMasterSecretLen = 0;
+        matrixSslGetMasterSecret(
+                ssl,
+                &masterSecret,
+                &hsMasterSecretLen);
+        psTraceBytes("Master secret",
+                masterSecret, hsMasterSecretLen);
+    }
+# endif /* ENABLE_MASTER_SECRET_EXPORT */
+# ifdef USE_RFC5929_TLS_UNIQUE_CHANNEL_BINDINGS
+    {
+        unsigned char bindings[36];
+        psSizeL_t bindingsLen = sizeof(bindings);
+
+        rc = matrixSslGetTlsUniqueChannelBindings(
+                ssl,
+                bindings,
+                &bindingsLen);
+        if (rc < 0)
+        {
+            goto out;
+        }
+        psTraceBytes("tls-unique", bindings, bindingsLen);
+    }
+out:
+# endif
+
+    return rc;
+}
 /******************************************************************************/
 /*
     Non-blocking socket event handler
@@ -628,6 +671,8 @@ WRITE_MORE:
                 else if (rc == MATRIXSSL_HANDSHAKE_COMPLETE)
                 {
                     Printf("Got HANDSHAKE_COMPLETE from SentData\n");
+                    (void)print_connection_extra_details(cp->ssl);
+
                     /* If the protocol is server initiated, send data here */
                     cp->handshakeComplete = 1;
                     g_handshakes++;
@@ -757,6 +802,7 @@ PROCESS_MORE:
                 Printf("Got HANDSHAKE_COMPLETE from RecvData\n");
                 cp->handshakeComplete = 1;
                 g_handshakes++;
+                (void)print_connection_extra_details(cp->ssl);
                 /* If the protocol is server initiated, send data here */
                 goto READ_MORE;
             case MATRIXSSL_APP_DATA:

@@ -2,10 +2,8 @@
 #if defined USE_SL_CHACHA20_POLY1305_IETF || defined USE_SL_SODIUM
 # include "osdep_stddef.h"
 # include "osdep_stdint.h"
-# ifdef HAVE_ANDROID_GETCPUFEATURES
-#  include "osdep_cpu-features.h"
-# endif
-
+# include "osdep_stdlib.h"
+# include "osdep_stdbool.h"
 # include "private/common.h"
 # include "runtime.h"
 # include "pscompilerdep.h"
@@ -44,27 +42,34 @@ static CPUFeatures _cpu_features;
 static int
 SLSodium_runtime_arm_cpu_features(CPUFeatures * const cpu_features)
 {
-# ifndef __arm__
+# if !defined(__arm__) && !defined(__aarch64__) && !defined(__aarch32__)
     cpu_features->has_neon = 0;
     return -1;
-# else
+#else /* some ARM platform. */
 #  define NO_INTEL /* This architecture is definitely not x86/x86-64.
                       No need to probe for Intel CPU features. */
-#  ifdef __APPLE__
-#   ifdef __ARM_NEON__
-    cpu_features->has_neon = 1;
-#   else
-    cpu_features->has_neon = 0;
-#   endif
-#  elif defined(HAVE_ANDROID_GETCPUFEATURES) && \
-    defined(ANDROID_CPU_ARM_FEATURE_NEON)
-    cpu_features->has_neon =
-        (android_getCpuFeatures() & ANDROID_CPU_ARM_FEATURE_NEON) != 0x0;
-#  else
-    cpu_features->has_neon = 0;
-#  endif
+    /* Customization for INSIDE Secure FIPS Toolkit: */
+    /* Use sl_cpu.c for ARM feature detection, instead of
+       the default sodium code. */
+    
+    extern bool SL_ArmDetectionDone;
+    extern bool SL_hasNEON;
+    void SL_DetectArmFeatures(void);
+
+    if (!SL_ArmDetectionDone)
+    {
+        if (!getenv("SAFEZONE_DISABLE_HW"))
+        {
+            SL_DetectArmFeatures();
+        }
+        else
+        {
+            SL_ArmDetectionDone = 1;
+        }
+    }
+    cpu_features->has_neon = SL_hasNEON;
     return 0;
-# endif
+# endif /* ARM variant (including ARMv7 or ARMv8). */
 }
 
 #ifndef NO_INTEL

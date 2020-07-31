@@ -58,7 +58,7 @@ CFLAGS_GARBAGE_COLLECTION ?= -ffunction-sections -fdata-sections
 noinst_LIBRARIES=libcore_s.a libsfzutf_s.a libtestsupp_s.a
 libcore_s_a_SOURCES=$(SRC_CORE)
 libcore_s_a_API=core
-libcore_s_a_CFLAGS=$(CFLAGS_POSITION_INDEPENDENT) $(CFLAGS_GARBAGE_COLLECTION)
+libcore_s_a_CFLAGS=$(CFLAGS_POSITION_INDEPENDENT) $(CFLAGS_GARBAGE_COLLECTION) -fno-math-errno
 VPATH+=src
 
 libsfzutf_s_a_SOURCES=$(addprefix testsupp/src/sfzutf/, \

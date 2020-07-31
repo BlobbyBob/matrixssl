@@ -378,8 +378,10 @@ static psRes_t sslLoadKeyPair(psPool_t *pool,
 
     if (keydata == NULL || keydata_len == 0)
     {
-        psTraceInfo("slLoadKeyPair(): no key material");
-        return PS_SUCCESS;
+        psTraceInfo("sslLoadKeyPair(): no key material");
+        key->type = PS_NOKEY;
+        key->keysize = 0;
+	return PS_SUCCESS;
     }
     rc = psPemTryDecode(pool,
             keydata,
@@ -596,6 +598,8 @@ matrixSslCreateIdentityFromData(sslKeys_t *keys,
     psRes_t rc;
 
     memset(&idkey, 0, sizeof(idkey));
+
+    Memset(&idkey, 0, sizeof idkey); /* Zeroize idkey. */
 
     err = sslLoadCert(keys->pool, &idcert, cert, cert_len, opts);
     if (err < PS_SUCCESS)
@@ -887,6 +891,8 @@ int32 matrixSslLoadPkcs12Mem(sslKeys_t *keys,
     psX509Cert_t *cert;
     psPubKey_t idkey;
     sslIdentity_t *id;
+
+    Memset(&idkey, 0, sizeof idkey); /* Zeroize idkey. */
 
     if (keys == NULL)
     {
@@ -1377,6 +1383,10 @@ psRes_t matrixSslLoadKeys(sslKeys_t *keys,
         keytype = opts->key_type;
     }
 
+# ifdef USE_ALWAYS_ALLOW_OUT_OF_DATE_CERT_PARSE
+    opts.flags |= LOAD_KEYS_OPT_ALLOW_OUT_OF_DATE_CERT_PARSE;
+# endif
+
     if (privFile == NULL)
     {
         keytype = 1;
@@ -1384,7 +1394,7 @@ psRes_t matrixSslLoadKeys(sslKeys_t *keys,
 
     switch (keytype)
     {
-    case 1: /* RSA */
+    case PS_RSA:
         rc = matrixSslLoadKeyMaterial(keys,
                 certFile,
                 privFile,
@@ -1393,7 +1403,7 @@ psRes_t matrixSslLoadKeys(sslKeys_t *keys,
                 PS_RSA,
                 opts);
         break;
-    case 2: /* ECC */
+    case PS_ECC:
         rc = matrixSslLoadKeyMaterial(keys,
                 certFile,
                 privFile,
@@ -1402,7 +1412,7 @@ psRes_t matrixSslLoadKeys(sslKeys_t *keys,
                 PS_ECC,
                 opts);
         break;
-    case 3: /* ED25519 */
+    case PS_ED25519:
         rc = matrixSslLoadKeyMaterial(keys,
                 certFile,
                 privFile,

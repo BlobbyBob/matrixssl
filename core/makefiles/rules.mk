@@ -89,13 +89,16 @@ endif
 include $(CORE_DIR)/Makefile.inc
 
 # Common dependencies
-DL=-ldl
+DL=-ldl -lm
+ifeq '$(origin PTHREAD)' 'undefined'
 PTHREAD=-lpthread
+endif
 
+LM=-lm
 # API spec for core (only)
 core_API_CFLAGS:=$(CFLAGS_CORE_INCLUDE)
 core_API_CXXFLAGS:=$(CFLAGS_CORE_INCLUDE)
-core_API_LIBADD=$(CORE_DIR)/libcore_s.a $(PTHREAD)
+core_API_LIBADD=$(CORE_DIR)/libcore_s.a $(PTHREAD) $(LM)
 
 # API spec for software using matrixssl API and/or psCrypto API.
 MATRIXSSL_PATH=$(CORE_PATH)/../matrixssl/matrixssl

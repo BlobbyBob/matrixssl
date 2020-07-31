@@ -101,18 +101,19 @@ int32_t tlsParseSignatureAlgorithms(ssl_t *ssl,
     {
         sigAlg = (c[0] << 8) + c[1];
         /* Those algorithms that are not supported by us will be filtered
-           out here */
+           out here; ssl->hashSigAlg will contain the shared ones. */
         if (findFromUint16Array(ssl->supportedSigAlgs,
                         ssl->supportedSigAlgsLen,
                         sigAlg) != PS_FAILURE)
         {
             /* This client supplied sig_alg is on our supported list */
             ssl->hashSigAlg |= HASH_SIG_MASK(c[0], c[1]);
-            if (keySelect->peerSigAlgsLen < TLS_MAX_SIGNATURE_ALGORITHMS)
-            {
-                keySelect->peerSigAlgs[keySelect->peerSigAlgsLen++] = sigAlg;
-            }
         }
+        if (keySelect->peerSigAlgsLen < TLS_MAX_SIGNATURE_ALGORITHMS)
+        {
+            keySelect->peerSigAlgs[keySelect->peerSigAlgsLen++] = sigAlg;
+        }
+        ssl->peerSigAlg |= HASH_SIG_MASK(c[0], c[1]);
         c += 2;
         tmpLen -= 2;
         extLen -= 2;
@@ -120,7 +121,7 @@ int32_t tlsParseSignatureAlgorithms(ssl_t *ssl,
 
     psTracePrintSigAlgs(INDENT_EXTENSION,
             "signature_algorithms",
-            ssl->hashSigAlg,
+            ssl->peerSigAlg,
             PS_FALSE);
 
     return MATRIXSSL_SUCCESS;
@@ -725,7 +726,7 @@ static int ClientHelloExt(ssl_t *ssl,
         psTracePrintExtensionParse(ssl, EXT_ELLIPTIC_POINTS);
         if (extLen < 1)
         {
-            psTraceErrr("Invaid ECC Points len\n");
+            psTraceErrr("Invalid ECC Points len\n");
             ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
             return MATRIXSSL_ERROR;
         }
@@ -1196,6 +1197,13 @@ static int ServerHelloExt(ssl_t *ssl, unsigned short extType, unsigned short ext
             ssl->extFlags.req_elliptic_points = 0;
             rc = 0;
         }
+#  ifdef ALLOW_UNSOLICITED_SERVER_HELLO_ELLIPTIC_POINTS
+        /* Some servers send the extension regardless of whether we sent
+           it in our ClientHello. This is strictly not RFC-compliant.
+           Allow it if the above compatibility option is enabled. */
+        psTraceInfo("Allowing unsolicited elliptic_point_format extension\n");
+        rc = 0;
+#  endif
         if (*c++ != (extLen - 1))
         {
             ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;

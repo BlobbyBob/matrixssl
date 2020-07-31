@@ -168,8 +168,8 @@ int32 psGetTime(psTime_t *t, void *userPtr)
     {
         t = &lt;
     }
-    *t.psTimeInternal = mach_absolute_time();
-    return (int32) ((*t.psTimeInternal * hiresFreq.numer) /
+    t->psTimeInternal = mach_absolute_time();
+    return (int32) ((t->psTimeInternal * hiresFreq.numer) /
             (hiresFreq.denom * 1000000000L));
 }
 

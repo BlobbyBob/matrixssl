@@ -40,6 +40,9 @@
 /* Forward declarations for opaque types. */
 typedef struct ssl ssl_t;
 typedef struct sslKeys sslKeys_t;
+typedef struct sslSec sslSec_t;
+typedef struct sslRec sslRec_t;
+typedef struct sslCipherSpec sslCipherSpec_t;
 typedef struct tlsExtension tlsExtension_t;
 typedef struct sslSessionId sslSessionId_t;
 typedef struct psTls13SessionParams psTls13SessionParams_t;

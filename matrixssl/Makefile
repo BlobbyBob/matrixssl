@@ -10,6 +10,7 @@ MATRIXSSL_ROOT:=..
 include $(MATRIXSSL_ROOT)/common.mk
 
 SRC:=\
+	matrixsslGetSet.c \
 	cipherSuite.c \
 	dtls.c \
 	extDecode.c \

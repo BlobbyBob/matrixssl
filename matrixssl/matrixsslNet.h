@@ -68,6 +68,7 @@ typedef struct matrixSslInteract
        loaded. */
     size_t num_last_read_transferred;
 #endif
+    int must_send; /* send is ongoing. */
 } matrixSslInteract_t;
 
 /* Lower-level API for interacting with MatrixSSL API. */

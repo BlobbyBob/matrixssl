@@ -298,7 +298,8 @@ struct TestEntry AutoTestEntryDefault =
     TEST_ENABLED,
     OK,
     NULL,
-    NULL
+    NULL,
+    { NULL, NULL }
 };
 
 /* Finish test, with handling of a special case: listing of tests. */

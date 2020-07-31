@@ -79,6 +79,248 @@ static pstm_digit get_digit(const pstm_int *a, uint8_t n)
     return (n >= a->used) ? (pstm_digit) 0 : a->dp[n];
 }
 
+# ifdef USE_CONSTANT_TIME_ECC_MULMOD
+/******************************************************************************/
+/**
+    Perform a point multiplication in a timing-resistant manner.
+    @param[in] pool Memory pool
+    @param[in] k The scalar to multiply by
+    @param[in] G The base point
+    @param[out] R Destination for kG
+    @param modulus The modulus of the field the ECC curve is in
+    @param map Boolean whether to map back to affine or not (1==map)
+    @param[in,out] tmp_int Temporary scratch big integer (memory optimization)
+    @return PS_SUCCESS on success, < 0 on error
+ */
+int32_t eccMulmodCt(psPool_t *pool, const pstm_int *k, const psEccPoint_t *G,
+    psEccPoint_t *R, pstm_int *modulus, uint8_t map, pstm_int *tmp_int)
+{
+    psEccPoint_t *tG, *M[3];
+    int32 i, j, err;
+    pstm_int mu;
+    pstm_digit mp;
+    unsigned long buf;
+    int32 bitcnt, mode, digidx;
+
+    /* init montgomery reduction */
+    err = pstm_montgomery_setup(modulus, &mp);
+    if (err != PS_SUCCESS)
+    {
+        return err;
+    }
+    err = pstm_init_size(pool, &mu, modulus->alloc);
+    if (err != PS_SUCCESS)
+    {
+        return err;
+    }
+    err = pstm_montgomery_calc_normalization(&mu, modulus);
+    if (err != PS_SUCCESS)
+    {
+        pstm_clear(&mu);
+        return err;
+    }
+
+    /* alloc ram for window temps */
+    for (i = 0; i < 3; i++)
+    {
+        M[i] = eccNewPoint(pool, (G->x.used * 2) + 1);
+        if (M[i] == NULL)
+        {
+            for (j = 0; j < i; j++)
+            {
+                eccFreePoint(M[j]);
+            }
+            pstm_clear(&mu);
+            return PS_MEM_FAIL;
+        }
+    }
+
+    /* make a copy of G incase R==G */
+    tG = eccNewPoint(pool, G->x.alloc);
+    if (tG == NULL)
+    {
+        err = PS_MEM_FAIL;
+        goto done;
+    }
+
+    /* tG = G and convert to montgomery */
+    if (pstm_cmp_d(&mu, 1) == PSTM_EQ)
+    {
+        if ((err = pstm_copy(&G->x, &tG->x)) != PS_SUCCESS)
+        {
+            goto done;
+        }
+        if ((err = pstm_copy(&G->y, &tG->y)) != PS_SUCCESS)
+        {
+            goto done;
+        }
+        if ((err = pstm_copy(&G->z, &tG->z)) != PS_SUCCESS)
+        {
+            goto done;
+        }
+    }
+    else
+    {
+        if ((err = pstm_mulmod(pool, &G->x, &mu, modulus, &tG->x)) != PS_SUCCESS)
+        {
+            goto done;
+        }
+        if ((err = pstm_mulmod(pool, &G->y, &mu, modulus, &tG->y)) != PS_SUCCESS)
+        {
+            goto done;
+        }
+        if ((err = pstm_mulmod(pool, &G->z, &mu, modulus, &tG->z)) != PS_SUCCESS)
+        {
+            goto done;
+        }
+    }
+    pstm_clear(&mu);
+
+    /* M[0] = tG = P. */
+    err = pstm_copy(&tG->x, &M[0]->x);
+    if (err != PS_SUCCESS)
+    {
+        goto done;
+    }
+    err = pstm_copy(&tG->y, &M[0]->y);
+    if (err != PS_SUCCESS)
+    {
+        goto done;
+    }
+    err = pstm_copy(&tG->z, &M[0]->z);
+    if (err != PS_SUCCESS)
+    {
+        goto done;
+    }
+    /* M[1] = 2P. */
+    err = eccProjectiveDblPoint(pool, tG, M[1], modulus, &mp, tmp_int);
+    if (err != PS_SUCCESS)
+    {
+        goto done;
+    }
+
+    /* setup sliding window */
+    mode   = 0;
+    bitcnt = 1;
+    buf    = 0;
+    digidx = get_digit_count(k) - 1;
+
+    /* perform ops */
+    for (;; )
+    {
+        /* grab next digit as required */
+        if (--bitcnt == 0)
+        {
+            if (digidx == -1)
+            {
+                break;
+            }
+            buf = get_digit(k, digidx);
+            bitcnt = DIGIT_BIT;
+            --digidx;
+        }
+
+        /* grab the next msb from the ltiplicand */
+        i = (buf >> (DIGIT_BIT - 1)) & 1;
+        buf <<= 1;
+
+        if (mode == 0 && i == 0)
+        {
+            /* Dummy operations. */
+            err = eccProjectiveAddPoint(pool,
+                    M[0], M[1], M[2],
+                    modulus, &mp, tmp_int);
+            if (err != PS_SUCCESS)
+            {
+                goto done;
+            }
+            err = eccProjectiveDblPoint(pool,
+                    M[1], M[2],
+                    modulus, &mp, tmp_int);
+            if (err != PS_SUCCESS)
+            {
+                goto done;
+            }
+            continue;
+        }
+        if (mode == 0 && i == 1)
+        {
+            mode = 1;
+            /* Dummy operations. */
+            err = eccProjectiveAddPoint(pool,
+                    M[0], M[1], M[2],
+                    modulus, &mp, tmp_int);
+            if (err != PS_SUCCESS)
+            {
+                goto done;
+            }
+            err = eccProjectiveDblPoint(pool,
+                    M[1], M[2],
+                    modulus, &mp, tmp_int);
+            if (err != PS_SUCCESS)
+            {
+                goto done;
+            }
+            continue;
+        }
+
+        /* M[i^1] = M[0] + M[1]. */
+        err = eccProjectiveAddPoint(pool,
+                M[0], M[1], M[i^1],
+                modulus, &mp, tmp_int);
+        if (err != PS_SUCCESS)
+        {
+            goto done;
+        }
+        /* M[i] = 2M[i] */
+        err = eccProjectiveDblPoint(pool,
+                M[i], M[i],
+                modulus, &mp, tmp_int);
+        if (err != PS_SUCCESS)
+        {
+            goto done;
+        }
+    }
+
+    err = pstm_copy(&M[0]->x, &R->x);
+    if (err != PS_SUCCESS)
+    {
+        goto done;
+    }
+    err = pstm_copy(&M[0]->y, &R->y);
+    if (err != PS_SUCCESS)
+    {
+        goto done;
+    }
+    err = pstm_copy(&M[0]->z, &R->z);
+    if (err != PS_SUCCESS)
+    {
+        goto done;
+    }
+
+
+    /* map R back from projective space */
+    if (map)
+    {
+        err = eccMap(pool, R, modulus, &mp);
+    }
+    else
+    {
+        err = PS_SUCCESS;
+    }
+done:
+
+    pstm_clear(&mu);
+    eccFreePoint(tG);
+    for (i = 0; i < 3; i++)
+    {
+        eccFreePoint(M[i]);
+    }
+    return err;
+}
+# endif /* USE_CONSTANT_TIME_ECC_MULMOD */
+
+# ifndef USE_CONSTANT_TIME_ECC_MULMOD
 /******************************************************************************/
 /**
     Perform a point multiplication
@@ -93,8 +335,7 @@ static pstm_digit get_digit(const pstm_int *a, uint8_t n)
  */
 /* size of sliding window, don't change this! */
 # define ECC_MULMOD_WINSIZE 4
-
-int32_t eccMulmod(psPool_t *pool, const pstm_int *k, const psEccPoint_t *G,
+int32_t eccMulmodOld(psPool_t *pool, const pstm_int *k, const psEccPoint_t *G,
     psEccPoint_t *R, pstm_int *modulus, uint8_t map, pstm_int *tmp_int)
 {
     psEccPoint_t *tG, *M[8];      /* @note large on stack */
@@ -364,6 +605,23 @@ done:
         eccFreePoint(M[i]);
     }
     return err;
+}
+# endif /* !USE_CONSTANT_TIME_ECC_MULMOD */
+
+int32_t eccMulmod(psPool_t *pool,
+        const pstm_int *k,
+        const psEccPoint_t *G,
+        psEccPoint_t *R,
+        pstm_int *modulus,
+        uint8_t map,
+        pstm_int *tmp_int)
+{
+# ifdef USE_CONSTANT_TIME_ECC_MULMOD
+    return eccMulmodCt(pool, k, G, R, modulus, map, tmp_int);
+# else
+#  warning Using non-constant-time ECC scalar multiplication
+    return eccMulmodOld(pool, k, G, R, modulus, map, tmp_int);
+# endif
 }
 
 int32 eccTestPoint(psPool_t *pool, psEccPoint_t *P, pstm_int *prime,

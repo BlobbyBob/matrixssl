@@ -416,6 +416,7 @@ parse_next_record_header:
     /* Deal with the decrypted message. */
     if (innerType == SSL_RECORD_TYPE_HANDSHAKE)
     {
+	unsigned char *p_start = p;
         end = p + ptLen;
         /* Parse handshake messages until buffer runs out */
         while (p != end)
@@ -445,6 +446,12 @@ parse_next_record_header:
                  * Either handshake message or alert */
                 goto encodeResponse;
             }
+	    /* If we got a parse return of >= 0 but p did not move forward,
+	     * return an error to avoid infinite loop */
+	    if (p_start == p)
+	    {
+        	return PS_FAILURE;
+	    }
         }
     }
     else if (innerType == SSL_RECORD_TYPE_APPLICATION_DATA)
@@ -1871,6 +1878,13 @@ static int32_t tls13ParseCertificateVerify(ssl_t *ssl,
         ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
         return PS_PARSE_FAIL;
     }
+
+    psTracePrintTls13SigAlg(INDENT_HS_MSG,
+            "algorithm",
+            algorithm,
+            PS_FALSE,
+            PS_TRUE);
+
     /* Make sure the algorithm is on our supported list */
     if (findFromUint16Array(ssl->supportedSigAlgs,
                             ssl->supportedSigAlgsLen,
@@ -1881,12 +1895,6 @@ static int32_t tls13ParseCertificateVerify(ssl_t *ssl,
         ssl->err = SSL_ALERT_HANDSHAKE_FAILURE;
         return MATRIXSSL_ERROR;
     }
-
-    psTracePrintTls13SigAlg(INDENT_HS_MSG,
-            "algorithm",
-            algorithm,
-            PS_FALSE,
-            PS_TRUE);
 
     ssl->sec.tls13PeerCvSigAlg = algorithm;
 

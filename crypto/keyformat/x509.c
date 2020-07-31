@@ -58,32 +58,6 @@
 #  define IMPLICIT_SUBJECT_ID     2
 #  define EXPLICIT_EXTENSION      3
 
-/*
-    Distinguished Name attributes
- */
-#  define ATTRIB_COMMON_NAME      3
-#  define ATTRIB_SURNAME          4
-#  define ATTRIB_SERIALNUMBER     5
-#  define ATTRIB_COUNTRY_NAME     6
-#  define ATTRIB_LOCALITY         7
-#  define ATTRIB_STATE_PROVINCE   8
-#  define ATTRIB_STREET_ADDRESS   9
-#  define ATTRIB_ORGANIZATION     10
-#  define ATTRIB_ORG_UNIT         11
-#  define ATTRIB_TITLE            12
-#  define ATTRIB_POSTAL_ADDRESS   16
-#  define ATTRIB_TELEPHONE_NUMBER 20
-#  define ATTRIB_NAME             41
-#  define ATTRIB_GIVEN_NAME       42
-#  define ATTRIB_INITIALS         43
-#  define ATTRIB_GEN_QUALIFIER    44
-#  define ATTRIB_DN_QUALIFIER     46
-#  define ATTRIB_PSEUDONYM        65
-
-#  define ATTRIB_DOMAIN_COMPONENT 25
-#  define ATTRIB_UID              26
-#  define ATTRIB_EMAIL            27
-
 /** Enumerate X.509 milestones for issuedBefore() api */
 typedef enum
 {
@@ -1040,7 +1014,15 @@ static int parse_single_cert(psPool_t *pool, const unsigned char **pp,
 #  ifdef USE_RSA
     case OID_RSA_KEY_ALG:
     case OID_RSASSA_PSS:
-        psAssert(plen == 0); /* No parameters on RSA pub key OID */
+        if (cert->pubKeyAlgorithm == OID_RSA_KEY_ALG)
+        {
+            psAssert(plen == 0); /* No parameters on RSA pub key OID */
+        }
+        else
+        {
+            p += plen;
+        }
+
         psInitPubKey(pool, &cert->publicKey, PS_RSA);
         if ((rc = psRsaParseAsnPubKey(pool, &p, (uint16_t) (end - p),
                                 &cert->publicKey.key.rsa, sha1KeyHash)) < 0)
@@ -1218,24 +1200,14 @@ static int parse_single_cert(psPool_t *pool, const unsigned char **pp,
         return rc;
     }
 
-# ifdef USE_ROT_CRYPTO
-    switch (cert->certAlgorithm)
+    /* Most algorithms and APIs use pre-hashing before signature
+       verification. Others (such as Ed25519) want the original
+       message (i.e. TBSCertificate) as input data. */
+# if defined(USE_ROT_CRYPTO) || defined(USE_ED25519) || (defined(USE_CL_RSA) && defined(USE_PKCS1_PSS))
+    if (!psVerifyNeedPreHash(cert->certAlgorithm))
     {
-#  ifdef USE_ROT_ECC
-    case OID_SHA256_ECDSA_SIG:
-#   ifdef USE_SECP384R1
-    case OID_SHA384_ECDSA_SIG:
-#   endif
-#   ifdef USE_SECP521R1
-    case OID_SHA512_ECDSA_SIG:
-#   endif
-#  endif /* USE_ROT_ECC */
-#  ifdef USE_ROT_RSA
-    case OID_SHA256_RSA_SIG:
-    case OID_SHA384_RSA_SIG:
-#  endif /* USE_ROT_RSA */
-        /* No pre-hashing used with crypto-rot. */
-        (void)hashCtx;
+        /* Skip pre-hashing and instead buffer the TBS. */
+        (void)hashCtx; /* Not used on this code path. */
         cert->tbsCertStart = psMalloc(pool, certLen);
         if (cert->tbsCertStart == NULL)
         {
@@ -1244,12 +1216,8 @@ static int parse_single_cert(psPool_t *pool, const unsigned char **pp,
         Memcpy(cert->tbsCertStart, tbsCertStart, certLen);
         cert->tbsCertLen = certLen;
         goto preprocessing_complete;
-        break;
-    default:
-        psTraceCrypto("Warning: cert sig alg not supported by crypto-rot\n");
-        psTraceCrypto("Falling back to SW crypto\n");
     }
-# endif /* USE_ROT_CRYPTO */
+# endif
 
     /*
       Compute the hash of the cert here for CA validation
@@ -1345,20 +1313,6 @@ static int parse_single_cert(psPool_t *pool, const unsigned char **pp,
         psSha512Final(&hashCtx.u.sha512, cert->sigHash);
         break;
 #  endif
-#  ifdef USE_ED25519
-    case OID_ED25519_KEY_ALG:
-        /* No pre-hashing used with Ed25519; the signature is computed
-           over the original message (TBSCertificate). Store it. */
-        cert->tbsCertStart = psMalloc(pool, certLen);
-        if (cert->tbsCertStart == NULL)
-        {
-            return PS_MEM_FAIL;
-        }
-        Memcpy(cert->tbsCertStart, tbsCertStart, certLen);
-        cert->tbsCertLen = certLen;
-        cert->sigHash[0] = 0xfa; /* Kludge to pass the memcmp below. */
-        break;
-#  endif
 #  ifdef USE_PKCS1_PSS
     case OID_RSASSA_PSS:
         switch (cert->pssHash)
@@ -1444,9 +1398,10 @@ unsupported_sig_alg:
     }
 # endif /* USE_CERT_PARSE */
 
-# ifdef USE_ROT_CRYPTO
+# if defined(USE_ROT_CRYPTO) || defined(USE_ED25519) || (defined(USE_CL_RSA) && defined(USE_PKCS1_PSS))
 preprocessing_complete:
-# endif /* USE_ROT_CRYPTO */
+# endif /* USE_ROT_CRYPTO || USE_ED25519 || (USE_CL_RSA && USE_PKCS1_PSS) */
+
     if ((rc = psX509GetSignature(pool, &p, (uint32) (end - p),
                             &cert->signature, &cert->signatureLen)) < 0)
     {
@@ -1758,6 +1713,7 @@ void x509FreeExtensions(x509v3extensions_t *extensions)
         {
             inc = active->next;
             psFree(active->data, extensions->pool);
+            psFree(active->oid, extensions->pool);
             psFree(active, extensions->pool);
             active = inc;
         }
@@ -1827,6 +1783,207 @@ void x509FreeExtensions(x509v3extensions_t *extensions)
         psFree(extensions->otherAttributes, extensions->pool);
     }
 #  endif /* USE_FULL_CERT_PARSE || USE_CERT_GEN */
+}
+
+int32_t psX509GetNumDNAttributes(const x509DNattributes_t *DN)
+{
+    int32_t i;
+
+    if (DN == NULL)
+    {
+        return PS_ARG_FAIL;
+    }
+
+    for (i = 0; i < DN_NUM_ATTRIBUTES_MAX; i++)
+    {
+        if (DN->attributeOrder[i] == 0)
+        {
+            break;
+        }
+    }
+
+    return i;
+}
+
+int32_t psX509GetDNAttributeTypeAndValue(const x509DNattributes_t *DN,
+        int32_t index,
+        x509DNAttributeType_t *attrType,
+        short *valueType,
+        psSize_t *valueLen,
+        char **value)
+{
+    int32_t numValues, maxIndex, i, nthOccurrence = 0;
+    x509OrgUnit_t *orgUnit;
+    x509DomainComponent_t *domainComponent;
+
+    psAssert(DN && attrType && valueType && valueLen && value);
+
+    numValues = psX509GetNumDNAttributes(DN);
+    if (numValues < 0)
+    {
+        return PS_ARG_FAIL;
+    }
+    if (numValues == 0)
+    {
+        return PS_ARG_FAIL;
+    }
+
+    maxIndex = numValues - 1;
+    if (index > maxIndex)
+    {
+        psTraceIntCrypto("psX509GetDNAttributeTypeAndValue: index too high " \
+                "(max for this DN is %d)\n", maxIndex);
+        return PS_ARG_FAIL;
+    }
+
+# define SET_VALUE(attr)                                                \
+    do                                                                  \
+    {                                                                   \
+        *valueType = DN->attr ## Type;                                  \
+        *valueLen = DN-> attr ## Len;                                   \
+        *value = DN->attr;                                              \
+    }                                                                   \
+    while (0)
+
+    *attrType = DN->attributeOrder[index];
+    for (i = 0; i < index; i++)
+    {
+        /* Compute number of preceeding attributes of the this type.
+           Currently needed only for orgUnit and domainComponent. */
+        if (DN->attributeOrder[i] == *attrType)
+        {
+            nthOccurrence++;
+        }
+    }
+
+    switch (*attrType)
+    {
+    case ATTRIB_COUNTRY_NAME:
+        SET_VALUE(country);
+        break;
+    case ATTRIB_STATE_PROVINCE:
+        SET_VALUE(state);
+        break;
+    case ATTRIB_ORGANIZATION:
+        SET_VALUE(organization);
+        break;
+    case ATTRIB_ORG_UNIT:
+        orgUnit = psX509GetOrganizationalUnit(DN, nthOccurrence);
+        if (orgUnit == NULL)
+        {
+            return PS_FAILURE;
+        }
+        *value = orgUnit->name;
+        *valueType = orgUnit->type;
+        *valueLen = orgUnit->len;
+        break;
+    case ATTRIB_DN_QUALIFIER:
+        SET_VALUE(dnQualifier);
+        break;
+    case ATTRIB_COMMON_NAME:
+        SET_VALUE(commonName);
+        break;
+    case ATTRIB_SERIALNUMBER:
+        SET_VALUE(serialNumber);
+        break;
+    case ATTRIB_DOMAIN_COMPONENT:
+        domainComponent = psX509GetDomainComponent(DN, nthOccurrence);
+        if (domainComponent == NULL)
+        {
+            return PS_FAILURE;
+        }
+        *value = domainComponent->name;
+        *valueType = domainComponent->type;
+        *valueLen = domainComponent->len;
+        break;
+#  ifdef USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD
+    case ATTRIB_LOCALITY:
+        SET_VALUE(locality);
+        break;
+    case ATTRIB_TITLE:
+        SET_VALUE(title);
+        break;
+    case ATTRIB_SURNAME:
+        SET_VALUE(surname);
+        break;
+    case ATTRIB_GIVEN_NAME:
+        SET_VALUE(givenName);
+        break;
+    case ATTRIB_INITIALS:
+        SET_VALUE(initials);
+        break;
+    case ATTRIB_PSEUDONYM:
+        SET_VALUE(pseudonym);
+        break;
+    case ATTRIB_GEN_QUALIFIER:
+        SET_VALUE(generationQualifier);
+        break;
+#  endif /* USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD */
+#  ifdef USE_EXTRA_DN_ATTRIBUTES
+    case ATTRIB_STREET_ADDRESS:
+        SET_VALUE(streetAddress);
+        break;
+    case ATTRIB_POSTAL_ADDRESS:
+        SET_VALUE(postalAddress);
+        break;
+    case ATTRIB_TELEPHONE_NUMBER:
+        SET_VALUE(telephoneNumber);
+        break;
+    case ATTRIB_UID:
+        SET_VALUE(uid);
+        break;
+    case ATTRIB_NAME:
+        SET_VALUE(name);
+        break;
+    case ATTRIB_EMAIL:
+        SET_VALUE(email);
+        break;
+#  endif /* USE_EXTRA_DN_ATTRIBUTES */
+    default:
+        psTraceCrypto("Unsupported DN attribute type\n");
+        psTraceCrypto("Maybe you need to enable " \
+                "USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD or " \
+                "USE_EXTRA_DN_ATTRIBUTES?\n");
+        return PS_FAILURE;
+    }
+
+    return PS_SUCCESS;
+}
+
+int32_t psX509GetDNAttributeIndex(const x509DNattributes_t *DN,
+        x509DNAttributeType_t attrType,
+        int32_t nth_occurrence)
+{
+    x509DNAttributeType_t foundType;
+    short valueType;
+    psSize_t valueLen;
+    char *value;
+    int32_t rc, ix, numFound = 0;
+
+    for (ix = 0; ix < DN_NUM_ATTRIBUTES_MAX; ix++)
+    {
+        rc = psX509GetDNAttributeTypeAndValue(
+                DN,
+                ix,
+                &foundType,
+                &valueType,
+                &valueLen,
+                &value);
+        if (rc < 0)
+        {
+            return rc;
+        }
+        if (foundType == attrType)
+        {
+            numFound++;
+            if (numFound == nth_occurrence)
+            {
+                return ix;
+            }
+        }
+    }
+
+    return PS_FAILURE;
 }
 
 int32_t psX509GetNumOrganizationalUnits(const x509DNattributes_t *DN)
@@ -2065,7 +2222,11 @@ int32_t psX509GetConcatenatedDomainComponent(const x509DNattributes_t *DN,
 
     On success, the caller is responsible for freeing the
     returned string.
-*/
+
+    Set userOriginalAttributeOrder to PS_TRUE to print out the attributes
+    in the order in which they were parsed. Otherwise, the function
+    will imitate the print order of the openssl x509 command-line tool.
+ */
 static int32_t concatenate_dn(psPool_t *pool,
     const x509DNattributes_t *dn,
     psBool_t useOriginalAttributeOrder,
@@ -2082,7 +2243,6 @@ static int32_t concatenate_dn(psPool_t *pool,
     const char *commonName_prefix = "CN=";
     const char *serialNumber_prefix = "/serialNumber=";
     const char *domainComponent_prefix = "DC=";
-
 #  ifdef USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD
     const char *locality_prefix = "L=";
     const char *title_prefix = "/title=";
@@ -2100,21 +2260,71 @@ static int32_t concatenate_dn(psPool_t *pool,
     const char *name_prefix = "/name=";
     const char *email_prefix = "/emailAddress=";
 #  endif /* USE_EXTRA_DN_ATTRIBUTES */
+    x509DomainComponent_t *dc;
     int num_dcs;
-    int first_len = 1;
-    int first_field = 1;
     x509OrgUnit_t *orgUnit;
     int num_ous;
+    int first_len = 1;
+    int first_field = 1;
+    const x509DNAttributeType_t *parse_order = dn->attributeOrder;
+    x509DNAttributeType_t print_order[DN_NUM_ATTRIBUTES_MAX] = {0};
+    const x509DNAttributeType_t ossl_order[] = {
+        ATTRIB_COUNTRY_NAME,
+        ATTRIB_STATE_PROVINCE,
+#  ifdef USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD
+        ATTRIB_LOCALITY,
+#  endif
+        ATTRIB_ORGANIZATION,
+        ATTRIB_ORG_UNIT,
+        ATTRIB_COMMON_NAME,
+#  ifdef USE_EXTRA_DN_ATTRIBUTES
+        ATTRIB_NAME,
+#  endif
+#  ifdef USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD
+        ATTRIB_GIVEN_NAME,
+        ATTRIB_SURNAME,
+#  endif
+#  ifdef USE_EXTRA_DN_ATTRIBUTES
+        ATTRIB_DOMAIN_COMPONENT,
+        ATTRIB_EMAIL,
+#  endif
+        ATTRIB_SERIALNUMBER,
+#  ifdef USE_EXTRA_DN_ATTRIBUTES
+        ATTRIB_STREET_ADDRESS,
+#  endif
+#  ifdef USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD
+        ATTRIB_TITLE,
+#  endif
+#  ifdef USE_EXTRA_DN_ATTRIBUTES
+        ATTRIB_POSTAL_ADDRESS,
+        ATTRIB_TELEPHONE_NUMBER,
+#  endif
+#  ifdef USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD
+        ATTRIB_PSEUDONYM,
+        ATTRIB_GEN_QUALIFIER,
+        ATTRIB_INITIALS,
+#  endif
+        ATTRIB_DN_QUALIFIER,
+#  ifdef USE_EXTRA_DN_ATTRIBUTES
+        ATTRIB_UID,
+#  endif
+    };
+    int32_t ossl_order_len = sizeof(ossl_order)/sizeof(ossl_order[0]);
+    int32_t i, j, k;
+    int32_t numAttributes;
+    int32_t nthOccurrenceOrgUnit = 0;
+    int32_t nthOccurrenceDC = 0;
+    x509DNAttributeType_t attr;
 
-#  define INC_LEN(X) \
-    if (dn->X ## Len > 0) {                               \
-        if (!first_len && X ## _prefix[0] != '/') {       \
-            total_len += 2;                             \
-        }                                               \
-        first_len = 0;                                  \
-        total_len += Strlen(X ## _prefix) +               \
-                     dn->X ## Len -                                \
-                     DN_NUM_TERMINATING_NULLS;                   \
+#  define INC_LEN(X)                                \
+    if (dn->X ## Len > 0) {                         \
+        if (!first_len && X ## _prefix[0] != '/') { \
+            total_len += 2;                         \
+        }                                           \
+        first_len = 0;                              \
+        total_len += Strlen(X ## _prefix) +         \
+            dn->X ## Len -                          \
+            DN_NUM_TERMINATING_NULLS;               \
     }
 
     INC_LEN(country);
@@ -2123,12 +2333,12 @@ static int32_t concatenate_dn(psPool_t *pool,
     num_ous = psX509GetNumOrganizationalUnits(dn);
     if (num_ous > 0)
     {
-        int i;
         for (i = 0; i < num_ous; i++)
         {
             orgUnit = psX509GetOrganizationalUnit(dn, i);
             if (orgUnit == NULL)
             {
+                psTraceCrypto("psX509GetOrganizationalUnit failed\n");
                 return PS_FAILURE;
             }
             if (first_len)
@@ -2165,12 +2375,10 @@ static int32_t concatenate_dn(psPool_t *pool,
     INC_LEN(name);
     INC_LEN(email);
 #  endif /* USE_EXTRA_DN_ATTRIBUTES */
+
     num_dcs = psX509GetNumDomainComponents(dn);
     if (num_dcs > 0)
     {
-        int i;
-        x509DomainComponent_t *dc;
-
         for (i = 0; i < num_dcs; i++)
         {
             total_len += Strlen(domainComponent_prefix);
@@ -2185,6 +2393,7 @@ static int32_t concatenate_dn(psPool_t *pool,
             dc = psX509GetDomainComponent(dn, i);
             if (dc == NULL)
             {
+                psTraceCrypto("psX509GetDomainComponent failed\n");
                 return PS_FAILURE;
             }
             total_len += dc->len - DN_NUM_TERMINATING_NULLS;
@@ -2195,12 +2404,14 @@ static int32_t concatenate_dn(psPool_t *pool,
        Sanity check.*/
     if (total_len > 100000)
     {
+        psTraceCrypto("concatenate_dn: sanity limit exceeded\n");
         return PS_ARG_FAIL;
     }
 
     str = psMalloc(pool, total_len + 1);
     if (str == NULL)
     {
+        psTraceCrypto("concatenate_dn: out of mem\n");
         return PS_MEM_FAIL;
     }
     Memset(str, 0, total_len + 1);
@@ -2228,96 +2439,59 @@ static int32_t concatenate_dn(psPool_t *pool,
        /dnQualifier=123456789/UID=root
      */
 
-#  define PRINT_FIELD(field)                                  \
-    if (dn->field ## Len > 0) {                               \
+#  define PRINT_FIELD(field)                                    \
+    if (dn->field ## Len > 0) {                                 \
         if (first_field) {                                      \
-            first_field = 0;                                        \
-        } else {                                            \
-            if (field ## _prefix[0] != '/') {                 \
-                *p++ = ',';                                 \
-                *p++ = ' ';                                 \
-            }                                               \
-        }                                                   \
+            first_field = 0;                                    \
+        } else {                                                \
+            if (field ## _prefix[0] != '/') {                   \
+                *p++ = ',';                                     \
+                *p++ = ' ';                                     \
+            }                                                   \
+        }                                                       \
         Memcpy(p, field ## _prefix, Strlen(field ## _prefix));  \
-        p += Strlen(field ## _prefix);                        \
-        Memcpy(p, dn->field,                                \
-            dn->field ## Len - DN_NUM_TERMINATING_NULLS);  \
-        p += dn->field ## Len - DN_NUM_TERMINATING_NULLS;     \
+        p += Strlen(field ## _prefix);                          \
+        Memcpy(p, dn->field,                                    \
+                dn->field ## Len - DN_NUM_TERMINATING_NULLS);   \
+        p += dn->field ## Len - DN_NUM_TERMINATING_NULLS;       \
     }
 
-    const int32 openSslAttributeOrder[] = {
-        ATTRIB_COUNTRY_NAME,
-        ATTRIB_STATE_PROVINCE,
-
-#  ifdef USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD
-        ATTRIB_LOCALITY,
-#  endif    /* USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD */
-
-        ATTRIB_ORGANIZATION,
-        ATTRIB_ORG_UNIT,
-        ATTRIB_COMMON_NAME,
-
-#  ifdef USE_EXTRA_DN_ATTRIBUTES
-        ATTRIB_NAME,
-#  endif    /* USE_EXTRA_DN_ATTRIBUTES */
-
-#  ifdef USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD
-        ATTRIB_GIVEN_NAME,
-        ATTRIB_SURNAME,
-#  endif    /* USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD */
-
-#  ifdef USE_EXTRA_DN_ATTRIBUTES
-        ATTRIB_DOMAIN_COMPONENT,
-        ATTRIB_EMAIL,
-#  endif    /* USE_EXTRA_DN_ATTRIBUTES */
-
-        ATTRIB_SERIALNUMBER,
-
-#  ifdef USE_EXTRA_DN_ATTRIBUTES
-        ATTRIB_STREET_ADDRESS,
-#  endif    /* USE_EXTRA_DN_ATTRIBUTES */
-
-#  ifdef USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD
-        ATTRIB_TITLE,
-#  endif    /* USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD */
-
-#  ifdef USE_EXTRA_DN_ATTRIBUTES
-        ATTRIB_POSTAL_ADDRESS,
-        ATTRIB_TELEPHONE_NUMBER,
-#  endif    /* USE_EXTRA_DN_ATTRIBUTES */
-
-#  ifdef USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD
-        ATTRIB_PSEUDONYM,
-        ATTRIB_GEN_QUALIFIER,
-        ATTRIB_INITIALS,
-#  endif    /* USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD */
-
-        ATTRIB_DN_QUALIFIER,
-
-#  ifdef USE_EXTRA_DN_ATTRIBUTES
-        ATTRIB_UID,
-#  endif    /* USE_EXTRA_DN_ATTRIBUTES */
-    };
-
-    const int32_t *attributeOrder;
-    uint32_t numAttributes;
-    unsigned int i;
+    numAttributes = psX509GetNumDNAttributes(dn);
+    if (numAttributes < 0)
+    {
+        psTraceCrypto("psX509GetNumDNAttributes failed\n");
+        return PS_FAILURE;
+    }
 
     if (useOriginalAttributeOrder)
     {
-        attributeOrder = dn->attributeOrder;
-        numAttributes = DN_NUM_ATTRIBUTE_TYPES_MAX;
+        /* Print in parse order. */
+        for (i = 0; i < numAttributes; i++)
+        {
+            print_order[i] = parse_order[i];
+        }
     }
     else
     {
-        attributeOrder = openSslAttributeOrder;
-        numAttributes =
-            sizeof(openSslAttributeOrder) / sizeof(openSslAttributeOrder[0]);
+        /* Print in openssl x509's order. */
+        k = 0;
+        for (i = 0; i < ossl_order_len; i++)
+        {
+            attr = ossl_order[i];
+            for (j = 0; j < DN_NUM_ATTRIBUTES_MAX; j++)
+            {
+                if (parse_order[j] == attr)
+                {
+                    print_order[k++] = attr;
+                }
+            }
+        }
+        psAssert(numAttributes == k);
     }
 
     for (i = 0; i < numAttributes; i++)
     {
-        switch (attributeOrder[i])
+        switch (print_order[i])
         {
         case ATTRIB_COUNTRY_NAME:
             PRINT_FIELD(country);
@@ -2326,35 +2500,29 @@ static int32_t concatenate_dn(psPool_t *pool,
             PRINT_FIELD(organization);
             break;
         case ATTRIB_ORG_UNIT:
-            num_ous = psX509GetNumOrganizationalUnits(dn);
-            if (num_ous > 0)
+            orgUnit = psX509GetOrganizationalUnit(dn, nthOccurrenceOrgUnit);
+            if (orgUnit == NULL)
             {
-                int i;
-                for (i = 0; i < num_ous; i++)
-                {
-                    orgUnit = psX509GetOrganizationalUnit(dn, i);
-                    if (orgUnit == NULL)
-                    {
-                        psFree(str, pool);
-                        return PS_FAILURE;
-                    }
-                    if (first_field)
-                    {
-                        first_field = 0;
-                    }
-                    else
-                    {
-                        *p++ = ',';
-                        *p++ = ' ';
-                    }
-                    Memcpy(p, organizationalUnit_prefix,
-                           Strlen(organizationalUnit_prefix));
-                    p += Strlen(organizationalUnit_prefix);
-                    Memcpy(p, orgUnit->name,
-                           orgUnit->len - DN_NUM_TERMINATING_NULLS);
-                    p += orgUnit->len - DN_NUM_TERMINATING_NULLS;
-                }
+                psTraceCrypto("psX509GetOrganizationalUnit failed\n");
+                psFree(str, pool);
+                return PS_FAILURE;
             }
+            nthOccurrenceOrgUnit++;
+            if (first_field)
+            {
+                first_field = 0;
+            }
+            else
+            {
+                *p++ = ',';
+                *p++ = ' ';
+            }
+            Memcpy(p, organizationalUnit_prefix,
+                    Strlen(organizationalUnit_prefix));
+            p += Strlen(organizationalUnit_prefix);
+            Memcpy(p, orgUnit->name,
+                    orgUnit->len - DN_NUM_TERMINATING_NULLS);
+            p += orgUnit->len - DN_NUM_TERMINATING_NULLS;
             break;
         case ATTRIB_DN_QUALIFIER:
             PRINT_FIELD(dnQualifier);
@@ -2364,6 +2532,30 @@ static int32_t concatenate_dn(psPool_t *pool,
             break;
         case ATTRIB_COMMON_NAME:
             PRINT_FIELD(commonName);
+            break;
+        case ATTRIB_DOMAIN_COMPONENT:
+            dc = psX509GetDomainComponent(dn, nthOccurrenceDC);
+            if (dc == NULL)
+            {
+                psTraceCrypto("psX509GetDomainComponent failed\n");
+                psFree(str, pool);
+                return PS_FAILURE;
+            }
+            nthOccurrenceDC++;
+            if (first_field)
+            {
+                first_field = 0;
+            }
+            else
+            {
+                *p++ = ',';
+                *p++ = ' ';
+            }
+            Memcpy(p, domainComponent_prefix,
+                    Strlen(domainComponent_prefix));
+            p += Strlen(domainComponent_prefix);
+            Memcpy(p, dc->name, dc->len - DN_NUM_TERMINATING_NULLS);
+            p += dc->len - DN_NUM_TERMINATING_NULLS;
             break;
         case ATTRIB_SERIALNUMBER:
             PRINT_FIELD(serialNumber);
@@ -2392,39 +2584,6 @@ static int32_t concatenate_dn(psPool_t *pool,
             break;
 #  endif    /* USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD */
 #  ifdef USE_EXTRA_DN_ATTRIBUTES
-        case ATTRIB_DOMAIN_COMPONENT:
-            /**/
-            num_dcs = psX509GetNumDomainComponents(dn);
-            if (num_dcs > 0)
-            {
-                int i;
-                x509DomainComponent_t *dc;
-
-                for (i = 0; i < num_dcs; i++)
-                {
-                    if (first_field)
-                    {
-                        first_field = 0;
-                    }
-                    else
-                    {
-                        *p++ = ',';
-                        *p++ = ' ';
-                    }
-                    Memcpy(p, domainComponent_prefix,
-                           Strlen(domainComponent_prefix));
-                    p += Strlen(domainComponent_prefix);
-                    dc = psX509GetDomainComponent(dn, i);
-                    if (dc == NULL)
-                    {
-                        psFree(str, pool);
-                        return PS_FAILURE;
-                    }
-                    Memcpy(p, dc->name, dc->len - DN_NUM_TERMINATING_NULLS);
-                    p += dc->len - DN_NUM_TERMINATING_NULLS;
-                }
-            }
-            break;
         case ATTRIB_STREET_ADDRESS:
             PRINT_FIELD(streetAddress);
             break;
@@ -2550,13 +2709,19 @@ void psX509FreeCert(psX509Cert_t *cert)
             psFree(curr->tbsCertStart, pool);
         }
 # endif
-
+# if defined(USE_CL_RSA) && defined(USE_PKCS1_PSS)
+        if (curr->pubKeyAlgorithm == OID_RSASSA_PSS)
+        {
+            psFree(curr->tbsCertStart, pool);
+        }
+# endif
         if (curr->publicKey.type != PS_NOKEY)
         {
             switch (curr->pubKeyAlgorithm)
             {
 #  ifdef USE_RSA
             case OID_RSA_KEY_ALG:
+            case OID_RSASSA_PSS:
                 psRsaClearKey(&curr->publicKey.key.rsa);
                 break;
 #  endif
@@ -2774,7 +2939,7 @@ static int32_t parseGeneralNames(psPool_t *pool, const unsigned char **buf,
     end = p + len;
 
 #   define MIN_GENERALNAME_LEN 3 /* 1 tag, 1 length octet, 1 content octet.*/
-    while (len > MIN_GENERALNAME_LEN)
+    while (len >= MIN_GENERALNAME_LEN)
     {
         if (firstName == NULL)
         {
@@ -4969,6 +5134,13 @@ int32 validateDateRange(psX509Cert_t *cert)
         /* beforeTime is in future. */
         cert->authFailFlags |= PS_CERT_AUTH_FAIL_DATE_FLAG;
     }
+
+    if (psBrokenDownTimeCmp(&beforeTime, &afterTime) > 0)
+    {
+        /* beforeTime is later than afterTime. */
+        cert->authFailFlags |= PS_CERT_AUTH_FAIL_DATE_FLAG;
+    }
+
     return 0;
 }
 
@@ -5131,7 +5303,7 @@ int32_t psX509GetDNAttributes(psPool_t *pool, const unsigned char **pp,
 #   error USE_SHA1 or USE_SHA256 must be defined
 #  endif
 
-    for (i = 0; i < DN_NUM_ATTRIBUTE_TYPES_MAX; i++)
+    for (i = 0; i < DN_NUM_ATTRIBUTES_MAX; i++)
     {
         attribs->attributeOrder[i] = 0;
     }
@@ -5397,7 +5569,8 @@ oid_parsing_done:
             }
 
             p = p + llen;
-            llen += DN_NUM_TERMINATING_NULLS;     /* Add null bytes for length assignments */
+            /* Add null bytes for length assignments */
+            llen += DN_NUM_TERMINATING_NULLS;
             break;
         default:
             psTraceIntCrypto("Unsupported DN attrib type %d\n", stringType);
@@ -5431,7 +5604,7 @@ oid_parsing_done:
             orgUnit->name = stringOut;
             orgUnit->type = (short) stringType;
             orgUnit->len = llen;
-            /* Push the org unit onto the front of the list */
+            /* Push the orgUnit onto the front of the list */
             orgUnit->next = attribs->orgUnit;
             attribs->orgUnit = orgUnit;
             break;
@@ -5476,7 +5649,7 @@ oid_parsing_done:
             domainComponent->name = stringOut;
             domainComponent->type = (short) stringType;
             domainComponent->len = llen;
-            /* Push the org unit onto the front of the list */
+            /* Push the domainComponent onto the front of the list */
             domainComponent->next = attribs->domainComponent;
             attribs->domainComponent = domainComponent;
             break;
@@ -5611,16 +5784,20 @@ oid_parsing_done:
 
         if (attributeStored)
         {
-            for (i = 0; i < DN_NUM_ATTRIBUTE_TYPES_MAX; i++)
+            for (i = 0; i < DN_NUM_ATTRIBUTES_MAX; i++)
             {
-                if (attribs->attributeOrder[i] == id)
+                if (id != ATTRIB_ORG_UNIT && id != ATTRIB_DOMAIN_COMPONENT)
                 {
-                    /* Likely multiple domainComponent or orgUnit, for any
-                       other attribute we store only one so we can skip
-                       order too. */
-                    break;
+                    if (attribs->attributeOrder[i] == id)
+                    {
+                        /*
+                          Storing multiple instances of the same attribute type is
+                          currently only supported for OU and DC. For other attributes,
+                          a new instance overwrites the previous one.
+                        */
+                        break;
+                    }
                 }
-
                 if (attribs->attributeOrder[i] == 0)
                 {
                     attribs->attributeOrder[i] = id;
@@ -5882,6 +6059,10 @@ int32 psX509AuthenticateCert(psPool_t *pool, psX509Cert_t *subjectCert,
                 opts.rsaPssHashLen = psPssHashAlgToHashLen(sc->pssHash);
                 opts.rsaPssSaltLen = sc->saltLen;
                 opts.useRsaPss = PS_TRUE;
+#  ifdef USE_CL_RSA
+                tbs = sc->tbsCertStart;
+                tbsLen = sc->tbsCertLen;
+#  endif
             }
 # endif /* USE_PKCS1_PSS */
 # ifdef USE_ED25519

@@ -1,5 +1,5 @@
 /**
- *      @file    interactiveClient.c
+ *      @file    interactiveServer.c
  *      @version $Format:%h%d$
  *
  *      Interactive client-side test tool.
@@ -34,7 +34,7 @@
 #include "matrixssl/matrixsslApi.h"
 #include "osdep.h"
 
-# ifdef USE_CLIENT_SIDE_SSL
+# ifdef USE_SERVER_SIDE_SSL
 #  include "interactiveCommon.h"
 
 # if defined(USE_TLS_1_2) && defined(USE_SECP256R1) && defined(USE_SHA256) && defined(USE_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256) && defined(USE_IDENTITY_CERTIFICATES)
@@ -56,6 +56,8 @@ int g_encode_to_outdata;
 int g_handshake_complete;
 /* Skip server authentication entirely? */
 psBool_t g_skip_server_auth;
+/* Don't authenticate the client's certificate? */
+psBool_t g_skip_client_auth;
 
 size_t leftNBytes;
 size_t sentNBytes;
@@ -71,9 +73,9 @@ unsigned char g_httpRequestHdr[] = "GET %s HTTP/1.1\r\n"
 /* Certificate callback. See section 6 in the API manual for details.
    In this test, we do no extra checks of our own; we simply accept
    the result of MatrixSSL's internal certificate validation. */
-static int32_t certCb(ssl_t *ssl, psX509Cert_t *cert, int32_t alert)
+/*static int32_t certCb(ssl_t *ssl, psX509Cert_t *cert, int32_t alert)
 {
-    if (g_skip_server_auth)
+    if (g_skip_client_auth)
     {
         return SSL_ALLOW_ANON_CONNECTION;
     }
@@ -81,22 +83,14 @@ static int32_t certCb(ssl_t *ssl, psX509Cert_t *cert, int32_t alert)
     {
         return alert;
     }
-}
+}*/
 
 int main(int argc, char **argv)
 {
     uint16_t sigAlgs[16];
     psSize_t numSigAlgs;
     psProtocolVersion_t versions[1];
-    psCipher16_t ciphersuites[1];
-    psSize_t numCiphersuites;
-    char serverAddress[39];
-    char serverName[256] = { '\0' };
-    int serverAddressLen;
     int serverPort;
-    unsigned char *sniExtData;
-    int32_t sniExtDataLen;
-    tlsExtension_t *sniExt;
     sslSessOpts_t opts;
     sslKeys_t *keys;
     int32_t rc;
@@ -105,6 +99,7 @@ int main(int argc, char **argv)
     unsigned char *buf;
     ssize_t nrecv, nsent;
     int fd = -1;
+    int sock_fd;
     struct sockaddr_in addr;
 
     rc = matrixSslOpen();
@@ -120,7 +115,7 @@ int main(int argc, char **argv)
     {
         return EXIT_FAILURE;
     }
-    rc = matrixSslSessOptsSetClientTlsVersions(
+    rc = matrixSslSessOptsSetServerTlsVersions(
             &opts,
             versions,
             1);
@@ -161,19 +156,7 @@ int main(int argc, char **argv)
         goto out_fail;
     }
 
-    rc = getUserCiphersuites(ciphersuites, &numCiphersuites);
-    if (rc < 0)
-    {
-        goto out_fail;
-    }
-
     rc = getMaximumFragmentLength(&opts.maxFragLen);
-    if (rc < 0)
-    {
-        goto out_fail;
-    }
-
-    rc = getServerAddress(serverAddress, &serverAddressLen);
     if (rc < 0)
     {
         goto out_fail;
@@ -185,35 +168,10 @@ int main(int argc, char **argv)
         goto out_fail;
     }
 
-    rc = getServerName(serverName, sizeof(serverName), serverAddress);
-    if (rc < 0)
-    {
-        goto out_fail;
-    }
-
-    matrixSslNewHelloExtension(&sniExt, NULL);
-    matrixSslCreateSNIext(
-            NULL,
-            (unsigned char*)serverName,
-            (uint32_t)Strlen(serverName),
-            &sniExtData,
-            &sniExtDataLen);
-    matrixSslLoadHelloExtension(
-            sniExt,
-            sniExtData,
-            sniExtDataLen,
-            EXT_SNI);
-
-    /* Create a new session and the ClientHello message. */
-    rc = matrixSslNewClientSession(
+    /* Create a new server session. */
+    rc = matrixSslNewServerSession(
             &ssl,
             keys,
-            NULL,
-            ciphersuites,
-            numCiphersuites,
-            certCb,
-            serverName,
-            sniExt,
             NULL,
             &opts);
     if (rc < 0)
@@ -221,9 +179,6 @@ int main(int argc, char **argv)
         printf("matrixSslNewClientSession failed: %d\n", rc);
         goto out_fail;
     }
-
-    matrixSslDeleteHelloExtension(sniExt);
-    psFree(sniExtData, NULL);
 
     rc = getUserFirstSender();
     if (rc < 0)
@@ -237,30 +192,40 @@ int main(int argc, char **argv)
         goto out_fail;
     }
 
-    rc = getAllowAnon(&g_skip_server_auth);
-    if (rc < 0)
-    {
-        goto out_fail;
-    }
-
-    /* Open the TCP connection. */
+    /* Start listening to a TCP port for connections. */
     Memset((char *) &addr, 0x0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_port = htons((short) serverPort);
-    addr.sin_addr.s_addr = inet_addr(serverAddress);
+    addr.sin_addr.s_addr = INADDR_ANY;
     fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd == -1)
     {
         printf("socket failed: %d\n", fd);
-        goto out_fail;
+        return EXIT_FAILURE;
     }
-    rc = connect(fd, (struct sockaddr *) &addr, sizeof(addr));
+    rc = bind(fd, (struct sockaddr *)&addr, sizeof(addr));
     if (rc < 0)
     {
-        close(fd);
-        printf("connect failed: %d\n", rc);
-        goto out_fail;
+        printf("bind failed: %d\n", rc);
+        return EXIT_FAILURE;
     }
+    rc = listen(fd, 1);
+    if (rc < 0)
+    {
+        printf("listen failed: %d\n", rc);
+        return EXIT_FAILURE;
+    }
+    printf("Listening for connections on port %d...\n", serverPort);
+    sock_fd = accept(fd, NULL, NULL);
+    if (rc < 0)
+    {
+        printf("accept failed: %d\n", rc);
+        return EXIT_FAILURE;
+    }
+    printf("Received new connection\n");
+
+    /* Try to receive ClientHello. */
+    goto READ_MORE;
 
 WRITE_MORE:
     /* Get pointer to the output data to send. */
@@ -270,7 +235,7 @@ WRITE_MORE:
         len = rc;
 
         /* Send it over the wire. */
-        nsent = send(fd, buf, len, 0);
+        nsent = send(sock_fd, buf, len, 0);
         if (nsent <= 0)
         {
             printf("send() failed\n");
@@ -297,22 +262,23 @@ WRITE_MORE:
 
             if (g_server_sends_first)
             {
-                printf("Expecting server to transmit first\n");
+                /* Send app data over the encrypted connection. */
+            get_more_user_data:
+                rc = askSendAppData(ssl);
+                if (rc == PS_SUCCESS)
+                {
+                    goto out_ok;
+                }
+                else if (rc < 0)
+                {
+                    goto out_fail;
+                }
+                goto WRITE_MORE;
+            }
+            else
+            {
                 goto READ_MORE;
             }
-
-            /* Send app data over the encrypted connection. */
-get_more_user_data:
-            rc = askSendAppData(ssl);
-            if (rc == PS_SUCCESS)
-            {
-                goto out_ok;
-            }
-            else if (rc < 0)
-            {
-                goto out_fail;
-            }
-            goto WRITE_MORE;
         }
         /* rc == PS_SUCCESS. */
 
@@ -335,7 +301,7 @@ READ_MORE:
     len = rc;
 
     /* Read data from the wire. */
-    nrecv = recv(fd, buf, len, 0);
+    nrecv = recv(sock_fd, buf, len, 0);
     if (nrecv < 0)
     {
         goto out_fail;
@@ -375,21 +341,23 @@ READ_MORE:
 
         if (g_server_sends_first)
         {
-            printf("Expecting server to transmit first\n");
+            /* Send app data over the encrypted connection. */
+            rc = askSendAppData(ssl);
+            if (rc == PS_SUCCESS)
+            {
+                goto out_ok;
+            }
+            else if (rc < 0)
+            {
+                goto out_fail;
+            }
+            goto WRITE_MORE;
+        }
+        else
+        {
+            /* Wait for client to transmit first. */
             goto READ_MORE;
         }
-
-        /* Send app data over the encrypted connection. */
-        rc = askSendAppData(ssl);
-        if (rc == PS_SUCCESS)
-        {
-            goto out_ok;
-        }
-        else if (rc < 0)
-        {
-            goto out_fail;
-        }
-        goto WRITE_MORE;
     }
     else if (rc == MATRIXSSL_REQUEST_SEND)
     {
@@ -417,10 +385,47 @@ READ_MORE:
         Memcpy(tmp, buf, len);
         tmp[len] = '\0';
 
-        printf("Server: %s", tmp);
+        printf("Client: %s", tmp);
         if (strchr(tmp, '\n') == NULL)
         {
             printf("\n");
+        }
+        if (!Strncmp(tmp, "tls-unique:", strlen("tls-unique:")))
+        {
+            unsigned char bindings[36];
+            psSizeL_t bindingsLen = sizeof(bindings);
+
+            /* Possibly unused. */
+            (void)bindings;
+            (void)bindingsLen;
+
+            printf("Got tls-unique-id ID from client.\n");
+# ifdef USE_RFC5929_TLS_UNIQUE_CHANNEL_BINDINGS            
+            printf(" Checking the client's tls-unique-id...\n");
+            rc = matrixSslGetTlsUniqueChannelBindings(
+                    ssl,
+                    bindings,
+                    &bindingsLen);
+            (void)rc;
+            if (len - strlen("tls-unique:") >= bindingsLen &&
+                    !Memcmp(tmp + strlen("tls-unique:"),
+                            bindings,
+                            bindingsLen))
+            {
+                printf("It's the same as ours! No MITM.\n");
+            }
+            else
+            {
+                printf("It's different from ours. WARNING: could be a MITM...\n");
+                psTraceBytes("ours", bindings, bindingsLen);
+                psTraceBytes("received",
+                        (const unsigned char*)tmp + strlen("tls-unique:"),
+                        len - strlen("tls-unique:"));
+            }
+# else
+            printf(" But would need USE_RFC5929_TLS_UNIQUE_CHANNEL_BINDINGS "
+                    "to check!\n");
+# endif
         }
         free(tmp);
 
@@ -434,8 +439,6 @@ READ_MORE:
             goto out_fail;
         }
 
-        /* This test ends after successful reception of encrypted
-           app data from the peer. */
         rc = askSendAppData(ssl);
         if (rc == PS_SUCCESS)
         {
@@ -455,7 +458,7 @@ out_fail:
     matrixSslDeleteSession(ssl);
     matrixSslDeleteKeys(keys);
     matrixSslClose();
-    close(fd);
+    close(sock_fd);
 
     if (rc == PS_SUCCESS)
     {

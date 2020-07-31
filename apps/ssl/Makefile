@@ -3,7 +3,7 @@
 #   'make' builds debug (Default).
 #   'make gold' builds optimized.
 #
-#	Copyright (c) 2013-2016 INSIDE Secure Corporation. All Rights Reserved.
+#	Copyright (c) 2013-2019 INSIDE Secure Corporation. All Rights Reserved.
 #
 
 MATRIXSSL_ROOT:=../..
@@ -21,8 +21,10 @@ SIMPLE_CLIENT_EXE:=simpleClient$(E)
 SIMPLE_SERVER_SRC:=simpleServer.c
 SIMPLE_SERVER_EXE:=simpleServer$(E)
 
-IA_CLIENT_SRC:=interactiveClient.c
+IA_CLIENT_SRC:=interactiveClient.c interactiveCommon.c
 IA_CLIENT_EXE:=interactiveClient$(E)
+IA_SERVER_SRC:=interactiveServer.c interactiveCommon.c
+IA_SERVER_EXE:=interactiveServer$(E)
 
 SRC+=$(SIMPLE_CLIENT_SRC)
 EXE+=$(SIMPLE_CLIENT_EXE)
@@ -30,6 +32,8 @@ SRC+=$(SIMPLE_SERVER_SRC)
 EXE+=$(SIMPLE_SERVER_EXE)
 SRC+=$(IA_CLIENT_SRC)
 EXE+=$(IA_CLIENT_EXE)
+SRC+=$(IA_SERVER_SRC)
+EXE+=$(IA_SERVER_EXE)
 
 #The Mac OS X Xcode project has a target name of 'server' or 'client'
 ifneq (,$(TARGET_NAME))
@@ -89,6 +93,9 @@ $(IA_CLIENT_EXE): $(IA_CLIENT_SRC:.c=.o) $(STATIC)
 	$(CC) -o $@ $^ $(LDFLAGS) $(CFLAGS)
 
 $(SIMPLE_SERVER_EXE): $(SIMPLE_SERVER_SRC:.c=.o) $(STATIC)
+	$(CC) -o $@ $^ $(LDFLAGS) $(CFLAGS)
+
+$(IA_SERVER_EXE): $(IA_SERVER_SRC:.c=.o) $(STATIC)
 	$(CC) -o $@ $^ $(LDFLAGS) $(CFLAGS)
 
 $(NET_EXE): $(NET_SRC:.c=.o) $(STATIC)

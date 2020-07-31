@@ -60,8 +60,10 @@
 static char start_remote_text[] = "\033[1m";
 static char end_remote_text[] = "\033[0m";
 
+# ifdef USE_CLIENT_SIDE_SSL
 static int g_ciphers = 1;
 static uint16_t g_cipher[] = { 47 };
+# endif /* USE_CLIENT_SIDE_SSL */
 
 # define HTTP_BUFFER_SIZE (1024 * 1024)
 

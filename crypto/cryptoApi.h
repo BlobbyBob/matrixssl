@@ -55,6 +55,11 @@ extern "C" {
 # ifndef USE_NON_CONSTANT_TIME_MODEXP
 #  define USE_CONSTANT_TIME_MODEXP
 # endif
+/* Use constant-time ECC scalar multiplication algorithm.
+   Enabled by default. */
+# ifndef USE_NON_CONSTANT_TIME_ECC_MULMOD
+#  define USE_CONSTANT_TIME_ECC_MULMOD
+# endif
 
 /******************************************************************************/
 /**
@@ -1211,6 +1216,10 @@ PSPUBLIC uint16_t psGetNamedSigAlgId(const char *name);
 
 PSPUBLIC psBool_t psIsValidHashLenSigAlgCombination(psSize_t hashLen,
         int32_t sigAlg);
+
+/** Return PS_TRUE if the given signature algorithm requires a pre-hash
+    operation with the current crypto provider. */
+PSPUBLIC psBool_t psVerifyNeedPreHash(int32_t sigAlg);
 
 # ifdef USE_RSA
 /* Return the correct reference DigestInfo prefix for sigAlg,

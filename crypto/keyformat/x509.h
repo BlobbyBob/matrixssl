@@ -73,6 +73,32 @@ enum
 
 #  ifdef USE_CERT_PARSE
 
+/* Distinguished Name attribute types. */
+typedef enum
+{
+    ATTRIB_COMMON_NAME = 3,
+    ATTRIB_SURNAME = 4,
+    ATTRIB_SERIALNUMBER = 5,
+    ATTRIB_COUNTRY_NAME = 6,
+    ATTRIB_LOCALITY = 7,
+    ATTRIB_STATE_PROVINCE = 8,
+    ATTRIB_STREET_ADDRESS = 9,
+    ATTRIB_ORGANIZATION = 10,
+    ATTRIB_ORG_UNIT = 11,
+    ATTRIB_TITLE = 12,
+    ATTRIB_POSTAL_ADDRESS = 16,
+    ATTRIB_TELEPHONE_NUMBER = 20,
+    ATTRIB_NAME = 41,
+    ATTRIB_GIVEN_NAME = 42,
+    ATTRIB_INITIALS = 43,
+    ATTRIB_GEN_QUALIFIER = 44,
+    ATTRIB_DN_QUALIFIER = 46,
+    ATTRIB_PSEUDONYM = 65,
+    ATTRIB_DOMAIN_COMPONENT = 25,
+    ATTRIB_UID = 26,
+    ATTRIB_EMAIL = 27
+} x509DNAttributeType_t;
+
 /* Per specification, any critical extension in an X.509 cert should cause
     the connection to fail. SECURITY - Uncomment at your own risk */
 /* #define ALLOW_UNKNOWN_CRITICAL_EXTENSIONS */
@@ -98,14 +124,11 @@ typedef struct x509DomainComponent
 /* Number of null-bytes to terminate parsed string-type DN attributes with. */
 #   define DN_NUM_TERMINATING_NULLS 2
 
-/* Number of attribute types supported
-   (only one per type stored save domainComponent and orgUnit) */
-#   define DN_NUM_ATTRIBUTE_TYPES_MAX 22
+/* Max number of DN attributes types supported. */
+#   define DN_NUM_ATTRIBUTES_MAX 32
 
-/*
-    DN attributes are used outside the X509 area for cert requests,
-    which have been included in the RSA portions of the code
- */
+/* Type for representing a parsed distinguished name (DN) such as a
+   X.509 certificate subject or issuer field Name. */
 typedef struct
 {
     /* MUST support according to RFC 5280: */
@@ -181,7 +204,7 @@ typedef struct
     psSize_t emailLen;
 #   endif /* USE_EXTRA_DN_ATTRIBUTES */
 
-    int32 attributeOrder[DN_NUM_ATTRIBUTE_TYPES_MAX];
+    x509DNAttributeType_t attributeOrder[DN_NUM_ATTRIBUTES_MAX];
 
 } x509DNattributes_t;
 
@@ -625,7 +648,7 @@ typedef struct psCert
     int32 certAlgorithm;              /* TBSCertificate sig alg OID */
     unsigned char *signature;
     psSize_t signatureLen;
-#  if defined(USE_ED25519) || defined(USE_ROT_ECC) || defined(USE_ROT_RSA)
+#  if defined(USE_ED25519) || defined(USE_ROT_ECC) || defined(USE_ROT_RSA) || (defined(USE_CL_RSA) && defined(USE_PKCS1_PSS))
     unsigned char *tbsCertStart;
     psSizeL_t tbsCertLen;
 #  endif
@@ -692,6 +715,25 @@ extern void x509FreeExtensions(x509v3extensions_t *extensions);
 extern int32_t psX509ValidateGeneralName(const char *n);
 extern int32_t validateDateRange(psX509Cert_t *cert);
 
+/** Return the number of parsed attributes in DN. */
+extern int32_t psX509GetNumDNAttributes(const x509DNattributes_t *DN);
+
+/** Given a DN and index, return the corresponding attribute type and
+    value. The indexing is in the order in which the attributes were
+    encoded. */
+extern int32_t psX509GetDNAttributeTypeAndValue(const x509DNattributes_t *DN,
+        int32_t index,
+        x509DNAttributeType_t *attrType,
+        short *valueType,
+        psSize_t *valueLen,
+        char **value);
+
+/** Given a DN attribute type, return the index of its nth occurrence,
+    or < 0 if the attribute type is not present. */
+extern int32_t psX509GetDNAttributeIndex(const x509DNattributes_t *DN,
+        x509DNAttributeType_t attrType,
+        int32_t nth_occurence);
+
 /** Get the number of organizationalUnits in a distinguished name (DN). */
 extern int32_t psX509GetNumOrganizationalUnits(const x509DNattributes_t *DN);
 
@@ -727,9 +769,9 @@ extern x509DomainComponent_t *psX509GetDomainComponent(
 
 /** Get the concatenation of all domainComponents in a DN as a C string.
 
-    This function returns the concanated domainComponents as a string terminated
+    This function returns the concatenated domainComponents as a string terminated
     with DN_NUM_TERMINATING_NULLS NULL characters. The output string will
-    contain     the components in the reverse order compared to the order in which
+    contain the components in the reverse order compared to the order in which
     they were encoded in the certificate. Usually, this will result in the
     usual print order, i.e. top-level component (.com, .org, ...) last.
 

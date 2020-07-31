@@ -161,7 +161,9 @@ int main(void)
     psRsaKey_t privkey;
     unsigned char buffer[BUFFER_SIZE];
     psSize_t sz = 0;
+#if defined(USE_RSA) && defined(USE_PRIVATE_KEY_PARSING)
     psPool_t *misc = NULL;
+#endif
     int res;
 
     if (psCryptoOpen(PSCRYPTO_CONFIG) < PS_SUCCESS)

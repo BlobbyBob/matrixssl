@@ -210,7 +210,9 @@
 #   if defined(WIN32)
 #    include "osdep_windows.h"
 #    define strcasecmp LstrcmpiA
-#    define snprintf _snprintf
+#    if defined(_MSC_VER) && _MSC_VER < 1900 /* MSVC2015 */
+#     define snprintf _snprintf
+#    endif
 #   endif
 #   include "osdep_stdint.h"
 typedef int32_t int32;

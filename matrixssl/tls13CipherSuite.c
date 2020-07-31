@@ -94,9 +94,47 @@ void tls13MakeDecryptAad(ssl_t *ssl, unsigned char aadOut[5])
     aadOut[4] = (ssl->rec.len & 0xff);
 }
 
+#ifdef CL_EncryptAuthTls13
+
+/* Allocate and load Key and State Assets from CL local storage, so
+   that this application doesn't have to care about memory
+   management.  */
+static CL_RV tls13_aesgcm_assets(psAesGcm_t *gcm)
+{
+    CL_AssetAllocateExInfo_t exinfo = {0};
+    CL_RV rv;
+
+    exinfo.flags |= CL_ASSET_ALLOCATE_EX_LOCAL;
+    rv = CL_AssetAllocateEx((CL_ALLOCATE_EXTRA_POLICY |
+                             CL_POLICY_ALGO_GCM_AES_ENCRYPT |
+                             CL_POLICY_ALGO_GCM_AES_DECRYPT),
+                            gcm->keylength, &exinfo, &gcm->multipart_gcm_key);
+    if (rv == CLR_OK)
+    {
+        rv = CL_AssetLoadValue(gcm->multipart_gcm_key, gcm->key, gcm->keylength);
+    }
+    if (rv == CLR_OK)
+    {
+        rv = CL_AssetAllocateEx((CL_ALLOCATE_EXTRA_POLICY |
+                                 CL_POLICY_FLAG_TEMPORARY |
+                                 CL_POLICY_FLAG_EXPORTABLE),
+                                CL_ASSET_STATE_MIN_LENGTH, &exinfo, &gcm->multipart_gcm_state);
+    }
+    if (rv != CLR_OK)
+    {
+        CL_AssetFree(gcm->multipart_gcm_key);
+        CL_AssetFree(gcm->multipart_gcm_state);
+    }
+    return rv;
+}
+#endif
+
 int32 csAesGcmInitTls13(sslSec_t *sec, int32 type, uint32 keysize)
 {
-    int32 err;
+    int32 err = 0;
+#ifdef CL_EncryptAuthTls13
+    psAesGcm_t *gcm;
+#endif
 
     if (type == INIT_ENCRYPT_CIPHER)
     {
@@ -106,6 +144,14 @@ int32 csAesGcmInitTls13(sslSec_t *sec, int32 type, uint32 keysize)
         {
             return err;
         }
+#ifdef CL_EncryptAuthTls13
+        gcm = &sec->encryptCtx.aesgcm;
+        gcm->algo = CL_ALGO_GCM_AES_ENCRYPT;
+        gcm->tlsInfo = CL_Tls13ContextNew();
+        CL_Tls13ContextSetWriteIv(gcm->tlsInfo, sec->tls13WriteIv);
+        CL_Tls13ContextSetSeq(gcm->tlsInfo, sec->seq);
+        err = tls13_aesgcm_assets(gcm) != CLR_OK;
+#endif
     }
     else
     {
@@ -115,9 +161,127 @@ int32 csAesGcmInitTls13(sslSec_t *sec, int32 type, uint32 keysize)
         {
             return err;
         }
+#ifdef CL_EncryptAuthTls13
+        gcm = &sec->decryptCtx.aesgcm;
+        gcm->algo = CL_ALGO_GCM_AES_DECRYPT;
+        gcm->tlsInfo = CL_Tls13ContextNew();
+        CL_Tls13ContextSetWriteIv(gcm->tlsInfo, sec->tls13ReadIv);
+        CL_Tls13ContextSetSeq(gcm->tlsInfo, sec->remSeq);
+        err = tls13_aesgcm_assets(gcm) != CLR_OK;
+#endif
+
     }
-    return 0;
+    return err;
 }
+
+static inline void psAesIncrSec(unsigned char *seq)
+{
+    int i;
+
+    for (i = (TLS_AEAD_SEQNB_LEN - 1); i >= 0; i--)
+    {
+        seq[i]++;
+        if (seq[i] != 0)
+        {
+            break;
+        }
+    }
+}
+
+#ifdef CL_EncryptAuthTls13
+
+/* XXX: consider dispatching here based on underlying FL version. See
+   TODO above. */
+
+psResSize_t csAesGcmEncryptTls13(void *pssl,
+                                 unsigned char *pt, unsigned char *ct,
+                                 uint32 ptLen)
+{
+    ssl_t *ssl = pssl;
+    psAesGcm_t *gcm;
+    CL_DataOutPtr_t tag = ct + ptLen;
+    CL_DataLen_t tagLen = 16;
+    CL_DataLen_t aadLen = 5;
+    unsigned char aadBuf[5];
+    CL_DataInPtr_t aad = (CL_DataInPtr_t)aadBuf;
+    CL_RV rv;
+
+    gcm = &ssl->sec.encryptCtx.aesgcm;
+
+    tls13MakeEncryptAad(ssl, aadBuf);
+    rv = CLS_EncryptAuthTls13(flps_getCLS(),
+                              gcm->multipart_gcm_key,
+                              gcm->multipart_gcm_state,
+                              gcm->tlsInfo,
+                              gcm->algo,
+                              aad, aadLen,
+                              pt, ptLen,
+                              ct,
+                              tag, tagLen);
+    if (rv == CLR_OK)
+    {
+        /* encrypted; commit to packet, increment sequence (the encrypt did that for tlsInfo) */
+        /* XXX: maybe copy out the tlsInfo ... */
+        psAesIncrSec(ssl->sec.seq);
+        psAssert(memcmp(ssl->sec.seq, gcm->tlsInfo->Seq, 8) == 0);
+    }
+    return rv == CLR_OK ? ptLen : PS_FAILURE;
+}
+
+/* inLen includes tag */
+psResSize_t csAesGcmDecryptTls13(void *pssl,
+                                 unsigned char *ct, unsigned char *pt,
+                                 uint32 inLen)
+{
+    ssl_t *ssl = pssl;
+    psAesGcm_t *gcm;
+    CL_DataOutPtr_t tag;
+    CL_DataLen_t tagLen = 16;
+    unsigned char aadBuf[5];
+    CL_DataInPtr_t aad = (CL_DataInPtr_t)aadBuf;
+    CL_DataLen_t aadLen = 5;
+    CL_RV rv;
+    ssize_t ptLen;
+
+    ptLen = (inLen - tagLen);
+    if (ptLen <= 0)
+    {
+        return PS_LIMIT_FAIL;
+    }
+
+    tag = ct + ptLen;
+    gcm = &ssl->sec.decryptCtx.aesgcm;
+
+    if (!USING_TLS_1_3_AAD(ssl))
+    {
+        aadLen = 0;
+        aad = NULL;
+    }
+    else
+    {
+        tls13MakeDecryptAad(ssl, aadBuf);
+    }
+    /* Assume the caller has already verified ssl->sec.seq == ssl->sec.remSeq */
+    psAssert(memcmp(ssl->sec.remSeq, gcm->tlsInfo->Seq, 8) == 0);
+    rv = CLS_DecryptAuthTls13(flps_getCLS(),
+                              gcm->multipart_gcm_key,
+                              gcm->multipart_gcm_state,
+                              gcm->tlsInfo,
+                              gcm->algo,
+                              aad, aadLen,
+                              ct, ptLen,
+                              tag, tagLen,
+                              pt);
+
+    if (rv == CLR_OK)
+    {
+        /* OK, commit to packet, increment sequence (the decrypt did that for tlsInfo) */
+        psAesIncrSec(ssl->sec.remSeq);
+        psAssert(memcmp(ssl->sec.remSeq, gcm->tlsInfo->Seq, 8) == 0);
+    }
+    return rv == CLR_OK ? ptLen : PS_FAILURE;
+}
+#else /* CL_EncryptAuthTls13 */
 
 int32 csAesGcmEncryptTls13(void *ssl, unsigned char *pt,
         unsigned char *ct, uint32 ptLen)
@@ -126,7 +290,6 @@ int32 csAesGcmEncryptTls13(void *ssl, unsigned char *pt,
     psAesGcm_t *ctx;
     unsigned char nonce[12];
     unsigned char aad[5];
-    int32 i;
 
     if (ptLen == 0)
     {
@@ -151,14 +314,7 @@ int32 csAesGcmEncryptTls13(void *ssl, unsigned char *pt,
     psAesGetGCMTag(ctx, 16, ct + ptLen);
 
     /* Normally HMAC would increment the sequence */
-    for (i = 7; i >= 0; i--)
-    {
-        lssl->sec.seq[i]++;
-        if (lssl->sec.seq[i] != 0)
-        {
-            break;
-        }
-    }
+    psAesIncrSec(lssl->sec.seq);
 
 #ifdef DEBUG_TLS_1_3_GCM
     psTraceBytes("csAesGcmEncryptTls13 output with tag", ct,
@@ -174,7 +330,7 @@ int32 csAesGcmDecryptTls13(void *ssl, unsigned char *ct,
 {
     ssl_t *lssl = ssl;
     psAesGcm_t *ctx;
-    int32 i, ctLen, bytes;
+    int32 ctLen, bytes;
     unsigned char nonce[12];
     unsigned char aad[5];
 
@@ -203,14 +359,7 @@ int32 csAesGcmDecryptTls13(void *ssl, unsigned char *ct,
     {
         return -1;
     }
-    for (i = 7; i >= 0; i--)
-    {
-        lssl->sec.remSeq[i]++;
-        if (lssl->sec.remSeq[i] != 0)
-        {
-            break;
-        }
-    }
+    psAesIncrSec(lssl->sec.remSeq);
 
 #ifdef DEBUG_TLS_1_3_GCM
     psTraceBytes("csAesGcmDecryptTls13 output with tag", ct,
@@ -220,6 +369,7 @@ int32 csAesGcmDecryptTls13(void *ssl, unsigned char *ct,
 
     return bytes;
 }
+#endif /* CL_EncryptAuthTls13 */
 
 #if defined(USE_CHACHA20_POLY1305_IETF_CIPHER_SUITE)  || defined(USE_CHACHA20_POLY1305_IETF)
 int32 csChacha20Poly1305IetfEncryptTls13(void *ssl, unsigned char *pt,
@@ -229,7 +379,7 @@ int32 csChacha20Poly1305IetfEncryptTls13(void *ssl, unsigned char *pt,
     psChacha20Poly1305Ietf_t *ctx;
     unsigned char nonce[TLS_AEAD_NONCE_MAXLEN];
     unsigned char aad[5];
-    int32 i, ptLen;
+    int32 ptLen;
 
     if (len == 0)
     {
@@ -279,14 +429,7 @@ int32 csChacha20Poly1305IetfEncryptTls13(void *ssl, unsigned char *pt,
 # endif
 
     /* Normally HMAC would increment the sequence */
-    for (i = (TLS_AEAD_SEQNB_LEN - 1); i >= 0; i--)
-    {
-        lssl->sec.seq[i]++;
-        if (lssl->sec.seq[i] != 0)
-        {
-            break;
-        }
-    }
+    psAesIncrSec(lssl->sec.seq);
     return len;
 }
 
@@ -295,7 +438,7 @@ int32 csChacha20Poly1305IetfDecryptTls13(void *ssl, unsigned char *ct,
 {
     ssl_t *lssl = ssl;
     psChacha20Poly1305Ietf_t *ctx;
-    int32 i, bytes;
+    int32 bytes;
 #  ifdef DEBUG_CHACHA20_POLY1305_IETF_CIPHER_SUITE
     int32 ctLen;
 #  endif
@@ -352,15 +495,7 @@ int32 csChacha20Poly1305IetfDecryptTls13(void *ssl, unsigned char *ct,
 # endif
         return -1;
     }
-
-    for (i = (TLS_AEAD_SEQNB_LEN - 1); i >= 0; i--)
-    {
-        lssl->sec.remSeq[i]++;
-        if (lssl->sec.remSeq[i] != 0)
-        {
-            break;
-        }
-    }
+    psAesIncrSec(lssl->sec.remSeq);
 
     return bytes + TLS_CHACHA20_POLY1305_IETF_TAG_LEN;
 }

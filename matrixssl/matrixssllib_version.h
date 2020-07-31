@@ -298,7 +298,8 @@ psProtocolVersion_t psFlagToVer(int32_t flag);
     backwards compatibility. The version flags are translated to
     MatrixSSL internal IDs during session configuration. */
 /** Any version flag. */
-# define ANY_VERSION_FLAG                       \
+# ifdef USE_TLS_1_3_DRAFT_SPEC
+#  define ANY_VERSION_FLAG                      \
     (SSL_FLAGS_TLS_1_0                          \
             | SSL_FLAGS_TLS_1_1                 \
             | SSL_FLAGS_TLS_1_2                 \
@@ -309,5 +310,12 @@ psProtocolVersion_t psFlagToVer(int32_t flag);
             | SSL_FLAGS_TLS_1_3_DRAFT_26        \
             | SSL_FLAGS_TLS_1_3_DRAFT_28        \
             | SSL_FLAGS_DTLS)
-
+# else
+#  define ANY_VERSION_FLAG                      \
+    (SSL_FLAGS_TLS_1_0                          \
+            | SSL_FLAGS_TLS_1_1                 \
+            | SSL_FLAGS_TLS_1_2                 \
+            | SSL_FLAGS_TLS_1_3                 \
+            | SSL_FLAGS_DTLS)
+# endif
 #endif /* _h_MATRIXSSLLIB_VERSION */

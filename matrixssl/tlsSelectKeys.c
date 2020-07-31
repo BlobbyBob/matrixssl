@@ -243,7 +243,12 @@ int32_t matrixSslChooseClientKeys(ssl_t *ssl, sslKeySelectInfo_t *keySelect)
     /* Approach 1: the identity callback. */
     if (ssl->sec.identityCb)
     {
-        psTraceInfo("matrixSslChooseClientKeys: trying callback\n");
+#if defined USE_SSL_HANDSHAKE_MSG_TRACE || defined USE_SSL_INFORMATIONAL_TRACE
+        static int num_called = 0;
+
+        psTraceIntInfo("matrixSslChooseClientKeys: trying callback (%d)\n",
+                       num_called++);
+#endif
         rc = ssl->sec.identityCb(ssl, keySelect);
         if (rc == PS_SUCCESS && ssl->chosenIdentity != NULL)
         {

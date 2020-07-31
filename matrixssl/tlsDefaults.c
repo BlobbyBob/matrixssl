@@ -281,11 +281,22 @@ int32 getDefaultVersions(ssl_t *ssl)
 {
     uint32_t k;
     psProtocolVersion_t mask;
+    psBool_t supportTls13Draft = PS_FALSE;
+
+# ifdef USE_TLS_1_3_DRAFT_SPEC
+    supportTls13Draft = PS_TRUE;
+# endif
 
     /* Loop over versions from latest to earliest (priority order). */
     mask = (1 << 23);
     for (k = 23; k >= 1; k--)
     {
+        /* No longer advertise TLS 1.3 draft versions unless specifically
+           enabled via compile-time config. */
+        if (!supportTls13Draft && (mask & v_tls_1_3_draft_any))
+        {
+            continue;
+        }
         /* Supported by the build-time config? */
         if (mask & v_compiled_in)
         {

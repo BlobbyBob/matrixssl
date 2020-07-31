@@ -212,6 +212,8 @@ extern "C" {
 /* #define USE_TLS_1_2_AND_ABOVE  *//**< @security better, if no backwards compatibility concerns */
 /* #define USE_TLS_1_3_ONLY       *//**< @security best, if no backwards compatibility concerns */
 /* #define USE_TLS_1_0_AND_ABOVE  *//**< @security no longer recommended. */
+/* #define USE_TLS_1_3_DRAFT_SPEC  *//**< Support TLS 1.3 draft versions in addition to RFC 8446
+                                         version. @security no longer recommended. */
 
 /** Enable support for session resumption in TLS 1.3. */
 #   define USE_TLS_1_3_RESUMPTION
@@ -249,6 +251,14 @@ extern "C" {
     Note that enabling this option will only allow parsing of the SSL 2.0
     ClientHellos; it will not enable support for the SSL 2.0 protocol.
     Only 32-byte challenges in the SSL 2.0 ClientHello are supported.
+
+    Note that MatrixSSL server will not accept SSL 2.0 ClientHellos if
+    TLS 1.3 has been enabled in the server run-time supported versions
+    list. This is because of the following recommendation in RFC 8446,
+    Appendix D.5.:
+
+    "Implementations are NOT RECOMMENDED to accept an SSL version 2.0
+    compatible CLIENT-HELLO in order to negotiate older versions of TLS."
 */
 #   ifdef USE_SERVER_SIDE_SSL
 /* #define ALLOW_SSLV2_CLIENT_HELLO_PARSE */
@@ -440,6 +450,9 @@ extern "C" {
    This avoids the need for multiple parallel hash context, one for
    each supported hash algorithm. */
 /* #define USE_BUFFERED_HS_HASH */
+
+/* Enable getter APIs for retrieving RFC 5929 tls-unique channel bindings. */
+/* #define USE_RFC5929_TLS_UNIQUE_CHANNEL_BINDINGS */
 
 #  ifdef __cplusplus
 }

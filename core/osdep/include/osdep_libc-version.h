@@ -38,15 +38,20 @@
 #ifndef OSDEP_LIBC_VERSION_H_DEFINED
 #define OSDEP_LIBC_VERSION_H_DEFINED 1
 
+/* Get (build time) libc version on Linux from GLIBC headers.
+   This header is no-op on other systems.
+   Android systems are autodetected, they do not use GLIBC.
+   There is -DPS_NO_GLIBC for other linux kernel based systems not using
+   GLIBC. */
 
+#ifdef __unix__
+#ifdef __linux__
+#ifndef __ANDROID__
+#ifndef PS_NO_GLIBC
 #include <gnu/libc-version.h>
-
-/* You may redefine the wrappers below in case your target system does not
-   provide all of the functions below. The functions are from C standard
-   ISO C99 and other common standards.
-   The defines may be overrided from command line. */
-
-
-
+#endif /* PS_NO_GLIBC */
+#endif /* __ANDROID__ */
+#endif /* __linux__ */
+#endif /* __unix__ */
 
 #endif /* OSDEP_LIBC_VERSION_H_DEFINED */

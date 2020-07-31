@@ -195,8 +195,30 @@ static inline
 int32_t chooseSkeSigAlgTls12(ssl_t *ssl, sslIdentity_t *id)
 {
     int32_t sigAlg;
+    uint16_t sigAlgMask;
 
-    sigAlg = chooseSigAlg(id->cert, &id->privKey, ssl->hashSigAlg);
+    if (MATRIX_IS_CLIENT(ssl))
+    {
+        /* The client will always receive the servers sigalg
+           list in CertificateRequest. */
+        sigAlgMask = ssl->peerSigAlg;
+    }
+    else
+    {
+        if (ssl->peerSigAlg != 0)
+        {
+            /* Got signature_algorithms in ClientHello. */
+            sigAlgMask = ssl->peerSigAlg;
+        }
+        else
+        {
+            /* No signature_algorithms received, use the "shared"
+               list, which in this case is equal to our list. */
+            sigAlgMask = ssl->hashSigAlg;
+        }
+    }
+
+    sigAlg = chooseSigAlg(id->cert, &id->privKey, sigAlgMask);
     if (sigAlg == PS_UNSUPPORTED_FAIL)
     {
         psTraceInfo("Unavailable sigAlgorithm for SKE write\n");
@@ -616,6 +638,9 @@ psBool_t tlsIsSupportedRsaSigAlg(int32_t alg)
     case sigalg_rsa_pss_rsae_sha256:
     case sigalg_rsa_pss_rsae_sha384:
     case sigalg_rsa_pss_rsae_sha512:
+    case sigalg_rsa_pss_pss_sha256:
+    case sigalg_rsa_pss_pss_sha384:
+    case sigalg_rsa_pss_pss_sha512:
 # endif
         return PS_TRUE;
     default:
@@ -654,14 +679,17 @@ psResSize_t tlsSigAlgToHashLen(uint16_t alg)
         return SHA1_HASH_SIZE;
     case sigalg_rsa_pkcs1_sha256:
     case sigalg_rsa_pss_rsae_sha256:
+    case sigalg_rsa_pss_pss_sha256:
     case sigalg_ecdsa_secp256r1_sha256:
         return SHA256_HASH_SIZE;
     case sigalg_rsa_pkcs1_sha384:
     case sigalg_rsa_pss_rsae_sha384:
+    case sigalg_rsa_pss_pss_sha384:
     case sigalg_ecdsa_secp384r1_sha384:
         return SHA384_HASH_SIZE;
     case sigalg_rsa_pkcs1_sha512:
     case sigalg_rsa_pss_rsae_sha512:
+    case sigalg_rsa_pss_pss_sha512:
     case sigalg_ecdsa_secp521r1_sha512:
         return SHA512_HASH_SIZE;
     default:
@@ -684,6 +712,9 @@ int32_t tlsSigAlgToMatrix(uint16_t alg)
     case sigalg_rsa_pss_rsae_sha256:
     case sigalg_rsa_pss_rsae_sha384:
     case sigalg_rsa_pss_rsae_sha512:
+    case sigalg_rsa_pss_pss_sha256:
+    case sigalg_rsa_pss_pss_sha384:
+    case sigalg_rsa_pss_pss_sha512:
         return OID_RSASSA_PSS;
     case sigalg_ecdsa_sha1:
         return OID_SHA1_ECDSA_SIG;
@@ -759,20 +790,29 @@ int32_t tlsVerify(ssl_t *ssl,
         {
             goto out_decode_error;
         }
+        psTracePrintTls13SigAlg(INDENT_HS_MSG,
+                "signature algorithm",
+                sigAlgTls,
+                PS_FALSE,
+                PS_TRUE);
+
 # ifdef USE_PKCS1_PSS
         switch (sigAlgTls)
         {
         case sigalg_rsa_pss_rsae_sha256:
+        case sigalg_rsa_pss_pss_sha256:
             opts->useRsaPss = PS_TRUE;
             opts->rsaPssHashAlg = PKCS1_SHA256_ID;
             opts->rsaPssSaltLen = SHA256_HASH_SIZE;
             break;
         case sigalg_rsa_pss_rsae_sha384:
+        case sigalg_rsa_pss_pss_sha384:
             opts->useRsaPss = PS_TRUE;
             opts->rsaPssHashAlg = PKCS1_SHA384_ID;
             opts->rsaPssSaltLen = SHA384_HASH_SIZE;
             break;
         case sigalg_rsa_pss_rsae_sha512:
+        case sigalg_rsa_pss_pss_sha512:
             opts->useRsaPss = PS_TRUE;
             opts->rsaPssHashAlg = PKCS1_SHA512_ID;
             opts->rsaPssSaltLen = SHA512_HASH_SIZE;
@@ -895,6 +935,14 @@ int32_t tlsVerify(ssl_t *ssl,
     else
     {
         matrixSigAlg = tlsSigAlgToMatrix(sigAlgTls);
+    }
+
+    if (!NGTD_VER(ssl, v_tls_with_signature_algorithms))
+    {
+        psTracePrintMatrixSigAlg(INDENT_HS_MSG,
+                "signature algorithm",
+                matrixSigAlg,
+                PS_TRUE);
     }
 
     rc = psVerifySig(ssl->hsPool,
@@ -1367,7 +1415,7 @@ int32_t chooseSigAlgInt(int32_t certSigAlg,
     }
 
     /*
-      For RSA signatures, RFC 5746 allows to pick any hash algorithm,
+      For RSA signatures, RFC 5246 allows to pick any hash algorithm,
       as long as it is supported by the peer, i.e. included in the
       peer's signature_algorithms list.
 

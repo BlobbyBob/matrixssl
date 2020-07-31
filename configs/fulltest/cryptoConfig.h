@@ -232,7 +232,7 @@
 #  define USE_CERT_PARSE/**< Enable TBSCertificate parsing. Usually required. @pre USE_X509 */
 #  define USE_FULL_CERT_PARSE/**< @pre USE_CERT_PARSE */
 /**< Support the certificatePolicy, policyMappings and policyContrainsts X.509 extensions. */
-/* #define USE_CERT_POLICY_EXTENSIONS */
+#  define USE_CERT_POLICY_EXTENSIONS
 /**< Support extra distinguished name attributes that SHOULD be supported according to RFC 5280. */
 #  define USE_EXTRA_DN_ATTRIBUTES_RFC5280_SHOULD
 /**< Support extra distinguished name attributes not mentioned in RFC 5280. */

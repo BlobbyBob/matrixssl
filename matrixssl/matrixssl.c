@@ -415,9 +415,6 @@ int32 matrixSslNewSession(ssl_t **ssl, const sslKeys_t *keys,
     psPool_t *pool = NULL;
     ssl_t *lssl;
     int32_t flags, rc;
-#ifdef USE_STATELESS_SESSION_TICKETS
-    uint32_t i;
-#endif
 
     /* SERVER_SIDE and CLIENT_AUTH and others will have been added to
         versionFlag by callers */
@@ -674,21 +671,8 @@ int32 matrixSslNewSession(ssl_t **ssl, const sslKeys_t *keys,
             {
                 Memcpy(lssl->sec.masterSecret, session->masterSecret,
                     SSL_HS_MASTER_SIZE);
-                lssl->sessionIdLen = SSL_MAX_SESSION_ID_SIZE;
-                Memcpy(lssl->sessionId, session->id, SSL_MAX_SESSION_ID_SIZE);
-#ifdef USE_STATELESS_SESSION_TICKETS
-                /* Possible no sessionId here at all if tickets used instead.
-                    Will know if all 0s */
-                lssl->sessionIdLen = 0;
-                for (i = 0; i < SSL_MAX_SESSION_ID_SIZE; i++)
-                {
-                    if (session->id[i] != 0x0)
-                    {
-                        lssl->sessionIdLen = SSL_MAX_SESSION_ID_SIZE;
-                        break;
-                    }
-                }
-#endif
+                lssl->sessionIdLen = session->idLen;
+                Memcpy(lssl->sessionId, session->id, session->idLen);
             }
         }
         lssl->sid = session;
@@ -1968,22 +1952,32 @@ int32 matrixSslGetSessionId(ssl_t *ssl, sslSessionId_t *session)
 # endif
 
     if (ssl->cipher != NULL && ssl->cipher->ident != SSL_NULL_WITH_NULL_NULL &&
-        ssl->sessionIdLen == SSL_MAX_SESSION_ID_SIZE)
+        ssl->sessionIdLen > 0)
     {
+        psBool_t secureRenegotiation = PS_FALSE;
 
+        (void)secureRenegotiation; /* Possibly unused. */
+
+# ifdef ENABLE_SECURE_REHANDSHAKES
+        secureRenegotiation = ssl->secureRenegotiationInProgress;
+# endif
 # ifdef USE_STATELESS_SESSION_TICKETS
+
         /* There is only one sessionId_t structure for any given session and
             it is possible a re-handshake on a session ticket connection will
             agree on using standard resumption and so the old master secret
             for the session ticket will be overwritten.  Check for this case
             here and do not update our session if a ticket is in use */
-        if (session->sessionTicket != NULL && session->sessionTicketLen > 0)
+        if (secureRenegotiation == PS_TRUE &&
+                session->sessionTicket != NULL &&
+                session->sessionTicketLen > 0)
         {
             return PS_SUCCESS;
         }
 # endif
         session->cipherId = ssl->cipher->ident;
         Memcpy(session->id, ssl->sessionId, ssl->sessionIdLen);
+        session->idLen = ssl->sessionIdLen;
         Memcpy(session->masterSecret, ssl->sec.masterSecret,
             SSL_HS_MASTER_SIZE);
         return PS_SUCCESS;

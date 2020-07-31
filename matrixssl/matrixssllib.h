@@ -447,7 +447,8 @@ typedef enum psk_key_exchange_mode
 {
     psk_keyex_mode_none = 0,
     psk_keyex_mode_psk_ke = 1,
-    psk_keyex_mode_psk_dhe_ke = 2
+    psk_keyex_mode_psk_dhe_ke = 2,
+    psk_keyex_mode_force_32_bits_datatype = 65537 /* Only for datatype size, the value is actually never used. */
 } psk_key_exchange_mode_e;
 
 # ifdef USE_TLS_1_3
@@ -796,7 +797,7 @@ struct sslKeys
 /*
     SSL record and session structures
  */
-typedef struct
+struct sslRec 
 {
     unsigned short len;
     unsigned char majVer;
@@ -814,9 +815,9 @@ typedef struct
 # endif
     unsigned char type;
     unsigned char pad[3];       /* Padding for 64 bit compat */
-} sslRec_t;
+};
 
-typedef struct
+struct sslSec
 {
     unsigned char clientRandom[SSL_HS_RANDOM_SIZE];     /* From ClientHello */
     unsigned char serverRandom[SSL_HS_RANDOM_SIZE];     /* From ServerHello */
@@ -877,6 +878,7 @@ typedef struct
     psBool_t tls13ClientCookieOk;
 
     short tls13ExtendedMasterSecretOpt;
+    psBool_t tls13SentEcdheGroup;
 
     psTls13Psk_t *tls13SessionPskList;
     psTls13Psk_t *tls13ChosenPsk;
@@ -1000,9 +1002,9 @@ typedef struct
     psPubKey_t *tls13KeyAgreeKeys[TLS_1_3_MAX_GROUPS];
 # endif
     int32 anon;
-} sslSec_t;
+};
 
-typedef struct
+struct sslCipherSpec
 {
     uint16_t ident;         /* Official cipher ID */
     uint16_t type;          /* Key exchange method */
@@ -1022,7 +1024,7 @@ typedef struct
                          uint32 len, unsigned char *mac);
     int32 (*verifyMac)(void *ssl, unsigned char type, unsigned char *data,
                        uint32 len, unsigned char *mac);
-} sslCipherSpec_t;
+};
 
 
 # ifdef USE_STATELESS_SESSION_TICKETS
@@ -1045,6 +1047,7 @@ typedef struct sslSessionId
 {
     psPool_t *pool;
     unsigned char id[SSL_MAX_SESSION_ID_SIZE];
+    psSize_t idLen;
     unsigned char masterSecret[SSL_HS_MASTER_SIZE];
     uint32 cipherId;
 # ifdef USE_STATELESS_SESSION_TICKETS
@@ -1370,6 +1373,13 @@ struct ssl
     int32 rehandshakeBytes;           /* Make this an internal define of 10MB */
 # endif /* SSL_REHANDSHAKES_ENABLED */
 
+# ifdef USE_RFC5929_TLS_UNIQUE_CHANNEL_BINDINGS
+    unsigned char myFinished[36]; /* SSL 3.0 uses 36 bytes, TLS 12 bytes. */
+    psSizeL_t myFinishedLen;
+    unsigned char peerFinished[36];
+    psSizeL_t peerFinishedLen;
+# endif
+    
 # ifdef USE_ECC
     struct
     {
@@ -1379,7 +1389,7 @@ struct ssl
 # endif
 # ifdef USE_TLS_1_2
     uint16_t hashSigAlg;
-    uint16_t serverSigAlgs;
+    uint16_t peerSigAlg;
 # endif /* USE_TLS_1_2 */
 
 # ifdef USE_DTLS
@@ -1604,7 +1614,7 @@ int32_t matrixSslGenEphemeralEcKey(
 
 # ifdef USE_TLS_1_3
 static inline
-psBool_t tls13IsResumedHandshake(ssl_t *ssl)
+psBool_t tls13IsResumedHandshake(const ssl_t *ssl)
 {
     if (ssl->sec.tls13UsingPsk &&
             ssl->sec.tls13ChosenPsk &&
@@ -1620,7 +1630,7 @@ psBool_t tls13IsResumedHandshake(ssl_t *ssl)
 # endif /* USE_TLS_1_3 */
 
 static inline
-psBool_t isResumedHandshake(ssl_t *ssl)
+psBool_t isResumedHandshake(const ssl_t *ssl)
 {
 # ifdef USE_TLS_1_3
     if (NGTD_VER(ssl, v_tls_1_3_any))
@@ -2548,6 +2558,10 @@ void psPrintSigAlgs(psSize_t indentLevel,
         const char *where,
         uint16_t sigAlgs,
         psBool_t addNewline);
+void psPrintMatrixSigAlg(psSize_t indentLevel,
+        const char *where,
+        int32_t alg,
+        psBool_t addNewline);
 void psPrintTls13SigAlg(psSize_t indentLevel,
         const char *where,
         uint16_t alg,
@@ -2647,8 +2661,10 @@ void psPrintTranscriptHashUpdate(ssl_t *ssl,
     psPrintEncodedCipherList(indentLevel, where, cipherList, cipherListLen, addNewline)
 #  define psTracePrintCipherList(indentLevel, where, cipherList, numCiphers, addNewline) \
     psPrintCipherList(indentLevel, where, cipherList, numCiphers, addNewline)
-#  define psTracePrintSigAlgs(indentLevel, sigAlgs, where, addNewline) \
-    psPrintSigAlgs(indentLevel, sigAlgs, where, addNewline)
+#  define psTracePrintSigAlgs(indentLevel, where, sigAlgs, addNewline) \
+    psPrintSigAlgs(indentLevel, where, sigAlgs, addNewline)
+#  define psTracePrintMatrixSigAlg(indentLevel, where, alg, addNewline) \
+    psPrintMatrixSigAlg(indentLevel, where, alg, addNewline)
 #  define psTracePrintPubKeyTypeAndSize(ssl, key) \
     psPrintPubKeyTypeAndSize(ssl, key)
 #  define psTracePrintTls13SigAlg(indentLevel, where, alg, bigEndian, addNewline) \
@@ -2702,7 +2718,8 @@ void psPrintTranscriptHashUpdate(ssl_t *ssl,
 #  define psTracePrintCiphersuiteName(indentLevel, where, cipher, addNewline)
 #  define psTracePrintEncodedCipherList(indentLevel, where, cipherList, cipherListLen, addNewline)
 #  define psTracePrintCipherList(indentLevel, where, cipherList, numCiphers, addNewline)
-#  define psTracePrintSigAlgs(indentlevel, sigAlgs, where, addNewLine)
+#  define psTracePrintSigAlgs(indentlevel, where, sigAlgs, addNewLine)
+#  define psTracePrintMatrixSigAlg(indentLevel, where, alg, addNewline)
 #  define psTracePrintPubKeyTypeAndSize(ssl, key)
 #  define psTracePrintTls13SigAlg(indentLevel, where, sigAlg, bigEndian, addNewline)
 #  define psTracePrintTls13SigAlgList(indentLevel, where, algs, numAlg, addNewline)

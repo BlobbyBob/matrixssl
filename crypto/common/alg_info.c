@@ -636,3 +636,20 @@ uint16_t psGetNamedGroupId(const char *name)
     }
     return 0;
 }
+
+psBool_t psVerifyNeedPreHash(int32_t sigAlg)
+{
+    /* crypto-rot never uses pre-hashing for any sig alg. */
+# ifdef USE_ROT_CRYPTO
+    return PS_FALSE;
+# endif
+# ifdef USE_ED25519
+    /* Ed25519 does not use pre-hashing. */
+    if (sigAlg == OID_ED25519_KEY_ALG)
+    {
+        return PS_FALSE;
+    }
+# endif
+
+    return PS_TRUE;
+}

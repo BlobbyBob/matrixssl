@@ -61,26 +61,6 @@ static int32 parseSingleCert(ssl_t *ssl, unsigned char *c, unsigned char *end,
 #endif /* USE_CERT_CHAIN_PARSING */
 
 static inline
-psResSize_t parseSslv2RecordHdr(ssl_t *ssl,
-        unsigned char *c)
-{
-#if defined(USE_INTERCEPTOR) || defined(ALLOW_SSLV2_CLIENT_HELLO_PARSE)
-    ssl->rec.type = SSL_RECORD_TYPE_HANDSHAKE;
-    ssl->rec.majVer = 2;
-    ssl->rec.minVer = 0;
-    ssl->rec.len = (*c & 0x7f) << 8; c++;
-    ssl->rec.len += *c;
-    return PS_SUCCESS;
-#else
-    /* OpenSSL 0.9.8 will send a SSLv2 CLIENT_HELLO.  Use the -no_ssl2
-       option when running a 0.9.8 client to prevent this */
-    ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-    psTraceErrr("SSLv2 records not supported\n");
-    return MATRIXSSL_ERROR;
-#endif
-}
-
-static inline
 psRes_t validateRecordHdrType(ssl_t *ssl)
 {
     switch (ssl->rec.type)
@@ -215,6 +195,49 @@ psRes_t validateRecordHdrLen(ssl_t *ssl)
     return MATRIXSSL_SUCCESS;
 }
 
+# ifdef ALLOW_SSLV2_CLIENT_HELLO_PARSE
+static inline
+psBool_t isSslv2ClientHelloRecord(ssl_t *ssl,
+        unsigned char *c,
+        unsigned char *end)
+{
+    /*
+      Conditions for accepting an SSL 2.0 record:
+      - A. It must be an SSL 2.0 ClientHello record.
+      - B. It must conform to E.2. of RFC 5246.
+      - C. We must be in the initial handshake state with no protocol
+        negotiated yet.
+
+      Note that (*c & 0x80) will never be true for TLS 1.0 or later,
+      because none of the valid record types has the high bit set.
+    */
+    if ((end - c >= 3)
+            /* Conditions A & B: */
+            && (*c & 0x80) && (*(c+2) == 1)
+             /* Condition C: */
+            && ssl->hsState == SSL_HS_CLIENT_HELLO
+            && !VersionNegotiationComplete(ssl))
+    {
+        return PS_TRUE;
+    }
+
+    return PS_FALSE;
+}
+
+static inline
+psResSize_t handleSslv2Record(ssl_t *ssl,
+        unsigned char *c)
+{
+    ssl->rec.type = SSL_RECORD_TYPE_HANDSHAKE;
+    ssl->rec.majVer = SSL2_MAJ_VER;
+    ssl->rec.minVer = 0;
+    ssl->rec.len = (*c & 0x7f) << 8; c++;
+    ssl->rec.len += *c;
+
+    return 2;
+}
+# endif /* ALLOW_SSLV2_CLIENT_HELLO_PARSE */
+
 /** Parse and validate a record header.
     Returns the number of bytes parsed or < 0 on error. */
 static inline
@@ -227,15 +250,12 @@ psResSize_t handleRecordHdr(ssl_t *ssl,
     unsigned char *orig_c = c;
     psRes_t res;
 
-    if ((*c & 0x80) && (GET_NGTD_VER(ssl) == v_undefined))
+# ifdef ALLOW_SSLV2_CLIENT_HELLO_PARSE
+    if (isSslv2ClientHelloRecord(ssl, c, end))
     {
-        res = parseSslv2RecordHdr(ssl, c);
-        if (res < 0)
-        {
-            return res;
-        }
-        c += 2;
+        return handleSslv2Record(ssl, c);
     }
+# endif
 
     psAssert(ssl->recordHeadLen == SSL3_HEADER_LEN ||
             ssl->recordHeadLen == DTLS_HEADER_LEN);
@@ -352,8 +372,6 @@ int32 matrixSslDecode(ssl_t *ssl,
         unsigned char *alertLevel,
         unsigned char *alertDescription)
 {
-    int32_t rc = PS_FAILURE;
-
     *error = PS_SUCCESS;
 
     /* If we've had a protocol error, don't allow further use of the session */
@@ -367,6 +385,7 @@ int32 matrixSslDecode(ssl_t *ssl,
 # ifdef USE_TLS_1_3
     if (ACTV_VER(ssl, v_tls_1_3_any))
     {
+        int32_t rc = PS_FAILURE;
         rc = matrixSslDecodeTls13(ssl,
                 buf,
                 len,
@@ -1121,48 +1140,66 @@ ADVANCE_TO_APP_DATA:
          */
         if (ssl->deBlockSize > 1)
         {
-            /* Run this helper regardless of error status thus far */
-            (void) addCompressCount(ssl, padLen);
+            unsigned char tmp[128];
+            psDigestContext_t md;
+
+            /* set up the hash independent of the padding status */
+            switch (ssl->deMacSize)
+            {
+#  ifdef USE_SHA256
+            case SHA256_HASH_SIZE:
+                psSha256PreInit(&md.u.sha256);
+                break;
+#  endif
+#  ifdef USE_SHA384
+            case SHA384_HASH_SIZE:
+                psSha384PreInit(&md.u.sha384);
+                psSha384Init(&md.u.sha384);
+                  break;
+#  endif
+#  ifdef USE_SHA1
+            case SHA1_HASH_SIZE:
+                psSha1PreInit(&md.u.sha1);
+                psSha1Init(&md.u.sha1);
+                break;
+#  endif
+            default:
+                psAssert(0);
+                break;
+            }
+
+            rc = addCompressCount(ssl, padLen);
+        /* Perform a an update on the padding that is not cut off in case of a padding error */
             if (macError == 0)
             {
-                psDigestContext_t md;
-                unsigned char tmp[128];
                 switch (ssl->deMacSize)
                 {
 #  ifdef USE_SHA256
                 case SHA256_HASH_SIZE:
-                    psSha256PreInit(&md.u.sha256);
                     psSha256Init(&md.u.sha256);
                     while (rc > 0)
                     {
                         psSha256Update(&md.u.sha256, tmp, 64);
                         rc--;
                     }
-                    psSha256Final(&md.u.sha256, tmp);
                     break;
 #  endif
 #  ifdef USE_SHA384
                 case SHA384_HASH_SIZE:
-                    psSha384PreInit(&md.u.sha384);
-                    psSha384Init(&md.u.sha384);
                     while (rc > 0)
                     {
                         psSha384Update(&md.u.sha384, tmp, 128);
                         rc--;
                     }
-                    psSha384Final(&md.u.sha384, tmp);
                     break;
 #  endif
 #  ifdef USE_SHA1
                 case SHA1_HASH_SIZE:
-                    psSha1PreInit(&md.u.sha1);
-                    psSha1Init(&md.u.sha1);
                     while (rc > 0)
                     {
                         psSha1Update(&md.u.sha1, tmp, 64);
                         rc--;
                     }
-                    psSha1Final(&md.u.sha1, tmp);
                     break;
 #  endif
                 default:
@@ -1170,6 +1207,31 @@ ADVANCE_TO_APP_DATA:
                     break;
                 }
             }
+
+        /* Finish the hash independent of the padding status. Not necessary to thwart the timing side channel
+        but it could free the resources if necessary */
+            switch (ssl->deMacSize)
+            {
+#  ifdef USE_SHA256
+            case SHA256_HASH_SIZE:
+                psSha256Final(&md.u.sha256, tmp);
+                break;
+#  endif
+#  ifdef USE_SHA384
+            case SHA384_HASH_SIZE:
+                psSha384Final(&md.u.sha384, tmp);
+                break;
+#  endif
+#  ifdef USE_SHA1
+            case SHA1_HASH_SIZE:
+                psSha1Final(&md.u.sha1, tmp);
+                break;
+#  endif
+            default:
+                psAssert(0);
+                break;
+            }
+
         }
 #endif  /* LUCKY13 */
 
@@ -2303,7 +2365,7 @@ hsStateDetermined:
         if (ssl->hsState == SSL_HS_CLIENT_HELLO)
         {
             /* This is for Client Hello.
-               Note: "Client Hello" is determined according to 
+               Note: *Client Hello* is determined according to
                expected state of server, rather than examining of the
                message. Therefore, this limit applies to any first
                protocol handshake message received. */
@@ -2334,7 +2396,8 @@ hsStateDetermined:
             /* The (fragmented) packet is considered overly large and dropped.
              */
             ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceInt("Maximum length exceeded (%d)\n", (int) hsLenMax);
+            psTraceErrr("Maximum length exceeded.\n");
+            psTraceIntInfo("%d\n", (int) hsLen);
             return MATRIXSSL_ERROR;
         }
 #ifdef USE_DTLS
@@ -2436,7 +2499,7 @@ hsStateDetermined:
                                    (int) hsLen);
                     return MATRIXSSL_ERROR;
                 }
-                
+
 /*
                 Need to save the hs header info aside as well so that we may
                 pass the fragments through the handshake hash mechanism in

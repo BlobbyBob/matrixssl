@@ -372,7 +372,8 @@ int32_t tls13ParseSingleExtension(ssl_t *ssl,
         rc = tls13ParseSignatureAlgorithms(ssl,
                 (const unsigned char **)&extDataBuf.buf.start,
                 extDataLen,
-                (hsMsgType == SSL_HS_CERTIFICATE) ? PS_TRUE : PS_FALSE);
+                (extType == EXT_SIGNATURE_ALGORITHMS_CERT) ? \
+                PS_TRUE : PS_FALSE);
         if (rc < 0)
         {
             return rc;
@@ -2011,6 +2012,8 @@ int32_t tls13ParseServerHelloExtensions(ssl_t *ssl,
     psParseBuf_t extBuf, extDataBuf;
     psBool_t gotSupportedVersions = PS_FALSE;
     psBool_t gotForbiddenExtension = PS_FALSE;
+    psBool_t gotKeyShare = PS_FALSE;
+    psBool_t gotPreSharedKey = PS_FALSE;
 
     /* Minimum length is 0 for the vector here since this could still
        be < TLS1.3 ServerHello which might not have extensions.
@@ -2084,6 +2087,7 @@ int32_t tls13ParseServerHelloExtensions(ssl_t *ssl,
             {
                 return rc;
             }
+            gotKeyShare = PS_TRUE;
             break;
 # endif
         case EXT_PRE_SHARED_KEY:
@@ -2092,6 +2096,7 @@ int32_t tls13ParseServerHelloExtensions(ssl_t *ssl,
             {
                 return rc;
             }
+            gotPreSharedKey = PS_TRUE;
             break;
         case EXT_SUPPORTED_VERSIONS:
             rc = tls13ParseServerSupportedVersions(ssl, &extDataBuf);
@@ -2116,6 +2121,11 @@ int32_t tls13ParseServerHelloExtensions(ssl_t *ssl,
 
     pb->buf.start = extBuf.buf.start;
 
+    if (!gotKeyShare)
+    {
+        ssl->sec.tls13ChosenPskMode = psk_keyex_mode_psk_ke;
+    }
+
     if (!gotSupportedVersions)
     {
         ssl->hsState = SSL_HS_SERVER_HELLO;
@@ -2131,6 +2141,13 @@ int32_t tls13ParseServerHelloExtensions(ssl_t *ssl,
            has been negotiated. Now we can be sure that the 1.3 set of
            allowed extensions must be enforced. Send the alert now. */
         psTraceErrr("Error: forbidden extension in TLS 1.3 ServerHello\n");
+        goto out_illegal_parameter;
+    }
+
+    if (!gotKeyShare && !gotPreSharedKey)
+    {
+        psTraceErrr("Error: no key_share or pre_shared_key " \
+                "in TLS 1.3 ServerHello\n");
         goto out_illegal_parameter;
     }
 

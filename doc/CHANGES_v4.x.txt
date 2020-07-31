@@ -3,6 +3,29 @@
 MATRIXSSL 4.X CHANGELOG
 
 
+Changes between 4.2.2 and 4.3.0 [June 2020]
+
+    * Added a constant-time variant of eccMulmod, in response to the Minerva attack.
+    * Fixed a possible infinite loop in message parsing discovered by 
+      Andreas Walz (ivESK).
+    * Timing sidechannel mitigation (Github issue #23).
+    * Change hard coded values to enums in matrixSslLoadKeys (Github issue #35).
+    * Disabled TLS 1.3 draft versions by default.
+    * Fixes TLS 1.2 session ticket based resumption.
+    * May only enable either PS_PUBKEY_OPTIMIZE_FOR_FASTER_SPEED or
+      PS_PUBKEY_OPTIMIZE_FOR_SMALLER_RAM (Github issue #37). 
+    * Channel Bindings for TLS (only for TLS 1.2 and below), new APIs added
+        - matrixSslGetFinished
+        - matrixSslGetPeerFinished
+        - matrixSslGetTlsUniqueChannelBindings
+    * Added API for accessing MatrixSSL structures without direct access
+      to structure members. Use of this API will slightly enlarge the
+      MatrixSSL binary but will enable building software that is not
+      dependent on exact binary layout of structures such as ssl_t.
+    * Fixes the bug when NULL keydata was used in sslLoadKeyPair() function.
+    * Other bug fixes.
+
+
 Changes between 4.2.1 and 4.2.2 [August 2019]
 
 This version fixes a few security issues related to DTLS and handshake

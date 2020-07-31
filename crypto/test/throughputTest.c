@@ -321,9 +321,20 @@ static void runTime(psCipherContext_t *ctx, psCipherGivContext_t *ctx_giv,
         chunk, (unsigned long long) diffu, round, mod);
 #else
     diffm = psDiffMsecs(start, end, NULL);
-    round = (bytesToSend / diffm) / 1000;
-    Printf("%d byte chunks in %d msecs total for rate of %d MB/sec\n",
+    if (diffm > 0)
+    {
+        round = (bytesToSend / diffm) / 1000;
+        Printf("%d byte chunks in %d msecs total for rate of %d MB/sec\n",
+            chunk, diffm, round);
+    }
+    else
+    {
+        diffm = 1;
+        round = (bytesToSend / diffm) / 1000;
+        Printf("%d byte chunks in less than %d msec total for rate of more than  %d MB/sec\n",
         chunk, diffm, round);
+        Printf("Use USE_HIGHRES_TIME for more accurate results.\n");
+    }
 #endif
 
 }

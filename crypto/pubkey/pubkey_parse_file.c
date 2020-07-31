@@ -642,10 +642,10 @@ static int32_t psTryParsePubKeyFilePEM(psPool_t *pool, const char *keyfile,
 int32_t psPkcs1DecodePrivFile(psPool_t *pool, const char *fileName,
     const char *password, unsigned char **DERout, psSize_t *DERlen)
 {
+# ifdef USE_PEM_DECODE
     psSizeL_t DERlen2 = 0;
     int32_t rc;
 
-# ifdef USE_PEM_DECODE
     if (DERlen == NULL)
     {
         return PS_ARG_FAIL;

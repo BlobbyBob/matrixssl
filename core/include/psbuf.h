@@ -233,7 +233,7 @@ void *psDynBufSubFinish(psDynBuf_t *sub);
 # define psDynBufAppendStrf(ps_dyn_buf_p, ...)               \
     do {                                \
         char tmp;                       \
-        size_t len = 1 + Snprintf(&tmp, 1, __VA_ARGS__);    \
+        size_t len = 1 + Snprintf(&tmp, 0, __VA_ARGS__);    \
         char *target = psDynBufAppendSize((ps_dyn_buf_p), len); \
         if (target) {                       \
             Snprintf(target, len, __VA_ARGS__);     \

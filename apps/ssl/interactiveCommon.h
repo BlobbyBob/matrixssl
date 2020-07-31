@@ -1,9 +1,8 @@
 /**
- *      @file    matrixsslApiPre.h
+ *      @file    interactiveCommon.h
  *      @version $Format:%h%d$
  *
- *      Public header file for MatrixSSL.
- *      This sub-header of matrixsslApi.h contains a preamble.
+ *      Common parts of interactiveClient.c and interactiveServer.c
  */
 /*
  *      Copyright (c) 2013-2018 INSIDE Secure Corporation
@@ -31,38 +30,31 @@
  *      Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  *      http://www.gnu.org/copyleft/gpl.html
  */
-/******************************************************************************/
 
-#ifndef _h_MATRIXSSL_API_PRE
-# define _h_MATRIXSSL_API_PRE
-
-# include "coreApi.h"     /* cryptoApi.h and matrixsslApi.h depend on this */
-# include "../crypto/cryptoApi.h" /* matrixsslApi.h depend on cryptoApi.h. */
-
-# ifdef MATRIX_CONFIGURATION_INCDIR_FIRST
-#  include <matrixsslConfig.h> /* Get matrixssl configuration from -I dir. */
-# else
-#  include "matrixsslConfig.h" /* Get local matrixssl configuration file. */
-# endif
-
-# ifdef DISABLE_TLS_1_3
-#  undef USE_TLS_1_3
-#  undef USE_TLS_AES_128_GCM_SHA256
-#  undef USE_TLS_AES_256_GCM_SHA384
-#  undef USE_TLS_CHACHA20_POLY1305_SHA256
-# endif
-
-# include "version.h"
-
-/*
-    Build the configuration string with the relevant build options for
-    runtime validation of compile-time configuration.
- */
-#  define HW_CONFIG_STR "N"
-
-# define MATRIXSSL_CONFIG \
-    "Y" \
-    HW_CONFIG_STR \
-    PSCRYPTO_CONFIG
-
-#endif
+int get_user_input(char *buf, int buf_len);
+int get_user_input_char(char *c, char defaultChoice);
+int32_t getAppDataFromUser(ssl_t *ssl,
+        unsigned char *data,
+        size_t *dataLen);
+int32_t askSendAppData(ssl_t *ssl);
+psRes_t getUserProtocolVersion(psProtocolVersion_t *verOut);
+psRes_t getUserKeyPair(const unsigned char **cert,
+        int32_t *certLen,
+        const unsigned char **key,
+        int32_t *keyLen,
+        int32_t *keyType,
+        int32_t *pskLen);
+int load_keys(sslKeys_t *keys);
+psRes_t getEncodingFunc(void);
+psRes_t getUserSigAlgs(uint16_t *sigAlgs, psSize_t *numSigAlgs);
+psRes_t getUserCiphersuites(psCipher16_t *ciphersuites,
+        psSize_t *numCiphersuites);
+psRes_t getMaximumFragmentLength(short *maxFragLen);
+psRes_t getServerAddress(char *addr_out, int *addr_out_len);
+psRes_t getServerPort(int *port_out);
+psRes_t getServerName(
+        char *name_out,
+        int name_out_len,
+        char *ip_addr);
+psRes_t getAllowAnon(psBool_t *allow);
+psRes_t getUserFirstSender(void);

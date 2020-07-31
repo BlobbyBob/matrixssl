@@ -35,20 +35,42 @@
 #if defined(__aarch64__) || defined(__aarch32__) || defined(__arm__)
 
 #include "pscompilerdep.h"
+
+#ifndef CRYPTOPP_NO_GETAUXV_AVAILABLE
 #include <osdep_libc-version.h>
 
-// Capability queries, requires Glibc 2.16, http://lwn.net/Articles/519085/
-// CRYPTOPP_GLIBC_VERSION not used because config.h is missing <feature.h>
+/* Capability queries, requires Glibc 2.16, http://lwn.net/Articles/519085/
+   CRYPTOPP_GLIBC_VERSION not used because config.h is missing <feature.h> */
 #if (((__GLIBC__ * 100) + __GLIBC_MINOR__) >= 216)
-# define CRYPTOPP_GETAUXV_AVAILABLE 1
+# ifndef CRYPTOPP_GETAUXV_AVAILABLE
+#  define CRYPTOPP_GETAUXV_AVAILABLE 1
+# endif
 #endif
+#ifdef __ANDROID__
+/* We also use getauxval() functionality on Android. */
+# ifndef CRYPTOPP_GETAUXV_AVAILABLE
+#  define CRYPTOPP_GETAUXV_AVAILABLE 1
+# endif
+#endif
+#endif /* CRYPTOPP_NO_GETAUXV_AVAILABLE */
 
 #include "osdep_stdbool.h"
 
 #if CRYPTOPP_GETAUXV_AVAILABLE
 # include "osdep_sys_auxv.h"
 #else
-unsigned long int getauxval(unsigned long int) { return 0; }
+/* Provide stub for getauxval() API with AT_HWCAP and AT_HWCAP2. */
+unsigned long int getauxval(unsigned long int type)
+{
+    (void) type; /* Parameter not used. */
+    return 0;
+}
+#ifndef AT_HWCAP
+#define AT_HWCAP 16
+#endif
+#ifndef AT_HWCAP2
+#define AT_HWCAP2 26
+#endif
 #endif
 
 #include "osdep_unistd.h"
@@ -123,23 +145,32 @@ unsigned int SL_cacheLineSize;
 # define HWCAP2_SHA2 (1 << 3)
 #endif
 
+/* Use generic pattern for hardware capabilities detection from auxval. */
+#if defined __linux__ && !defined PS_USE_GETAUXVAL
+#define PS_USE_GETAUXVAL 1
+#endif
+
+#if defined __ANDROID__ && !defined PS_USE_GETAUXVAL
+#define PS_USE_ANDROID_GET_CPU_FAMILY 1 /* Android can also use this. */
+#endif
+
 static inline bool CPU_QueryNEON()
 {
-#if defined(__ANDROID__) && defined(__aarch64__)
+#if defined(PS_USE_ANDROID_GET_CPU_FAMILY) && defined(__aarch64__)
         if ((android_getCpuFamily() & ANDROID_CPU_FAMILY_ARM64) &&
                 (android_getCpuFeatures() & ANDROID_CPU_ARM64_FEATURE_ASIMD))
                 return true;
-#elif defined(__ANDROID__) && defined(__arm__)
+#elif defined(PS_USE_ANDROID_GET_CPU_FAMILY) && defined(__arm__)
         if ((android_getCpuFamily() & ANDROID_CPU_FAMILY_ARM) &&
                 (android_getCpuFeatures() & ANDROID_CPU_ARM_FEATURE_NEON))
                 return true;
-#elif defined(__linux__) && defined(__aarch64__)
+#elif defined(PS_USE_GETAUXVAL) && defined(__aarch64__)
         if (getauxval(AT_HWCAP) & HWCAP_ASIMD)
                 return true;
-#elif defined(__linux__) && defined(__aarch32__)
+#elif defined(PS_USE_GETAUXVAL) && defined(__aarch32__)
         if (getauxval(AT_HWCAP2) & HWCAP2_ASIMD)
                 return true;
-#elif defined(__linux__) && defined(__arm__)
+#elif defined(PS_USE_GETAUXVAL) && defined(__arm__)
         if (getauxval(AT_HWCAP) & HWCAP_ARM_NEON)
                 return true;
 #elif defined(__APPLE__) && defined(__aarch64__)
@@ -151,18 +182,18 @@ static inline bool CPU_QueryNEON()
 
 static inline bool CPU_QueryCRC32()
 {
-#if defined(__ANDROID__) && defined(__aarch64__)
+#if defined(PS_USE_ANDROID_GET_CPU_FAMILY) && defined(__aarch64__)
         if ((android_getCpuFamily() & ANDROID_CPU_FAMILY_ARM64) &&
                 (android_getCpuFeatures() & ANDROID_CPU_ARM64_FEATURE_CRC32))
                 return true;
-#elif defined(__ANDROID__) && defined(__aarch32__)
+#elif defined(PS_USE_ANDROID_GET_CPU_FAMILY) && defined(__aarch32__)
         if ((android_getCpuFamily() & ANDROID_CPU_FAMILY_ARM) &&
                 (android_getCpuFeatures() & ANDROID_CPU_ARM_FEATURE_CRC32))
                 return true;
-#elif defined(__linux__) && defined(__aarch64__)
+#elif defined(PS_USE_GETAUXVAL) && defined(__aarch64__)
         if (getauxval(AT_HWCAP) & HWCAP_CRC32)
                 return true;
-#elif defined(__linux__) && defined(__aarch32__)
+#elif defined(PS_USE_GETAUXVAL) && defined(__aarch32__)
         if (getauxval(AT_HWCAP2) & HWCAP2_CRC32)
                 return true;
 #elif defined(__APPLE__) && defined(__aarch64__)
@@ -174,18 +205,18 @@ static inline bool CPU_QueryCRC32()
 
 static inline bool CPU_QueryPMULL()
 {
-#if defined(__ANDROID__) && defined(__aarch64__)
+#if defined(PS_USE_ANDROID_GET_CPU_FAMILY) && defined(__aarch64__)
         if ((android_getCpuFamily() & ANDROID_CPU_FAMILY_ARM64) &&
                 (android_getCpuFeatures() & ANDROID_CPU_ARM64_FEATURE_PMULL))
                 return true;
-#elif defined(__ANDROID__) && defined(__aarch32__)
+#elif defined(PS_USE_ANDROID_GET_CPU_FAMILY) && defined(__aarch32__)
         if ((android_getCpuFamily() & ANDROID_CPU_FAMILY_ARM) &&
                 (android_getCpuFeatures() & ANDROID_CPU_ARM_FEATURE_PMULL))
                 return true;
-#elif defined(__linux__) && defined(__aarch64__)
+#elif defined(PS_USE_GETAUXVAL) && defined(__aarch64__)
         if (getauxval(AT_HWCAP) & HWCAP_PMULL)
                 return true;
-#elif defined(__linux__) && defined(__aarch32__)
+#elif defined(PS_USE_GETAUXVAL) && defined(__aarch32__)
         if (getauxval(AT_HWCAP2) & HWCAP2_PMULL)
                 return true;
 #elif defined(__APPLE__) && defined(__aarch64__)
@@ -197,18 +228,18 @@ static inline bool CPU_QueryPMULL()
 
 static inline bool CPU_QueryAES()
 {
-#if defined(__ANDROID__) && defined(__aarch64__)
+#if defined(PS_USE_ANDROID_GET_CPU_FAMILY) && defined(__aarch64__)
         if ((android_getCpuFamily() & ANDROID_CPU_FAMILY_ARM64) &&
                 (android_getCpuFeatures() & ANDROID_CPU_ARM64_FEATURE_AES))
                 return true;
-#elif defined(__ANDROID__) && defined(__aarch32__)
+#elif defined(PS_USE_ANDROID_GET_CPU_FAMILY) && defined(__aarch32__)
         if ((android_getCpuFamily() & ANDROID_CPU_FAMILY_ARM) &&
                 (android_getCpuFeatures() & ANDROID_CPU_ARM_FEATURE_AES))
                 return true;
-#elif defined(__linux__) && defined(__aarch64__)
+#elif defined(PS_USE_GETAUXVAL) && defined(__aarch64__)
         if (getauxval(AT_HWCAP) & HWCAP_AES)
                 return true;
-#elif defined(__linux__) && defined(__aarch32__)
+#elif defined(PS_USE_GETAUXVAL) && defined(__aarch32__)
         if (getauxval(AT_HWCAP2) & HWCAP2_AES)
                 return true;
 #elif defined(__APPLE__) && defined(__aarch64__)
@@ -232,18 +263,18 @@ static inline bool CPU_QueryAES()
 
 static inline bool CPU_QuerySHA1()
 {
-#if defined(__ANDROID__) && defined(__aarch64__)
+#if defined(PS_USE_ANDROID_GET_CPU_FAMILY) && defined(__aarch64__)
         if ((android_getCpuFamily() & ANDROID_CPU_FAMILY_ARM64) &&
                 (android_getCpuFeatures() & ANDROID_CPU_ARM64_FEATURE_SHA1))
                 return true;
-#elif defined(__ANDROID__) && defined(__aarch32__)
+#elif defined(PS_USE_ANDROID_GET_CPU_FAMILY) && defined(__aarch32__)
         if ((android_getCpuFamily() & ANDROID_CPU_FAMILY_ARM) &&
                 (android_getCpuFeatures() & ANDROID_CPU_ARM_FEATURE_SHA1))
                 return true;
-#elif defined(__linux__) && defined(__aarch64__)
+#elif defined(PS_USE_GETAUXVAL) && defined(__aarch64__)
         if (getauxval(AT_HWCAP) & HWCAP_SHA1)
                 return true;
-#elif defined(__linux__) && defined(__aarch32__)
+#elif defined(PS_USE_GETAUXVAL) && defined(__aarch32__)
         if (getauxval(AT_HWCAP2) & HWCAP2_SHA1)
                 return true;
 #elif defined(__APPLE__) && defined(__aarch64__)
@@ -264,20 +295,21 @@ static inline bool CPU_QuerySHA1()
 #endif
         return false;
 }
+
 static inline bool CPU_QuerySHA2()
 {
-#if defined(__ANDROID__) && defined(__aarch64__)
+#if defined(PS_USE_ANDROID_GET_CPU_FAMILY) && defined(__aarch64__)
         if ((android_getCpuFamily() & ANDROID_CPU_FAMILY_ARM64) &&
                 (android_getCpuFeatures() & ANDROID_CPU_ARM64_FEATURE_SHA2))
                 return true;
-#elif defined(__ANDROID__) && defined(__aarch32__)
+#elif defined(PS_USE_ANDROID_GET_CPU_FAMILY) && defined(__aarch32__)
         if ((android_getCpuFamily() & ANDROID_CPU_FAMILY_ARM) &&
                 (android_getCpuFeatures() & ANDROID_CPU_ARM_FEATURE_SHA2))
                 return true;
-#elif defined(__linux__) && defined(__aarch64__)
+#elif defined(PS_USE_GETAUXVAL) && defined(__aarch64__)
         if (getauxval(AT_HWCAP) & HWCAP_SHA2)
                 return true;
-#elif defined(__linux__) && defined(__aarch32__)
+#elif defined(PS_USE_GETAUXVAL) && defined(__aarch32__)
         if (getauxval(AT_HWCAP2) & HWCAP2_SHA2)
                 return true;
 #elif defined(__APPLE__) && defined(__aarch64__)

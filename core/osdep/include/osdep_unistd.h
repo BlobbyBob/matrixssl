@@ -38,7 +38,7 @@
 #ifndef OSDEP_UNISTD_H_DEFINED
 #define OSDEP_UNISTD_H_DEFINED 1
 
-#if defined _POSIX_C_SOURCE || defined __unix__ || defined __linux__ || defined __android__
+#if defined _POSIX_C_SOURCE || defined __unix__ || defined __linux__ || defined __android_ || defined __APPLE__
 #include <unistd.h>
 
 /* You may redefine the wrappers below in case your target system does not

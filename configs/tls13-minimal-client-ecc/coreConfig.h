@@ -103,6 +103,37 @@
 #   define USE_PS_NETWORKING
 #  endif /* NO_PS_NETWORKING */
 
+/**
+    Use the psStat statistics measurement for CL/SL.
+
+    psStat is a generic statistics module. It contains features
+    e.g. required for measuring performance.
+    These capabilities can only be used on platforms with support for
+    thread-local storage and pthreads, such as Linux. Currently the support
+    will only be enabled for x86-64 Linux systems.
+    If statistics feature is not in use, the performance effect is minimal,
+    but for optimal performance in production environment, you may use
+    NO_PS_STAT_CL.
+ */
+#  ifdef __x86_64__
+#   ifndef NO_PS_STAT_CL
+#    define USE_PS_STAT_CL
+#   endif /* NO_PS_STAT_CL */
+#  endif /* __x86_64__ */
+
+/**
+    Use the psStat statistics measurement for CL/SL by default.
+
+    When psStat support has been compiled in (see above), USE_PS_STAT_CL,
+    it is disabled by default. To enabled statistics framework, set
+    environment variable PS_ENABLE_STATS to any value. Enabled setting below
+    to get statistics measuring without any environment variable. When
+    statistics are on by default, they can still be disabled with
+    environment variable PS_SKIP_STATS. Disabling statistics is recommended
+    to minimize footprint.
+ */
+/* #  define USE_PS_STAT_CL_BY_DEFAULT */
+
 #endif   /* _h_PS_CORECONFIG */
 
 /******************************************************************************/

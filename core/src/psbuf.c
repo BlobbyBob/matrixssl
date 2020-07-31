@@ -302,7 +302,7 @@ void *psDynBufDetachPsSize(psDynBuf_t *db, psSize_t *len_p)
     }
 
     db->pool = NULL;
-    if (len > PS_SIZE_MAX)
+    if (len > (size_t) PS_SIZE_MAX)
     {
         psDynBufUninit(db);
         return NULL;
@@ -1373,7 +1373,7 @@ int psParseTlsVariableLengthVec(const unsigned char *start,
         return PS_ARG_FAIL;
     }
 
-    if ((end - start) < numLenBytes)
+    if ((psSizeL_t) (end - start) < numLenBytes)
     {
         psTraceCore("Error parsing vec len\n");
         return PS_LIMIT_FAIL;
@@ -1392,7 +1392,7 @@ int psParseTlsVariableLengthVec(const unsigned char *start,
         }
     }
 
-    if ((end - p) < len)
+    if ((psSizeL_t) (end - p) < len)
     {
         psTraceCore("Error: vector has less data than indicated " \
                 "by the length encoding\n");

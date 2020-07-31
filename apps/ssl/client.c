@@ -35,6 +35,12 @@
 # define _POSIX_C_SOURCE 200112L
 #endif
 
+#ifdef __APPLE__
+# ifndef _DARWIN_C_SOURCE
+#  define _DARWIN_C_SOURCE
+# endif
+#endif
+ 
 #ifndef NEED_PS_TIME_CONCRETE
 # define NEED_PS_TIME_CONCRETE
 #endif
@@ -104,9 +110,6 @@ static unsigned char g_httpRequestHdr[] = "GET %s HTTP/1.0\r\n"
                                           "Content-Length: 0\r\n"
                                           "\r\n";
 
-static const char g_strver[][8] =
-{ "SSL 3.0", "TLS 1.0", "TLS 1.1", "TLS 1.2", "TLS 1.3" };
-
 static psList_t *g_groupList;
 static psSize_t g_num_key_shares;
 static psList_t *g_sigAlgsList;
@@ -130,6 +133,8 @@ static int g_trace;
 static int g_keepalive;
 static int g_req_ocsp_stapling;
 static int g_disable_peer_authentication;
+static int g_use_session_tickets;
+static int g_handshake_until_ticket;
 
 static uint32_t g_bytes_requested;
 static uint8_t g_send_closure_alert;
@@ -197,6 +202,43 @@ static void addTimeDiff(int64 *t, psTime_t t1, psTime_t t2);
    compatibility. */
 extern int32_t psVerToFlag(psProtocolVersion_t ver);
 
+static
+int32_t print_connection_extra_details(ssl_t *ssl)
+{
+    int32_t rc = PS_SUCCESS;
+
+# ifdef ENABLE_MASTER_SECRET_EXPORT
+    {
+        unsigned char *masterSecret = NULL;
+        psSizeL_t hsMasterSecretLen = 0;
+        matrixSslGetMasterSecret(
+                ssl,
+                &masterSecret,
+                &hsMasterSecretLen);
+        psTraceBytes("Master secret",
+                masterSecret, hsMasterSecretLen);
+    }
+# endif /* ENABLE_MASTER_SECRET_EXPORT */
+# ifdef USE_RFC5929_TLS_UNIQUE_CHANNEL_BINDINGS
+    {
+        unsigned char bindings[36];
+        psSizeL_t bindingsLen = sizeof(bindings);
+
+        rc = matrixSslGetTlsUniqueChannelBindings(
+                ssl,
+                bindings,
+                &bindingsLen);
+        if (rc < 0)
+        {
+            goto out;
+        }
+        psTraceBytes("tls-unique", bindings, bindingsLen);
+    }
+out:
+# endif
+    return rc;
+}
+
 /******************************************************************************/
 /*
     Make a secure HTTP request to a defined IP and port
@@ -258,6 +300,13 @@ static int32 httpsClientConnection(sslKeys_t *keys, sslSessionId_t *sid,
     if (g_req_ocsp_stapling)
     {
         options.OCSPstapling = 1;
+    }
+# endif
+
+# ifdef USE_STATELESS_SESSION_TICKETS
+    if (g_use_session_tickets)
+    {
+        options.ticketResumption = PS_TRUE;
     }
 # endif
 
@@ -487,19 +536,7 @@ WRITE_MORE:
             if (rc == MATRIXSSL_HANDSHAKE_COMPLETE)
             {
                 Printf("TLS handshake complete.\n");
-# ifdef ENABLE_MASTER_SECRET_EXPORT
-                {
-                    unsigned char *masterSecret = NULL;
-                    psSizeL_t hsMasterSecretLen = 0;
-                    matrixSslGetMasterSecret(
-                            ssl,
-                            &masterSecret,
-                            &hsMasterSecretLen);
-                    psTraceBytes("Master secret",
-                        masterSecret, hsMasterSecretLen);
-                }
-# endif /* ENABLE_MASTER_SECRET_EXPORT */
-
+                (void)print_connection_extra_details(ssl);
                 if ((matrixSslGetNegotiatedVersion(ssl) & v_tls_1_3_any)
                         && sid != NULL && g_resumed > 0)
                 {
@@ -666,19 +703,7 @@ PROCESS_MORE:
         goto WRITE_MORE;
 # else
         Printf("TLS handshake complete.\n");
-
-# ifdef ENABLE_MASTER_SECRET_EXPORT
-        {
-            unsigned char *masterSecret = NULL;
-            psSizeL_t hsMasterSecretLen = 0;
-            matrixSslGetMasterSecret(
-                    ssl,
-                    &masterSecret,
-                    &hsMasterSecretLen);
-            psTraceBytes("Master secret",
-                         masterSecret, hsMasterSecretLen);
-        }
-# endif /* ENABLE_MASTER_SECRET_EXPORT */
+        print_connection_extra_details(ssl);
 
         /* We got the Finished SSL message, initiate the HTTP req */
         if ((rc = httpWriteRequest(ssl)) < 0)
@@ -1112,6 +1137,8 @@ static int32 process_cmd_options(int32 argc, char **argv)
 #define ARG_TLS13_BLOCK_SIZE 18
 #define ARG_MIN_DH_P_SIZE 19
 #define ARG_PSK_SHA384 20
+#define ARG_USE_SESSION_TICKETS 21
+#define ARG_HANDSHAKE_UNTIL_TICKET 22
 
     static struct option long_options[] =
     {
@@ -1152,6 +1179,8 @@ static int32 process_cmd_options(int32 argc, char **argv)
         {"req-ocsp-stapling", no_argument, NULL, ARG_REQ_OCSP_STAPLING},
         {"disable-peer-authentication", no_argument, NULL, ARG_DISABLE_PEER_AUTHENTICATION},
         {"min-dh-p-size", required_argument, NULL, ARG_MIN_DH_P_SIZE},
+        {"use-session-tickets", no_argument, NULL, ARG_USE_SESSION_TICKETS},
+        {"handshake-until-ticket", no_argument, NULL, ARG_HANDSHAKE_UNTIL_TICKET},
         {0, 0, 0, 0}
     };
 
@@ -1442,6 +1471,12 @@ static int32 process_cmd_options(int32 argc, char **argv)
                 }
             }
             break;
+        case ARG_USE_SESSION_TICKETS:
+            g_use_session_tickets = 1;
+            break;
+        case ARG_HANDSHAKE_UNTIL_TICKET:
+            g_handshake_until_ticket = 1;
+            break;
 #endif /* USE_GETOPT_LONG */
         }
 
@@ -1492,6 +1527,21 @@ int32 main(int32 argc, char **argv)
     WSADATA wsaData;
     WSAStartup(MAKEWORD(1, 1), &wsaData);
 # endif
+
+    rc = PS_CONFIG_CHECK_SSL;
+    printf("TLS configuration consistency check: ");
+    if (rc == PS_SUCCESS)
+    {
+        printf("OK\n");
+    }
+    else
+    {
+        printf("FAILED\n");
+        PS_CONFIG_PRINTF;
+        printf("Exiting: failed configuration consistency check " \
+                "in main()\n");
+        return EXIT_FAILURE;
+    }
 
     exit_code = 0;
 
@@ -1598,7 +1648,8 @@ int32 main(int32 argc, char **argv)
         g_new = 1;
     }
 
-    for (i = 0; i < g_new; i++)
+    i = 0;
+    while (true)
     {
         matrixSslNewSessionId(&sid, NULL);
 # ifdef USE_CRL
@@ -1626,10 +1677,51 @@ int32 main(int32 argc, char **argv)
         {
             Printf("N"); Fflush(stdout);
         }
-        /* Leave the final sessionID for resumed connections */
+        psTraceBytes("stored session_id",
+                matrixSslSessionIdGetSessionId(sid),
+                matrixSslSessionIdGetSessionIdLen(sid));
+# ifdef USE_STATELESS_SESSION_TICKETS
+        /* Store the last session ticket we receive for resumptions. */
+        if (matrixSslSessionIdGetSessionTicket(sid) != NULL &&
+                matrixSslSessionIdGetSessionTicketLen(sid) > 0)
+        {
+            const unsigned char *pMasterSecret;
+
+            pMasterSecret = matrixSslSessionIdGetMasterSecret(sid);
+            Printf("Stored a session ticket.\n");
+            psTraceBytes("master secret associated with session ticket",
+                    pMasterSecret,
+                    48);
+            /* Clear the session_id so that legacy session id based resumption
+               will not be attempted. */
+            matrixSslSessionIdClearSessionId(sid);
+            if (g_handshake_until_ticket)
+            {
+                break;
+            }
+        }
+# endif
+        /* Leave the final session ID for resumed connections. */
         if (i + 1 < g_new)
         {
             matrixSslDeleteSessionId(sid);
+        }
+        i++;
+        if (g_handshake_until_ticket)
+        {
+            /* Sanity limit. */
+            if (i > 20)
+            {
+                break;
+            }
+        }
+        else
+        {
+            /* User-provided limit or 1. */
+            if (i == g_new)
+            {
+                break;
+            }
         }
     }
     Printf("\n");
@@ -1654,7 +1746,7 @@ int32 main(int32 argc, char **argv)
         else
         {
             Printf("Resumed session.\n");
-            Printf("R"); Fflush(stdout);
+            Fflush(stdout);
         }
     }
     if (g_keepalive)
@@ -1675,7 +1767,6 @@ int32 main(int32 argc, char **argv)
 
 out:
     matrixSslDeleteSessionId(sid);
-
     matrixSslDeleteKeys(keys);
     matrixSslClose();
 
@@ -1834,10 +1925,34 @@ static int32 certCb(ssl_t *ssl, psX509Cert_t *cert, int32 alert)
         }
         if (next->authStatus == PS_CERT_AUTH_FAIL_DN)
         {
+            char *missingIssuerDN = NULL;
+# ifdef USE_FULL_CERT_PARSE
+            size_t missingIssuerDNLen;
+# endif /* USE_FULL_CERT_PARSE */
+            psRes_t rc;
+
             /* A CA file was never located to support this chain */
             psTrace("No CA file was found to support server's certificate\n");
             /* This should result in a SSL_ALERT_UNKNOWN_CA alert */
             alert = SSL_ALERT_UNKNOWN_CA;
+            /* Print out the DN of the missing CA. */
+# ifdef USE_FULL_CERT_PARSE
+            rc = psX509GetOnelineDN(&next->issuer,
+                                    &missingIssuerDN,
+                                    &missingIssuerDNLen,
+                                    0);
+# else
+            rc = -1;
+# endif /* USE_FULL_CERT_PARSE */
+            if (rc < 0)
+            {
+                psTrace("psX509GetOnelineDN failed\n");
+            }
+            else
+            {
+                psTraceStr("Missing CA cert:\n%s\n", missingIssuerDN);
+                psFree(missingIssuerDN, NULL);
+            }
             break;
         }
         if (next->authStatus == PS_CERT_AUTH_FAIL_AUTHKEY)

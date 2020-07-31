@@ -1,8 +1,15 @@
 # Get or detect compilation architecture.
 
+#	clang on MACOS does not support -print-multiarch
+ifeq ($(shell uname),Darwin)
+PRINT_MULTIARCH =
+else
+PRINT_MULTIARCH = -print-multiarch
+endif
+
 # Detect target architecture
 ifeq '$(CCARCH)' ''
-CCARCH:=$(shell $(CLEAN_ENV) $(CC) $(CFLAGS_ARCHITECTURE_VARIANT) $(FLAGS_ARCHITECTURE_VARIANT) -print-multiarch)
+CCARCH:=$(shell $(CLEAN_ENV) $(CC) $(CFLAGS_ARCHITECTURE_VARIANT) $(FLAGS_ARCHITECTURE_VARIANT) $(PRINT_MULTIARCH))
 ifeq '$(CCARCH)' ''
 CCARCH:=$(shell $(CLEAN_ENV) $(CC) -v 2>&1 | sed -n '/Target: / s/// p')
 ifeq '$(CCARCH)' ''
@@ -14,7 +21,7 @@ ARM_ARCH ?= armv7-a
 
 ifeq '$(CCARCH)' ''
 $(error Unable to determine compiler architecture.)
-$(CC) $(CFLAGS_ARCHITECTURE_VARIANT) $(FLAGS_ARCHITECTURE_VARIANT) -print-multiarch or $(CC) -v or $(CC) -dumpmachine does not work. Please, provide CCARCH manually via an environment variable.)
+$(CC) $(CFLAGS_ARCHITECTURE_VARIANT) $(FLAGS_ARCHITECTURE_VARIANT) $(PRINT_MULTIARCH) or $(CC) -v or $(CC) -dumpmachine does not work. Please, provide CCARCH manually via an environment variable.)
 endif
 endif
 endif

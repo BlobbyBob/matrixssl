@@ -70,6 +70,7 @@ void matrixSslInteractBegin(matrixSslInteract_t *i, ssl_t *ssl,
     i->sock = sock;
     i->prev_rc = PS_SUCCESS;
     i->handshake_complete = PS_FALSE;
+    i->must_send = 0;
 }
 
 /* Adjust amount to read according to record header size or
@@ -267,6 +268,12 @@ int32 matrixSslInteractInt3(matrixSslInteract_t *i,
     int block = 1;
 # endif /* USE_MATRIX_NET_DEBUG */
 
+    /* If there is a write ongoing, resume it. */
+    if (i->must_send)
+    {
+        goto must_send;
+    }
+    
     if (i->receive_buf && i->receive_len_left == 0)
     {
         /* Continuation of previous receive operation: */
@@ -344,6 +351,8 @@ int32 matrixSslInteractInt3(matrixSslInteract_t *i,
     if (can_send && i->send_len_left > 0)
     {
         int32 len;
+
+    must_send:
         buf = i->send_buf;
         len = i->send_len_left;
 
@@ -351,8 +360,10 @@ int32 matrixSslInteractInt3(matrixSslInteract_t *i,
             i->sock, buf,
             len < MATRIXSSL_INTERACT_MAX_TRANSFER ? len :
             MATRIXSSL_INTERACT_MAX_TRANSFER, 0);
+        i->must_send = 0;
         if (transferred == PS_EAGAIN)
         {
+            i->must_send = 1;
             return MATRIXSSL_REQUEST_SEND;
         }
         if (transferred < 0)
@@ -370,6 +381,7 @@ int32 matrixSslInteractInt3(matrixSslInteract_t *i,
         i->send_len_left -= transferred;
         if (i->send_len_left > 0)
         {
+            i->must_send = 1;
             return MATRIXSSL_REQUEST_SEND;
         }
         rc = matrixSslSentData(i->ssl, (uint32) i->send_len);

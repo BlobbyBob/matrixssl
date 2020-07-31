@@ -2474,6 +2474,10 @@ int32_t processFinished(ssl_t *ssl, flightEncode_t *msg)
         Memcpy(ssl->myVerifyData, ssl->delayHsHash, rc);
         ssl->myVerifyDataLen = rc;
 # endif /* ENABLE_SECURE_REHANDSHAKES */
+# ifdef USE_RFC5929_TLS_UNIQUE_CHANNEL_BINDINGS
+        Memcpy(ssl->myFinished, ssl->delayHsHash, rc);
+        ssl->myFinishedLen = rc;
+# endif
     } /* End SSL_HS_FINISHED processing */
 
     return PS_SUCCESS;
@@ -3709,6 +3713,7 @@ static int32 writeServerHello(ssl_t *ssl, sslBuf_t *out)
             /* This empty extension is ALWAYS an indication to the client that
                 a NewSessionTicket handshake message will be sent */
             psTracePrintExtensionCreate(ssl, EXT_SESSION_TICKET);
+            psTraceInfoIndent(INDENT_EXTENSION, "(empty extension)\n");
             *c = (EXT_SESSION_TICKET & 0xFF00) >> 8; c++;
             *c = EXT_SESSION_TICKET & 0xFF; c++;
             *c = 0; c++;
@@ -3720,6 +3725,7 @@ static int32 writeServerHello(ssl_t *ssl, sslBuf_t *out)
         if (ssl->extFlags.sni && ssl->extFlags.sni_in_last_client_hello)
         {
             psTracePrintExtensionCreate(ssl, EXT_SNI);
+            psTraceInfoIndent(INDENT_EXTENSION, "(empty extension)\n");
             *c = (EXT_SNI & 0xFF00) >> 8; c++;
             *c = EXT_SNI & 0xFF; c++;
             *c = 0; c++;
@@ -5834,6 +5840,7 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
                 ssl->sid->sessionTicketState != SESS_TICKET_STATE_USING_TICKET)
             {
                 psTracePrintExtensionCreate(ssl, EXT_SESSION_TICKET);
+                psTraceInfoIndent(INDENT_EXTENSION, "(empty extension)\n");
                 ssl->extFlags.req_session_ticket = 1;
                 *c = (EXT_SESSION_TICKET & 0xFF00) >> 8; c++;
                 *c = EXT_SESSION_TICKET & 0xFF; c++;
@@ -5844,6 +5851,7 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
             else
             {
                 psTracePrintExtensionCreate(ssl, EXT_SESSION_TICKET);
+                psTraceInfoIndent(INDENT_EXTENSION, "(contains ticket)\n");
                 ssl->extFlags.req_session_ticket = 1;
                 *c = (EXT_SESSION_TICKET & 0xFF00) >> 8; c++;
                 *c = EXT_SESSION_TICKET & 0xFF; c++;
@@ -7169,7 +7177,7 @@ static int32 writeCertificateVerify(ssl_t *ssl, sslBuf_t *out)
           in parseCertificateRequest that the server supports that.
         */
         sigAlg = chooseSigAlg(chosen->cert, &chosen->privKey,
-                ssl->serverSigAlgs);
+                ssl->peerSigAlg);
         if (sigAlg <= 0)
         {
                 psTraceErrr("Need more hash support for certVerify\n");

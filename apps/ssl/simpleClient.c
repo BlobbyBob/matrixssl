@@ -9,7 +9,7 @@
  *      - Only 1 simultaneous connection.
  */
 /*
- *      Copyright (c) 2013-2018 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2019 INSIDE Secure Corporation
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -78,6 +78,12 @@ static const char *ip_address_str = "127.0.0.1";
 
 # ifndef SERVER_PORT
 #  define SERVER_PORT 4433
+# endif
+
+/* Number of TLS connections to attempt. Connections after the
+   first one will try to use session resumption. */
+# ifndef NUM_TLS_CONNECTIONS
+#  define NUM_TLS_CONNECTIONS 1
 # endif
 
 void cleanup(ssl_t *ssl, sslKeys_t *keys);
@@ -200,8 +206,18 @@ int main(int argc, char **argv)
     ssize_t nrecv, nsent;
     int fd;
     struct sockaddr_in addr;
+    sslSessionId_t *sid;
+    int i;
+    int num_resumptions = 0;
 
     rc = matrixSslOpen();
+    if (rc < 0)
+    {
+        return EXIT_FAILURE;
+    }
+
+    /* Create new session ID structure for session resumption purposes. */
+    rc = matrixSslNewSessionId(&sid, NULL);
     if (rc < 0)
     {
         return EXIT_FAILURE;
@@ -264,74 +280,123 @@ int main(int argc, char **argv)
         return EXIT_FAILURE;
     }
 
-    /* Create a new session and the ClientHello message. */
-    rc = matrixSslNewClientSession(
-            &ssl,
-            keys,
-            NULL,
-            ciphersuites,
-            ciphersuitesLen,
-            certCb,
-            NULL,
-            NULL,
-            NULL,
-            &opts);
-    if (rc < 0)
+    for (i = 0; i < NUM_TLS_CONNECTIONS; i++)
     {
-        printf("matrixSslNewClientSession failed: %d\n", rc);
-        cleanup(ssl, keys);
-        return EXIT_FAILURE;
-    }
-
-    /* Open the TCP connection. */
-    Memset((char *) &addr, 0x0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons((short) SERVER_PORT);
-    addr.sin_addr.s_addr = inet_addr(ip_address_str);
-    fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd == -1)
-    {
-        printf("socket failed: %d\n", fd);
-        cleanup(ssl, keys);
-        return EXIT_FAILURE;
-    }
-    printf("Connecting to %s: %d\n", ip_address_str, SERVER_PORT);
-    rc = connect(fd, (struct sockaddr *) &addr, sizeof(addr));
-    if (rc < 0)
-    {
-        close(fd);
-        printf("connect failed: %d\n", rc);
-        cleanup(ssl, keys);
-        return EXIT_FAILURE;
-    }
-
-WRITE_MORE:
-    /* Get pointer to the output data to send. */
-    rc = matrixSslGetOutdata(ssl, &buf);
-    while (rc > 0)
-    {
-        len = rc;
-
-        /* Send it over the wire. */
-        nsent = send(fd, buf, len, 0);
-        if (nsent <= 0)
-        {
-            printf("send() failed\n");
-            goto out_fail;
-        }
-
-        /* Inform the TLS library how much we managed to send.
-           Return code will tell us of what to do next. */
-        rc = matrixSslSentData(ssl, nsent);
+        /* Create a new session and the ClientHello message. */
+        rc = matrixSslNewClientSession(
+                &ssl,
+                keys,
+                sid,
+                ciphersuites,
+                ciphersuitesLen,
+                certCb,
+                NULL,
+                NULL,
+                NULL,
+                &opts);
         if (rc < 0)
         {
-            printf("matrixSslSentData failed: %d\n", rc);
+            printf("matrixSslNewClientSession failed: %d\n", rc);
+            cleanup(ssl, keys);
+            return EXIT_FAILURE;
+        }
+
+        /* Open the TCP connection. */
+        Memset((char *) &addr, 0x0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons((short) SERVER_PORT);
+        addr.sin_addr.s_addr = inet_addr(ip_address_str);
+        fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (fd == -1)
+        {
+            printf("socket failed: %d\n", fd);
+            cleanup(ssl, keys);
+            return EXIT_FAILURE;
+        }
+        printf("Connecting to %s: %d\n", ip_address_str, SERVER_PORT);
+        rc = connect(fd, (struct sockaddr *) &addr, sizeof(addr));
+        if (rc < 0)
+        {
+            close(fd);
+            printf("connect failed: %d\n", rc);
+            cleanup(ssl, keys);
+            return EXIT_FAILURE;
+        }
+
+    WRITE_MORE:
+        /* Get pointer to the output data to send. */
+        rc = matrixSslGetOutdata(ssl, &buf);
+        while (rc > 0)
+        {
+            len = rc;
+
+            /* Send it over the wire. */
+            nsent = send(fd, buf, len, 0);
+            if (nsent <= 0)
+            {
+                printf("send() failed\n");
+                goto out_fail;
+            }
+
+            /* Inform the TLS library how much we managed to send.
+               Return code will tell us of what to do next. */
+            rc = matrixSslSentData(ssl, nsent);
+            if (rc < 0)
+            {
+                printf("matrixSslSentData failed: %d\n", rc);
+                goto out_fail;
+            }
+            else if (rc == MATRIXSSL_REQUEST_CLOSE)
+            {
+                printf("Closing connection\n");
+                goto out_ok;
+            }
+            else if (rc == MATRIXSSL_HANDSHAKE_COMPLETE)
+            {
+                printf("Handshake complete\n");
+                /* Send app data over the encrypted connection. */
+                rc = sendAppData(
+                        ssl,
+                        g_httpRequestHdr,
+                        strlen((const char *)g_httpRequestHdr));
+                if (rc < 0)
+                {
+                    goto out_fail;
+                }
+                goto WRITE_MORE;
+            }
+            /* rc == PS_SUCCESS. */
+
+            /* More data to send? */
+            rc = matrixSslGetOutdata(ssl, &buf);
+        }
+
+READ_MORE:
+        /* Get pointer to buffer where incoming data should be read into. */
+        rc = matrixSslGetReadbuf(ssl, &buf);
+        if (rc < 0)
+        {
             goto out_fail;
         }
-        else if (rc == MATRIXSSL_REQUEST_CLOSE)
+        len = rc;
+
+        /* Read data from the wire. */
+        nrecv = recv(fd, buf, len, 0);
+        if (nrecv < 0)
         {
-            printf("Closing connection\n");
-            goto out_ok;
+            goto out_fail;
+        }
+
+        /* Ask the TLS library to process the data we read.
+           Return code will tell us what to do next. */
+        rc = matrixSslReceivedData(
+                ssl,
+                nrecv,
+                &buf,
+                &len);
+        if (rc < 0)
+        {
+            goto out_fail;
         }
         else if (rc == MATRIXSSL_HANDSHAKE_COMPLETE)
         {
@@ -347,92 +412,65 @@ WRITE_MORE:
             }
             goto WRITE_MORE;
         }
-        /* rc == PS_SUCCESS. */
-
-        /* More data to send? */
-        rc = matrixSslGetOutdata(ssl, &buf);
-    }
-
-READ_MORE:
-    /* Get pointer to buffer where incoming data should be read into. */
-    rc = matrixSslGetReadbuf(ssl, &buf);
-    if (rc < 0)
-    {
-        goto out_fail;
-    }
-    len = rc;
-
-    /* Read data from the wire. */
-    nrecv = recv(fd, buf, len, 0);
-    if (nrecv < 0)
-    {
-        goto out_fail;
-    }
-
-    /* Ask the TLS library to process the data we read.
-       Return code will tell us what to do next. */
-    rc = matrixSslReceivedData(
-            ssl,
-            nrecv,
-            &buf,
-            &len);
-    if (rc < 0)
-    {
-        goto out_fail;
-    }
-    else if (rc == MATRIXSSL_HANDSHAKE_COMPLETE)
-    {
-        printf("Handshake complete\n");
-        /* Send app data over the encrypted connection. */
-        rc = sendAppData(
-                ssl,
-                g_httpRequestHdr,
-                strlen((const char *)g_httpRequestHdr));
-        if (rc < 0)
+        else if (rc == MATRIXSSL_REQUEST_SEND)
         {
-            goto out_fail;
+            /* Handshake messages or an alert have been encoded.
+               These need to be sent over the wire. */
+            goto WRITE_MORE;
         }
-        goto WRITE_MORE;
-    }
-    else if (rc == MATRIXSSL_REQUEST_SEND)
-    {
-        /* Handshake messages or an alert have been encoded.
-           These need to be sent over the wire. */
-        goto WRITE_MORE;
-    }
-    else if (rc == MATRIXSSL_REQUEST_RECV)
-    {
-        /* Handshake still in progress. Need more messages
-           from the peer. */
-        goto READ_MORE;
-    }
-    else if (rc == MATRIXSSL_APP_DATA)
-    {
-        /* We received encrypted application data from the peer. */
+        else if (rc == MATRIXSSL_REQUEST_RECV)
+        {
+            /* Handshake still in progress. Need more messages
+               from the peer. */
+            goto READ_MORE;
+        }
+        else if (rc == MATRIXSSL_APP_DATA)
+        {
+            /* We received encrypted application data from the peer. */
 # ifdef SIMPLE_CLIENT_PRINT_DECRYPTED_APP_DATA
-        /* For test purposes, just print it out. */
-        psTraceBytes("Decrypted app data", buf, len);
+            /* For test purposes, just print it out. */
+            psTraceBytes("Decrypted app data", buf, len);
 # endif
-        /* Inform the TLS library that we "processed" the data. */
-        rc = matrixSslProcessedData(
-                ssl,
-                &buf,
-                &len);
-        if (rc < 0)
-        {
-            goto out_fail;
+            /* Inform the TLS library that we "processed" the data. */
+            rc = matrixSslProcessedData(
+                    ssl,
+                    &buf,
+                    &len);
+            if (rc < 0)
+            {
+                goto out_fail;
+            }
+
+            /* This test ends after successful reception of encrypted
+               app data from the peer. */
+            goto out_ok;
         }
-        /* This test ends after successful reception of encrypted
-           app data from the peer. */
-        goto out_ok;
-    }
 
 out_ok:
-    rc = PS_SUCCESS;
+        rc = PS_SUCCESS;
+        if (matrixSslIsResumedSession(ssl))
+        {
+            num_resumptions++;
+        }
+        if (NUM_TLS_CONNECTIONS > 1)
+        {
+            /* Delete connection object. */
+            matrixSslDeleteSession(ssl);
+            ssl = NULL;
+        }
+    } /* end for (int i = 0; i < NUM_TLS_CONNECTIONS; i++). */
+
+    printf("Performed %d TLS connection(s):\n" \
+            " %d Full session establishment(s)\n" \
+            " %d Resumed session(s)\n",
+            i,
+            i - num_resumptions,
+            num_resumptions);
 
 out_fail:
     cleanup(ssl, keys);
     close(fd);
+    matrixSslDeleteSessionId(sid);
 
     if (rc == PS_SUCCESS)
     {
@@ -474,10 +512,14 @@ void cleanup(ssl_t *ssl, sslKeys_t *keys)
 int load_keys(sslKeys_t *keys)
 {
 # ifdef LOAD_PRIVKEY_ASSET
+#  ifdef USE_ECC
     ValAssetId_t privAssetEcdsa = VAL_ASSETID_INVALID;
+#  endif
     ValAssetId_t privAssetRsa = VAL_ASSETID_INVALID;
 # else
+#  ifdef USE_ECC
     uint32_t privAssetEcdsa = 0;
+#  endif
     uint32_t privAssetRsa = 0;
 # endif
     int32_t rc;

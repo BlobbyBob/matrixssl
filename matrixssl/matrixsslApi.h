@@ -51,6 +51,7 @@ extern "C" {
 # include "matrixsslApiExt.h" /* TLS extension IDs. */
 # include "matrixsslApiCipher.h" /* Ciphersuite IDs. */
 # include "matrixsslApiTypes.h" /* TLS and configuration data types. */
+# include "matrixsslConfigStr.h" /* Encoding of the compile-time configuration. */
 
 /* For API documentation, see the separate MatrixSSL APIs manual. */
 
@@ -174,6 +175,18 @@ PSPUBLIC void matrixSslSetSessionTicketCallback(
         sslKeys_t *keys,
         int32 (*ticket_cb)(void *,
                 unsigned char[16], short));
+
+/* Setter/getter API for sslSessionId_t objects. */
+PSPUBLIC unsigned char* matrixSslSessionIdGetSessionId(
+        sslSessionId_t *id);
+PSPUBLIC psSizeL_t matrixSslSessionIdGetSessionIdLen(
+        sslSessionId_t *id);
+PSPUBLIC unsigned char* matrixSslSessionIdGetSessionTicket(
+        sslSessionId_t *id);
+PSPUBLIC psSizeL_t matrixSslSessionIdGetSessionTicketLen(
+        sslSessionId_t *id);
+PSPUBLIC void matrixSslSessionIdClearSessionId(
+        sslSessionId_t *id);
 
 /* Configuring extensions. */
 PSPUBLIC void matrixSslRegisterSNICallback(
@@ -300,6 +313,21 @@ PSPUBLIC psProtocolVersion_t matrixSslGetNegotiatedVersion(
 PSPUBLIC psBool_t matrixSslHandshakeIsComplete(
         const ssl_t *ssl);
 
+/* API for getting RFC 5929 tls-unique channel bindings for the current
+   TLS connection. */
+PSPUBLIC psRes_t matrixSslGetFinished(
+        const ssl_t *ssl,
+        unsigned char *finished,
+        psSizeL_t *finishedLen);
+PSPUBLIC psRes_t matrixSslGetPeerFinished(
+        const ssl_t *ssl,
+        unsigned char *peerFinished,
+        psSizeL_t *peerFinishedLen);
+PSPUBLIC psRes_t matrixSslGetTlsUniqueChannelBindings(
+        const ssl_t *ssl,
+        unsigned char *tls_unique,
+        psSizeL_t *tls_unique_len);
+
 /** Configuration options for a single connection. */
 PSPUBLIC int32 matrixSslDisableRehandshakes(
         ssl_t *ssl);
@@ -360,8 +388,6 @@ PSPUBLIC char* matrixSslGetExpectedName(
         const ssl_t *ssl);
 PSPUBLIC sslKeys_t *matrixSslGetKeys(
         ssl_t *ssl);
-PSPUBLIC void* matrixSslGetUserPtr(
-        ssl_t *ssl);
 PSPUBLIC psBool_t matrixSslTlsVersionRangeSupported(
         psProtocolVersion_t low,
         psProtocolVersion_t high);
@@ -376,6 +402,24 @@ PSPUBLIC int32 matrixSslGetMasterSecret(
         ssl_t *ssl,
         unsigned char **masterSecret,
         psSizeL_t *hsMasterSecretLen);
+PSPUBLIC psBool_t matrixSslIsResumedSession(
+        const ssl_t *ssl);
+
+PSPUBLIC int32_t matrixSslConfigCheck(
+        const char *callerConfig);
+PSPUBLIC const char* matrixSslConfigGetInternalStr(
+        void);
+
+#define PS_CONFIG_GET_SSL_CALLER \
+    psConfigStrSsl
+#define PS_CONFIG_CHECK_SSL \
+    matrixSslConfigCheck(PS_CONFIG_GET_SSL_CALLER)
+#define PS_CONFIG_GET_SSL \
+    matrixSslConfigGetInternalStr()
+#define PS_CONFIG_PRINTF                                    \
+    printf("Internal config:\n%s\nCaller config:\n%s\n",    \
+            PS_CONFIG_GET_SSL_CALLER,                       \
+            PS_CONFIG_GET_SSL)
 
 /******************************************************************************/
 
@@ -640,6 +684,8 @@ PSPUBLIC int32 matrixSslLoadEcKeysMem(
 # ifdef __cplusplus
 }
 # endif
+
+# include "matrixsslGetSet.h"
 
 /******************************************************************************/
 

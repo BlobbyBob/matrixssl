@@ -2042,15 +2042,15 @@ static psRes_t validateKeyForExtensions(ssl_t *ssl, const sslCipherSpec_t *spec,
                 {
                     if (
 #      ifdef USE_SHA1
-                        !(ssl->hashSigAlg & HASH_SIG_SHA1_RSA_MASK) &&
+                        !(ssl->peerSigAlg & HASH_SIG_SHA1_RSA_MASK) &&
 #      endif
 #      ifdef USE_SHA384
-                        !(ssl->hashSigAlg & HASH_SIG_SHA384_RSA_MASK) &&
+                        !(ssl->peerSigAlg & HASH_SIG_SHA384_RSA_MASK) &&
 #      endif
 #      ifdef USE_SHA512
-                        !(ssl->hashSigAlg & HASH_SIG_SHA512_RSA_MASK) &&
+                        !(ssl->peerSigAlg & HASH_SIG_SHA512_RSA_MASK) &&
 #      endif
-                        !(ssl->hashSigAlg & HASH_SIG_SHA256_RSA_MASK))
+                        !(ssl->peerSigAlg & HASH_SIG_SHA256_RSA_MASK))
                     {
                         return PS_UNSUPPORTED_FAIL;
                     }
@@ -2061,15 +2061,15 @@ static psRes_t validateKeyForExtensions(ssl_t *ssl, const sslCipherSpec_t *spec,
                 {
                     if (
 #      ifdef USE_SHA1
-                        !(ssl->hashSigAlg & HASH_SIG_SHA1_ECDSA_MASK) &&
+                        !(ssl->peerSigAlg & HASH_SIG_SHA1_ECDSA_MASK) &&
 #      endif
 #      ifdef USE_SHA384
-                        !(ssl->hashSigAlg & HASH_SIG_SHA384_ECDSA_MASK) &&
+                        !(ssl->peerSigAlg & HASH_SIG_SHA384_ECDSA_MASK) &&
 #      endif
 #      ifdef USE_SHA512
-                        !(ssl->hashSigAlg & HASH_SIG_SHA512_ECDSA_MASK) &&
+                        !(ssl->peerSigAlg & HASH_SIG_SHA512_ECDSA_MASK) &&
 #      endif
-                        !(ssl->hashSigAlg & HASH_SIG_SHA256_ECDSA_MASK))
+                        !(ssl->peerSigAlg & HASH_SIG_SHA256_ECDSA_MASK))
                     {
                         return PS_UNSUPPORTED_FAIL;
                     }
@@ -2079,7 +2079,7 @@ static psRes_t validateKeyForExtensions(ssl_t *ssl, const sslCipherSpec_t *spec,
             }
 #   endif  /* USE_DHE_CIPHER_SUITE */
 
-            if (!peerSupportsSigAlg(crt->sigAlgorithm, ssl->hashSigAlg))
+            if (!peerSupportsSigAlg(crt->sigAlgorithm, ssl->peerSigAlg))
             {
                 psTraceErrr("Peer doesn't support all sig/hash algorithm " \
                             "pairs in our certificate chain.\n");
@@ -2132,7 +2132,12 @@ static psBool_t certValidForUse(psX509Cert_t *certs,
 
     for (cert = certs; cert; cert = cert->next)
     {
-        if (keyAlg == 0 || cert->pubKeyAlgorithm == keyAlg)
+        /* Allow both OID_RSA_KEY_ALG and OID_RSASSA_PSS for suites
+           with RSA authentication. */
+        if (keyAlg == 0 ||
+                cert->pubKeyAlgorithm == keyAlg ||
+                (cert->pubKeyAlgorithm == OID_RSASSA_PSS &&
+                        keyAlg == OID_RSA_KEY_ALG))
         {
             return PS_TRUE;
         }
@@ -3375,6 +3380,12 @@ int32_t sslGetCipherSpecListExt(const ssl_t *ssl,
                 supportedCiphers[i].flags & CRYPTO_FLAGS_SHA2)
             {
                 ignored += 2;
+# ifdef DEBUG_FILTER_CIPHERLIST
+                psTracePrintCiphersuiteName(INDENT_HS_MSG,
+                        "Filtered out (SHA-2/3 not supported)",
+                        supportedCiphers[i].ident,
+                        PS_TRUE);
+# endif
                 continue;
             }
         }
@@ -3386,6 +3397,12 @@ int32_t sslGetCipherSpecListExt(const ssl_t *ssl,
                 && supportedCiphers[i].type != CS_TLS13)
         {
             ignored += 2;
+# ifdef DEBUG_FILTER_CIPHERLIST
+                psTracePrintCiphersuiteName(INDENT_HS_MSG,
+                        "Filtered out (TLS 1.2 and below not supported)",
+                        supportedCiphers[i].ident,
+                        PS_TRUE);
+# endif
             continue;
         }
         /* Remove TLS1.3 ciphers in case TLS1.3 is not enabled */
@@ -3393,6 +3410,12 @@ int32_t sslGetCipherSpecListExt(const ssl_t *ssl,
                 && (supportedCiphers[i].type == CS_TLS13))
         {
             ignored += 2;
+# ifdef DEBUG_FILTER_CIPHERLIST
+                psTracePrintCiphersuiteName(INDENT_HS_MSG,
+                        "Filtered out (TLS 1.3 not supported)",
+                        supportedCiphers[i].ident,
+                        PS_TRUE);
+# endif
             continue;
         }
 # endif /* USE_TLS_1_3 */
@@ -3400,6 +3423,12 @@ int32_t sslGetCipherSpecListExt(const ssl_t *ssl,
         if (!ciphersuiteAllowedBySecConfig(ssl, supportedCiphers[i].ident))
         {
             ignored += 2;
+# ifdef DEBUG_FILTER_CIPHERLIST
+                psTracePrintCiphersuiteName(INDENT_HS_MSG,
+                        "Filtered out (not allowed by security config)",
+                        supportedCiphers[i].ident,
+                        PS_TRUE);
+# endif
             continue;
         }
 # endif /* USE_SEC_CONFIG */
@@ -3407,6 +3436,12 @@ int32_t sslGetCipherSpecListExt(const ssl_t *ssl,
         if (haveKeyMaterial(ssl, &supportedCiphers[i], 0) != PS_SUCCESS)
         {
             ignored += 2;
+# ifdef DEBUG_FILTER_CIPHERLIST
+                psTracePrintCiphersuiteName(INDENT_HS_MSG,
+                        "Filtered out (no suitable key material)",
+                        supportedCiphers[i].ident,
+                        PS_TRUE);
+# endif
             continue;
         }
 #endif

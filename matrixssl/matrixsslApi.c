@@ -170,6 +170,7 @@ int32_t matrixSslNewClientSession(ssl_t **ssl, const sslKeys_t *keys,
         {
             psTraceInfo("Explicit cipher suite will override session cache\n");
             Memset(sid->id, 0, SSL_MAX_SESSION_ID_SIZE);
+            sid->idLen = 0;
             Memset(sid->masterSecret, 0, SSL_HS_MASTER_SIZE);
             sid->cipherId = 0;
         }
@@ -215,8 +216,9 @@ int32_t matrixSslNewClientSession(ssl_t **ssl, const sslKeys_t *keys,
     {
         if (psX509ValidateGeneralName((char *) expectedName) < 0)
         {
+            psTraceErrr("Invalid expectedName\n");
             matrixSslDeleteSession(lssl);
-            return rc;
+            return PS_ARG_FAIL;
         }
         rc = Strlen(expectedName);
         lssl->expectedName = psMalloc(lssl->sPool, rc + 1);
@@ -380,6 +382,30 @@ void matrixSslDeleteSessionId(sslSessionId_t *sess)
 
     Memset(sess, 0x0, sizeof(sslSessionId_t));
     psFree(sess, NULL);
+}
+
+# ifdef USE_STATELESS_SESSION_TICKETS
+unsigned char* matrixSslSessionIdGetSessionTicket(sslSessionId_t *id)
+{
+    return id->sessionTicket;
+}
+psSizeL_t matrixSslSessionIdGetSessionTicketLen(sslSessionId_t *id)
+{
+    return id->sessionTicketLen;
+}
+# endif
+unsigned char* matrixSslSessionIdGetSessionId(sslSessionId_t *id)
+{
+    return id->id;
+}
+psSizeL_t matrixSslSessionIdGetSessionIdLen(sslSessionId_t *id)
+{
+    return id->idLen;
+}
+void matrixSslSessionIdClearSessionId(sslSessionId_t *id)
+{
+    memset(id->id, 0, SSL_MAX_SESSION_ID_SIZE);
+    id->idLen = 0;
 }
 
 #  ifdef USE_EAP_FAST
@@ -2212,11 +2238,6 @@ sslKeys_t *matrixSslGetKeys(ssl_t *ssl)
     return ssl->keys;
 }
 
-void *matrixSslGetUserPtr(ssl_t *ssl)
-{
-    return ssl->userPtr;
-}
-
 psProtocolVersion_t matrixSslGetNegotiatedVersion(ssl_t *ssl)
 {
     return GET_NGTD_VER(ssl);
@@ -2308,5 +2329,131 @@ int32 matrixSslGetMasterSecret(
     return PS_SUCCESS;
 }
 # endif /* ENABLE_MASTER_SECRET_EXPORT */
+
+psBool_t matrixSslIsResumedSession(
+        const ssl_t *ssl)
+{
+    return isResumedHandshake(ssl);
+}
+
+/** Returns a pointer to MatrixSSL's internal configuration string.
+    The string is an encoding of the TLS configuration MatrixSSL
+    was compiled with. */
+const char *matrixSslConfigGetInternalStr(void)
+{
+    return psConfigStrSsl;
+}
+
+/** Returns PS_SUCCESS if callerConfig is identical to MatrixSSL's
+    internal config string; returns PS_FAILURE otherwise. */
+int32_t matrixSslConfigCheck(const char *callerConfig)
+{
+    const char *own_str = matrixSslConfigGetInternalStr();
+    size_t own_len = Strlen(own_str);
+    size_t caller_len = Strlen(callerConfig);
+
+    if (own_len != caller_len)
+    {
+        psTraceErrr("Configuration string length mismatch\n");
+        psTraceIntInfo("Internal: %zu\n", own_len);
+        psTraceIntInfo("Caller  : %zu\n", caller_len);
+        return PS_FAILURE;
+    }
+
+    if (Strcmp(own_str, callerConfig))
+    {
+        psTraceErrr("Configuration string mismatch\n");
+        return PS_FAILURE;
+    }
+
+    return PS_SUCCESS;
+}
+
+# ifdef USE_RFC5929_TLS_UNIQUE_CHANNEL_BINDINGS
+psRes_t matrixSslGetFinished(
+        const ssl_t *ssl,
+        unsigned char *finished,
+        psSizeL_t *finishedLen)
+{
+    if (ssl == NULL || finished == NULL || finishedLen == NULL)
+    {
+        return PS_ARG_FAIL;
+    }
+    if (!matrixSslHandshakeIsComplete(ssl))
+    {
+        *finishedLen = 0;
+        return PS_FAILURE;
+    }
+    if (*finishedLen < ssl->myFinishedLen)
+    {
+        *finishedLen = ssl->myFinishedLen;
+        return PS_OUTPUT_LENGTH;
+    }
+    memcpy(finished, ssl->myFinished, ssl->myFinishedLen);
+    *finishedLen = ssl->myFinishedLen;
+
+    return MATRIXSSL_SUCCESS;
+}
+
+psRes_t matrixSslGetPeerFinished(
+        const ssl_t *ssl,
+        unsigned char *finished,
+        psSizeL_t *finishedLen)
+{
+    if (ssl == NULL || finished == NULL || finishedLen == NULL)
+    {
+        return PS_ARG_FAIL;
+    }
+    if (!matrixSslHandshakeIsComplete(ssl))
+    {
+        *finishedLen = 0;
+        return PS_FAILURE;
+    }
+    if (*finishedLen < ssl->peerFinishedLen)
+    {
+        *finishedLen = ssl->peerFinishedLen;
+        return PS_OUTPUT_LENGTH;
+    }
+    memcpy(finished, ssl->peerFinished, ssl->peerFinishedLen);
+    *finishedLen = ssl->peerFinishedLen;
+
+    return MATRIXSSL_SUCCESS;
+}
+
+psRes_t matrixSslGetTlsUniqueChannelBindings(
+        const ssl_t *ssl,
+        unsigned char *tls_unique,
+        psSizeL_t *tls_unique_len)
+{
+    if (ssl == NULL || tls_unique == NULL || tls_unique_len == NULL)
+    {
+        return PS_ARG_FAIL;
+    }
+    if (matrixSslIsResumedSession(ssl))
+    {
+        /* In resumed handshakes, the server's Finished is the first one. */
+        if (MATRIX_IS_CLIENT(ssl))
+        {
+            return matrixSslGetPeerFinished(ssl, tls_unique, tls_unique_len);
+        }
+        else
+        {
+            return matrixSslGetPeerFinished(ssl, tls_unique, tls_unique_len);
+        }
+    }
+    else
+    {
+        /* In standard handshakes, client's Finished is the first one. */
+        if (MATRIX_IS_CLIENT(ssl))
+        {
+            return matrixSslGetFinished(ssl, tls_unique, tls_unique_len);
+        }
+        else
+        {
+            return matrixSslGetPeerFinished(ssl, tls_unique, tls_unique_len);
+        }
+   }
+}
+# endif
 
 /******************************************************************************/

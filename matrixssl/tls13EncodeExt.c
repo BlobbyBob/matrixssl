@@ -273,6 +273,10 @@ static int32_t tls13WriteClientSupportedGroups(ssl_t *ssl, psDynBuf_t *extBuf)
     while (ssl->tls13SupportedGroups[i] != 0)
     {
         psDynBufAppendAsBigEndianUint16(&workBuf, ssl->tls13SupportedGroups[i]);
+        if (psIsEcdheGroup(ssl->tls13SupportedGroups[i]))
+        {
+            ssl->sec.tls13SentEcdheGroup = PS_TRUE;
+        }
         i++;
     }
 
@@ -1119,10 +1123,13 @@ int32 tls13WriteServerHelloExtensions(ssl_t *ssl,
         return rc;
     }
 # ifndef USE_ONLY_PSK_CIPHER_SUITE
-    rc = tls13WriteServerKeyShare(ssl, extBuf, isHelloRetryRequest);
-    if (rc < 0)
+    if (ssl->sec.tls13ChosenPskMode != psk_keyex_mode_psk_ke)
     {
-        return rc;
+        rc = tls13WriteServerKeyShare(ssl, extBuf, isHelloRetryRequest);
+        if (rc < 0)
+        {
+            return rc;
+        }
     }
 # endif
     if (ssl->sec.tls13UsingPsk)
@@ -1352,6 +1359,22 @@ out_internal_error:
 #  endif /* USE_OCSP_RESPONSE */
 
 #  ifdef USE_CLIENT_SIDE_SSL
+int32_t tlsWriteEcPointFormats(ssl_t *ssl,
+        psDynBuf_t *extBuf)
+{
+    /* See RFC 8422, Section 5.1.2. */
+    unsigned char octets[] =
+    {
+        0x00, 0x0b, 0x00, 0x02, 0x01, 0x00
+    };
+
+    psTracePrintExtensionCreate(ssl, EXT_ELLIPTIC_POINTS);
+
+    psDynBufAppendOctets(extBuf, octets, sizeof(octets));
+
+    return PS_SUCCESS;
+}
+
 int32_t tls13WriteClientHelloExtensions(ssl_t *ssl,
         psDynBuf_t *extBuf,
         tlsExtension_t *userExt,
@@ -1402,6 +1425,7 @@ int32_t tls13WriteClientHelloExtensions(ssl_t *ssl,
     {
         return rc;
     }
+
 # endif /* USE_ONLY_PSK_CIPHER_SUITE */
     if (ssl->tls13IncorrectDheKeyShare)
     {
@@ -1465,6 +1489,28 @@ int32_t tls13WriteClientHelloExtensions(ssl_t *ssl,
             return rc;
         }
 #  endif
+        /*
+          RFC 8422, Section 5.1.2:
+
+          "For backwards compatibility purposes, the point format list extension
+          MAY still be included and contain exactly one value: the uncompressed
+          point format (0)."
+
+          Some servers always send an EC Point Formats extension in ServerHello.
+          According to RFC 8446, Section 6.2., the proper reponse to such an
+          unsolicited ServerHello extension is to send the unsupported_extension
+          alert. To allow handshaking with such misbehaving servers, we include
+          the extension in ClientHello. This is allowed by RFC 8422.
+        */
+        if (ssl->sec.tls13SentEcdheGroup)
+        {
+            rc = tlsWriteEcPointFormats(ssl, extBuf);
+            if (rc < 0)
+            {
+                return rc;
+            }
+            ssl->extFlags.req_elliptic_points = 1;
+        }
     }
 
     if (ssl->sec.tls13SessionPskList != NULL ||

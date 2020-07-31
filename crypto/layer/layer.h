@@ -412,7 +412,9 @@
     The memory savings for optimizing for ram is around 50%
  */
 #   if defined(USE_MATRIX_RSA) || defined(USE_MATRIX_ECC) || defined(USE_MATRIX_DH)
-#    define PS_PUBKEY_OPTIMIZE_FOR_SMALLER_RAM
+#    if !defined(PS_PUBKEY_OPTIMIZE_FOR_FASTER_SPEED)
+#     define PS_PUBKEY_OPTIMIZE_FOR_SMALLER_RAM
+#    endif
 #   endif
 
 #  endif /* OPTIMIZE_SIZE */

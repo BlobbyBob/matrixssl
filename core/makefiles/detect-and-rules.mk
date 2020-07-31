@@ -8,6 +8,14 @@
 # Allow building inclusion paths relative to location of common.mk file.
 #COMMON_MK_PATH:=$(dir $(lastword $(MAKEFILE_LIST)))
 
+#	clang on MACOS does not support -print-multiarch
+ifeq ($(shell uname),Darwin)
+PRINT_MULTIARCH =
+else
+PRINT_MULTIARCH = -print-multiarch
+endif
+
+
 # Find core library.
 CORE_PATH:=$(patsubst %/,%/..,$(dir $(lastword $(MAKEFILE_LIST))))
 include $(CORE_PATH)/Makefile.inc
@@ -68,6 +76,24 @@ endif
 # Execute commands in environment with default locale.
 CLEAN_ENV=LC_ALL=POSIX
 
+ifdef USE_FUZZ
+ # Use https://github.com/google/honggfuzz
+ CC=hfuzz-clang
+ CXX="$CC"++
+ # Use address sanitizer, but disable leak checker as it does not work well
+ #  (HINT: LeakSanitizer does not work under ptrace (strace, gdb, etc))
+ #  Also fuzzer does not have a LLVMFuzzerDeInitialize
+ #  api to clean up so there are leaks.
+ HFUZZ_CC_ASAN=1
+ ASAN_OPTIONS="detect_leaks=0"
+ export HFUZZ_CC_ASAN ASAN_OPTIONS
+ MATRIX_DEBUG:=1
+ # -mssse3 added here as temporary hack to get chacha compiling
+ CFLAGS+=-DUSE_FUZZ -mssse3
+ # clang does not support -print-multiarch
+ CCARCH:=$(shell $(CLEAN_ENV) $(CC) -dumpmachine)
+endif
+
 ## Based on the value of CC, determine the target, eg.
 #  x86_64-redhat-linux
 #  i686-linux-gnu
@@ -81,7 +107,7 @@ CLEAN_ENV=LC_ALL=POSIX
 #  i386-redhat-linux
 #  x86_64-redhat-linux
 ifeq '$(CCARCH)' ''
-CCARCH:=$(shell $(CLEAN_ENV) $(CC) $(CFLAGS_ARCHITECTURE_VARIANT) $(FLAGS_ARCHITECTURE_VARIANT) -print-multiarch)
+CCARCH:=$(shell $(CLEAN_ENV) $(CC) $(CFLAGS_ARCHITECTURE_VARIANT) $(FLAGS_ARCHITECTURE_VARIANT) $(PRINT_MULTIARCH))
 ifeq '$(CCARCH)' ''
 CCARCH:=$(shell $(CLEAN_ENV) $(CC) -v 2>&1 | sed -n '/Target: / s/// p')
 ifeq '$(CCARCH)' ''
@@ -90,7 +116,7 @@ ifeq '$(CCARCH)' ''
 CCARCH:=$(shell $(CLEAN_ENV) $(CC) -dumpmachine)
 ifeq '$(CCARCH)' ''
 $(error Unable to determine compiler architecture.
-$(CC) $(CFLAGS_ARCHITECTURE_VARIANT) $(FLAGS_ARCHITECTURE_VARIANT) -print-multiarch or $(CC) -v or $(CC) -dumpmachine does not work. Please, provide CCARCH manually via an environment variable.)
+$(CC) $(CFLAGS_ARCHITECTURE_VARIANT) $(FLAGS_ARCHITECTURE_VARIANT) $(PRINT_MULTIARCH) or $(CC) -v or $(CC) -dumpmachine does not work. Please, provide CCARCH manually via an environment variable.)
 endif
 endif
 endif
@@ -421,7 +447,6 @@ LIBCORE_S_A=$(CORE_PATH)/libcore_s$(A)
 LIBCRYPT_S_A=$(MATRIXSSL_ROOT)/crypto/libcrypt_s$(A)
 LIBCMS_S_A=$(MATRIXSSL_ROOT)/crypto/cms/libcms_s$(A)
 LIBSSL_S_A=$(MATRIXSSL_ROOT)/matrixssl/libssl_s$(A)
-LIBROT_S_A=$(MATRIXSSL_ROOT)/crypto-rot/rot/lib/libdriver_val_up$(A)
 
 # Optional external libraries
 LIBZ=-lz

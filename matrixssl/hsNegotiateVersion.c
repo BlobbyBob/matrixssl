@@ -448,6 +448,16 @@ int32_t checkSupportedVersions(ssl_t *ssl)
             SET_NGTD_VER(ssl, v_tls_1_3);
             return PS_SUCCESS;
         }
+# ifndef USE_TLS_1_3_DRAFT_SPEC
+        /* Don't negotiate a TLS 1.3 draft version unless enabled
+           from compile-time config. */
+        forbiddenVer[i++] = TLS_1_3_DRAFT_22_VER;
+        forbiddenVer[i++] = TLS_1_3_DRAFT_23_VER;
+        forbiddenVer[i++] = TLS_1_3_DRAFT_24_VER;
+        forbiddenVer[i++] = TLS_1_3_DRAFT_26_VER;
+        forbiddenVer[i++] = TLS_1_3_DRAFT_28_VER;
+        forbiddenVerLen = i;
+# endif
     }
 
     /* Choose version from the intersection of our and the client's

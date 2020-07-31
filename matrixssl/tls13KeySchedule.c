@@ -342,11 +342,21 @@ int32_t tls13DeriveHandshakeTrafficSecrets(ssl_t *ssl)
     psTraceBytes("\"derived\" secret", derivedSecret, secretLen);
 #endif
 
-    rc = tls13GenSharedSecret(ssl, &sharedSecret, &sharedSecretLen);
-    if (rc < 0)
+    if (ssl->sec.tls13ChosenPskMode == psk_keyex_mode_psk_ke)
     {
-        ssl->err = SSL_ALERT_INTERNAL_ERROR;
-        return rc;
+        /* psk_ke uses a dummy all-zero shared secret. */
+        sharedSecret = psMalloc(ssl->hsPool, secretLen);
+        Memset(sharedSecret, 0, secretLen);
+        sharedSecretLen = secretLen;
+    }
+    else
+    {
+        rc = tls13GenSharedSecret(ssl, &sharedSecret, &sharedSecretLen);
+        if (rc < 0)
+        {
+            ssl->err = SSL_ALERT_INTERNAL_ERROR;
+            return rc;
+        }
     }
 
     /* HKDF-Extract(ECDHE, derivedSecret) == Handshake Secret */

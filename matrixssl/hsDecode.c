@@ -48,6 +48,100 @@
 /******************************************************************************/
 
 #ifdef USE_SERVER_SIDE_SSL
+
+int32 parseSslv2ClientHelloContent(ssl_t *ssl,
+        unsigned char **readPos,
+        unsigned char *end,
+        uint32 *suiteLen,
+        unsigned char **suiteStart)
+{
+# ifdef ALLOW_SSLV2_CLIENT_HELLO_PARSE
+    /*
+      Parse a SSLv2 ClientHello message contents, starting from the
+      cipher_spec_length field. See RFC 5246, Appendix E.2. for the
+      accepted SSLv2 ClientHello format.
+
+      struct {
+      unit8 msg_type;
+      Version version;
+      uint16 cipher_spec_length;
+      uint16 session_id_length;
+      uint16 challenge_length;
+      V2CipherSpec cipher_specs[V2ClientHello.cipher_spec_length];
+      opaque session_id[V2ClientHello.session_id_length];
+      Random challenge;
+      } V2ClientHello;
+    */
+    uint32_t challengeLen;
+    unsigned char *c = *readPos;
+
+    psTraceInfo("Parsing SSLv2 ClientHello\n");
+    if (end - c < 6)
+    {
+        ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
+        psTraceErrr("Can't parse hello message\n");
+        return MATRIXSSL_ERROR;
+    }
+    /* uint16 cipher_spec_length; */
+    *suiteLen = *c << 8; c++;
+    *suiteLen += *c; c++;
+    if (*suiteLen == 0 || *suiteLen % 3 != 0)
+    {
+        ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
+        psTraceErrr("Illegal ciphersuite length in SSLv2 ClientHello\n");
+        return MATRIXSSL_ERROR;
+    }
+    /* uint16 session_id_length; */
+    ssl->sessionIdLen = *c << 8; c++;
+    ssl->sessionIdLen += *c; c++;
+    if (ssl->sessionIdLen > 0)
+    {
+        /* We don't allow session IDs for v2 ClientHellos. */
+        ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
+        psTraceErrr("SSLv2 sessions not allowed\n");
+        return MATRIXSSL_ERROR;
+    }
+    /* uint16_t challenge_length; */
+    challengeLen = *c << 8; c++;
+    challengeLen += *c; c++;
+    if (challengeLen != 32) /* Allow only 32-bit, as per RFC 5246, E.2. */
+    {
+        psTraceErrr("Bad challenge length\n");
+        ssl->err = SSL_ALERT_DECODE_ERROR;
+        return MATRIXSSL_ERROR;
+    }
+    /* Validate the three lengths that were just sent to us, don't
+       want any buffer overflows while parsing the remaining data */
+    if ((uint32) (end - c) != *suiteLen + ssl->sessionIdLen +
+            challengeLen)
+    {
+        ssl->err = SSL_ALERT_DECODE_ERROR;
+        psTraceErrr("Malformed SSLv2 ClientHello\n");
+        return MATRIXSSL_ERROR;
+    }
+    /*
+      V2CipherSpec cipher_specs[V2ClientHello.cipher_spec_length];
+      Jump over the vector; ciphersuites will be parsed later.
+    */
+    *suiteStart = c;
+    c += *suiteLen;
+
+    /* Random challenge; */
+    Memset(ssl->sec.clientRandom, 0x0, SSL_HS_RANDOM_SIZE);
+    Memcpy(ssl->sec.clientRandom + (SSL_HS_RANDOM_SIZE - challengeLen),
+            c, challengeLen);
+    c += challengeLen;
+
+    *readPos = c;
+
+    return MATRIXSSL_SUCCESS;
+# else
+    ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
+    psTraceErrr("SSLV2 CLIENT_HELLO not supported.\n");
+    return MATRIXSSL_ERROR;
+# endif
+}
+
 int32 parseClientHello(ssl_t *ssl, unsigned char **cp, unsigned char *end)
 {
     unsigned char *suiteStart, *suiteEnd;
@@ -336,82 +430,11 @@ int32 parseClientHello(ssl_t *ssl, unsigned char **cp, unsigned char *end)
     }
     else
     {
-#if defined(USE_INTERCEPTOR) || defined(ALLOW_SSLV2_CLIENT_HELLO_PARSE)
-        /*      Parse a SSLv2 ClientHello message.  The same information is
-            conveyed but the order and format is different.
-            First get the cipher suite length, session id length and challenge
-            (client random) length - all two byte values, network byte order */
-        uint32_t challengeLen;
-        psTraceInfo("Parsing SSLv2 ClientHello\n");
-        if (end - c < 6)
-        {
-            ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-            psTraceErrr("Can't parse hello message\n");
-            return MATRIXSSL_ERROR;
-        }
-        suiteLen = *c << 8; c++;
-        suiteLen += *c; c++;
-        if (suiteLen == 0 || suiteLen % 3 != 0)
-        {
-            ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-            psTraceErrr("Can't parse hello message\n");
-            return MATRIXSSL_ERROR;
-        }
-        ssl->sessionIdLen = *c << 8; c++;
-        ssl->sessionIdLen += *c; c++;
-        /* A resumed session would use a SSLv3 ClientHello, not SSLv2. */
-        if (ssl->sessionIdLen != 0)
-        {
-            ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-            psTraceErrr("Bad resumption request\n");
-            return MATRIXSSL_ERROR;
-        }
-        challengeLen = *c << 8; c++;
-        challengeLen += *c; c++;
-#ifdef ALLOW_SSLV2_CLIENT_HELLO_PARSE
-        if (challengeLen != 32) /* Allow only 32-bit, as per RFC 2246, E.2. */
-#else
-        if (challengeLen < 16 || challengeLen > 32)
-#endif
-        {
-            psTraceErrr("Bad challenge length\n");
-            ssl->err = SSL_ALERT_DECODE_ERROR;
-            return MATRIXSSL_ERROR;
-        }
-        /* Validate the three lengths that were just sent to us, don't
-            want any buffer overflows while parsing the remaining data */
-        if ((uint32) (end - c) != suiteLen + ssl->sessionIdLen +
-            challengeLen)
-        {
-            ssl->err = SSL_ALERT_DECODE_ERROR;
-            psTraceErrr("Malformed SSLv2 clientHello\n");
-            return MATRIXSSL_ERROR;
-        }
-        /* Parse the cipher suite list similar to the SSLv3 method, except
-            each suite is 3 bytes, instead of two bytes.  We define the suite
-            as an integer value, so either method works for lookup.
-            We don't support session resumption from V2 handshakes, so don't
-            need to worry about matching resumed cipher suite. */
-        suiteStart = c;
-
-        /*      We don't allow session IDs for v2 ClientHellos */
-        if (ssl->sessionIdLen > 0)
-        {
-            ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-            psTraceErrr("SSLv2 sessions not allowed\n");
-            return MATRIXSSL_ERROR;
-        }
-        /*      The client random (between 16 and 32 bytes) fills the least
-            significant bytes in the (always) 32 byte SSLv3 client random */
-        Memset(ssl->sec.clientRandom, 0x0, SSL_HS_RANDOM_SIZE);
-        Memcpy(ssl->sec.clientRandom + (SSL_HS_RANDOM_SIZE - challengeLen),
-            c, challengeLen);
-        c += challengeLen;
-# else
-        ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
-        psTraceErrr("SSLV2 CLIENT_HELLO not supported.\n");
-        return MATRIXSSL_ERROR;
-# endif
+        rc = parseSslv2ClientHelloContent(ssl,
+            &c,
+            end,
+            &suiteLen,
+            &suiteStart);
     }
 
 #ifdef USE_TLS_1_3
@@ -1584,7 +1607,8 @@ int32 parseServerHello(ssl_t *ssl, int32 hsLen, unsigned char **cp,
     {
         if (ssl->sessionIdLen > 0)
         {
-            if (Memcmp(ssl->sessionId, c, sessionIdLen) == 0)
+            if (sessionIdLen == ssl->sessionIdLen &&
+                    Memcmp(ssl->sessionId, c, sessionIdLen) == 0)
             {
                 ssl->flags |= SSL_FLAGS_RESUMED;
             }
@@ -1639,6 +1663,7 @@ int32 parseServerHello(ssl_t *ssl, int32 hsLen, unsigned char **cp,
 # endif
         }
     }
+
     /* Next is the two byte cipher suite */
     if (end - c < 2)
     {
@@ -2516,21 +2541,21 @@ int32 parseCertificateRequest(ssl_t *ssl,
             return MATRIXSSL_ERROR;
         }
         /* Parse supported_signature_algorithms list. */
-        ssl->serverSigAlgs = 0;
+        ssl->peerSigAlg = 0;
         while (len >= 2)
         {
             uint32_t val = HASH_SIG_MASK(c[0], c[1]);
             keySelect->peerSigAlgs[nSigAlg++] = val;
-            ssl->serverSigAlgs |= val;
+            ssl->peerSigAlg |= val;
             c += 2;
             len -= 2;
         }
         keySelect->peerSigAlgsLen = nSigAlg;
-        keySelect->peerSigAlgMask = ssl->serverSigAlgs;
+        keySelect->peerSigAlgMask = ssl->peerSigAlg;
         c += len;
         psTracePrintSigAlgs(INDENT_HS_MSG,
                 "supported_signature_algorithms",
-                ssl->serverSigAlgs,
+                ssl->peerSigAlg,
                 PS_TRUE);
     }
     else
@@ -2698,6 +2723,10 @@ int32 parseFinished(ssl_t *ssl, int32 hsLen,
     Memcpy(ssl->peerVerifyData, c, hsLen);
     ssl->peerVerifyDataLen = hsLen;
 #endif /* ENABLE_SECURE_REHANDSHAKES */
+#ifdef USE_RFC5929_TLS_UNIQUE_CHANNEL_BINDINGS
+    Memcpy(ssl->peerFinished, c, hsLen);
+    ssl->peerFinishedLen = hsLen;
+#endif
     c += hsLen;
     ssl->hsState = SSL_HS_DONE;
     /*  Now that we've parsed the Finished message, if we're a resumed

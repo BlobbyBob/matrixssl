@@ -190,9 +190,8 @@ enum PACKED
             | v_tls_1_3_draft_28),
     /** Any supported version that uses an explicit IV in CBC mode. */
     v_tls_explicit_iv = (v_dtls_1_0 | v_dtls_1_2 | v_tls_1_1 | v_tls_1_2),
-    /** Any recommended TLS version. TODO: remove draft #28 once the
-        RFC version becomes widely supported enough. */
-    v_tls_recommended = (v_tls_1_2 | v_tls_1_3 | v_tls_1_3_draft_28),
+    /** Any recommended TLS version. */
+    v_tls_recommended = (v_tls_1_2 | v_tls_1_3),
     /** Any recommended DTLS version. */
     v_dtls_recommended = v_dtls_1_2,
     /** Any version that allows SHA-2 based ciphersuites. */

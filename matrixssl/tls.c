@@ -55,6 +55,10 @@
 /*#   define DEBUG_TLS_LOG_SECRETS */
 #  endif
 
+#  ifdef DEBUG_TLS_LOG_SECRETS
+#   warning "Do NOT enable DEBUG_TLS_LOG_SECRETS in production builds"
+#  endif
+
 static int32_t genKeyBlock(ssl_t *ssl)
 {
     unsigned char msSeed[SSL_HS_RANDOM_SIZE * 2 + LABEL_SIZE];
@@ -164,7 +168,17 @@ static int32_t genKeyBlock(ssl_t *ssl)
 #  endif
     }
 
+
     rc = SSL_HS_MASTER_SIZE;
+
+#   ifdef DEBUG_TLS_LOG_SECRETS
+        psTraceBytes("ssl->sec.masterSecret",
+                     ssl->sec.masterSecret,
+                     SSL_HS_MASTER_SIZE);
+        psTraceBytes("ssl->sec.keyBlock",
+                     ssl->sec.keyBlock,
+                     reqKeyLen);
+#   endif
 
 L_RETURN:
     memzero_s(msSeed, sizeof(msSeed));

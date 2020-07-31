@@ -556,6 +556,75 @@ void psPrintSigAlgs(psSize_t indentLevel,
 }
 # endif /* USE_TLS_1_3_ONLY */
 
+void psPrintMatrixSigAlg(psSize_t indentLevel,
+        const char *where,
+        int32_t alg,
+        psBool_t addNewline)
+{
+    tlsTraceIndent(indentLevel, NULL);
+
+    if (where)
+    {
+        tlsTraceStr("%s: ", where);
+    }
+
+    switch(alg)
+    {
+    case OID_MD2_RSA_SIG:
+        tlsTrace("rsa_md2");
+        break;
+    case OID_MD4_RSA_SIG:
+        tlsTrace("rsa_md4");
+        break;
+    case OID_MD5_RSA_SIG:
+        tlsTrace("rsa_md5");
+        break;
+    case OID_SHA1_RSA_SIG:
+        tlsTrace("rsa_sha1");
+        break;
+    case OID_SHA224_RSA_SIG:
+        tlsTrace("rsa_sha224");
+        break;
+    case OID_SHA256_RSA_SIG:
+        tlsTrace("rsa_sha256");
+        break;
+    case OID_SHA384_RSA_SIG:
+        tlsTrace("rsa_sha384");
+        break;
+    case OID_SHA512_RSA_SIG:
+        tlsTrace("rsa_sha512");
+        break;
+    case OID_SHA1_DSA_SIG:
+        tlsTrace("dsa_sha1");
+        break;
+    case OID_SHA1_ECDSA_SIG:
+        tlsTrace("ecdsa_sha1");
+        break;
+    case OID_SHA224_ECDSA_SIG:
+        tlsTrace("ecdsa_sha224");
+        break;
+    case OID_SHA256_ECDSA_SIG:
+        tlsTrace("ecdsa_sha256");
+        break;
+    case OID_SHA384_ECDSA_SIG:
+        tlsTrace("ecdsa_sha384");
+        break;
+    case OID_SHA512_ECDSA_SIG:
+        tlsTrace("ecdsa_sha512");
+        break;
+    case OID_RSA_TLS_SIG_ALG:
+        tlsTrace("rsa_md5sha1");
+        break;
+    default:
+        tlsTraceInt("Unknown/unexpected sig alg: %d", alg);
+    }
+
+    if (addNewline)
+    {
+        tlsTrace("\n");
+    }
+}
+
 void psPrintTls13SigAlg(psSize_t indentLevel,
         const char *where,
         uint16_t alg,
@@ -1944,7 +2013,7 @@ void matrixSslPrintHSDetails(ssl_t *ssl)
             {
                 if (ssl->sec.tls13ChosenPskMode == psk_keyex_mode_psk_ke)
                 {
-                    tlsTrace(" Keyex mode: PSK only\n");
+                    tlsTrace("  Keyex mode: PSK only\n");
                 }
                 else
                 {
@@ -2045,7 +2114,8 @@ void matrixSslPrintHSDetails(ssl_t *ssl)
                 tlsTrace("  No client authentication\n");
             }
 # ifdef USE_IDENTITY_CERTIFICATES
-            if (!RESUMED_HANDSHAKE(ssl))
+            if (!RESUMED_HANDSHAKE(ssl) &&
+                !(ssl->flags & SSL_FLAGS_PSK_CIPHER))
             {
                 if (MATRIX_IS_SERVER(ssl))
                 {
