@@ -6,7 +6,7 @@
  *      Uses a single, hardcoded RSA identity.  No client authentication.
  */
 /*
- *      Copyright (c) 2013-2017 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2017 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -19,8 +19,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -48,6 +48,7 @@
 
 #include "app.h"
 #include "matrixssl/matrixsslApi.h"
+#include "osdep.h"
 #include "core/psUtil.h"
 #include "osdep_sys_socket.h"
 #include "osdep_sys_types.h"
@@ -370,6 +371,7 @@ out:
 
     return rc;
 }
+
 /******************************************************************************/
 /*
     Non-blocking socket event handler
@@ -1223,6 +1225,7 @@ static int32 process_cmd_options(int32 argc, char **argv)
     g_disabledCiphers = 0;
 
     opterr = 0;
+    optind = 1;
     while ((optionChar = getopt(argc,
                             argv,
                             "c:d:g:a:Bb:AD:hKk:n:oOp:P:v:V:x:r:S:C:W:E:")) != -1)
@@ -1386,6 +1389,7 @@ static int32 process_cmd_options(int32 argc, char **argv)
         case 'v':
             /* Single version. */
             version = matrixSslVersionFromMinorDigit(atoi(optarg));
+
             if (!matrixSslTlsVersionRangeSupported(version,
                             version))
             {
@@ -1870,7 +1874,7 @@ static SOCKET lsocketListen(short port, int32 *err)
 static int setSocketOptions(SOCKET fd)
 {
     int rc;
-
+    
 #  ifdef POSIX
     if (fcntl(fd, F_SETFD, FD_CLOEXEC) < 0)
     {
@@ -1967,5 +1971,6 @@ int main(int argc, char **argv)
     Printf("You need to #define MATRIX_USE_FILE_SYSTEM for this test\n");
     return 1;
 }
+
 
 #endif /* MATRIX_USE_FILE_SYSTEM */

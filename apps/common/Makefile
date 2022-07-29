@@ -1,7 +1,7 @@
 #
 #   Makefile for common apps code
 #
-#	Copyright (c) 2013-2016 INSIDE Secure Corporation. All Rights Reserved.
+#	Copyright (c) 2013-2016 Rambus Inc. All Rights Reserved.
 #
 
 MATRIXSSL_ROOT:=../..

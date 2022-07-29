@@ -6,7 +6,7 @@
  *      and below.
  */
 /*
- *      Copyright (c) 2013-2018 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -19,8 +19,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -317,6 +317,13 @@ psRes_t tlsPrepareSkeSignature(ssl_t *ssl,
     }
 # endif
 
+# if defined(USE_SM2) && defined(USE_SM3)
+    if (skeSigAlg == OID_SM3_SM2_SIG)
+    {
+        needPreHash = PS_FALSE;
+    }
+# endif
+
     if (needPreHash)
     {
         /* Reserve space for the hash of signed_params. */
@@ -325,7 +332,6 @@ psRes_t tlsPrepareSkeSignature(ssl_t *ssl,
         {
             return PS_MEM_FAIL;
         }
-
         /* Compute the hash. */
         rc = computeSkeHash(ssl,
                 &digestCtx,
@@ -520,6 +526,12 @@ psRes_t tlsMakeSkeSignature(ssl_t *ssl,
         ssl->ecdsaSizeChange = 0;
 #    endif
         opts.flags |= PS_SIGN_OPTS_ECDSA_INCLUDE_SIZE;
+# if defined(USE_SM2) && defined(USE_SM3)
+        if (privKey->key.ecc.curve->curveId == IANA_CURVESM2)
+        {
+           opts.flags |= PS_SIGN_OPTS_SM2_SIGN;
+        }
+# endif
         break;
 # endif /* USE_ECC_CIPHER_SUITE */
     default:
@@ -692,6 +704,8 @@ psResSize_t tlsSigAlgToHashLen(uint16_t alg)
     case sigalg_rsa_pss_pss_sha512:
     case sigalg_ecdsa_secp521r1_sha512:
         return SHA512_HASH_SIZE;
+    case sigalg_sm2sig_sm3:
+        return SM3_HASH_SIZE;
     default:
         return PS_UNSUPPORTED_FAIL;
     }
@@ -724,6 +738,9 @@ int32_t tlsSigAlgToMatrix(uint16_t alg)
         return OID_SHA384_ECDSA_SIG;
     case sigalg_ecdsa_secp521r1_sha512:
         return OID_SHA512_ECDSA_SIG;
+    case sigalg_sm2sig_sm3:
+    case 0x0707:    /*in tls1.2 case*/
+        return OID_SM3_SM2_SIG;
     default:
         return PS_UNSUPPORTED_FAIL;
     }
@@ -780,6 +797,14 @@ int32_t tlsVerify(ssl_t *ssl,
         }
         sigAlgTls = *c << 8; c++;
         sigAlgTls += *c; c++;
+# if defined(USE_SM2) && defined(USE_SM3)
+        if (sigAlgTls == 0x0707)
+        {
+            sigAlgTls = sigalg_sm2sig_sm3;
+            opts->noPreHash = PS_TRUE;
+        }
+# endif
+
         if (tlsIsSupportedRsaSigAlg(sigAlgTls))
         {
             useRsa = PS_TRUE;
@@ -928,6 +953,12 @@ int32_t tlsVerify(ssl_t *ssl,
     {
         opts->msgIsDigestInfo = PS_TRUE;
     }
+# if defined(USE_SM2) && defined(USE_SM3)
+    if (sigAlgTls == sigalg_sm2sig_sm3)
+    {
+        opts->msgIsDigestInfo = PS_FALSE;
+    }
+# endif
     if (sigAlgTls == 0)
     {
         matrixSigAlg = useRsa ? OID_RSA_TLS_SIG_ALG : OID_SHA1_ECDSA_SIG;
@@ -1038,6 +1069,10 @@ psBool_t peerSupportsSigAlg(int32_t sigAlg,
     else if (sigAlg == OID_SHA512_ECDSA_SIG)
     {
         yes = ((peerSigAlgs & HASH_SIG_SHA512_ECDSA_MASK) != 0);
+    }
+    else if (sigAlg == OID_SM3_SM2_SIG)
+    {
+        yes = ((peerSigAlgs & HASH_SIG_SM3_SM2_MASK) != 0);
     }
     else
     {
@@ -1151,6 +1186,13 @@ psBool_t weSupportSigAlg(int32_t sigAlg,
         {
 #ifdef USE_SHA512
             we_support = 1;
+#endif
+        }
+        else if (sigAlg == OID_SM3_SM2_SIG)
+        {
+#if defined(USE_SM2) && defined(USE_SM3)
+            we_support = 1;
+            is_non_fips =1;
 #endif
         }
         else
@@ -1400,7 +1442,8 @@ int32_t chooseSigAlgInt(int32_t certSigAlg,
         if (certSigAlg != OID_SHA1_ECDSA_SIG &&
                 certSigAlg != OID_SHA256_ECDSA_SIG &&
                 certSigAlg != OID_SHA384_ECDSA_SIG &&
-                certSigAlg != OID_SHA512_ECDSA_SIG)
+                certSigAlg != OID_SHA512_ECDSA_SIG &&
+                certSigAlg != OID_SM3_SM2_SIG)
         {
             /* Pubkey is ECDSA, but cert is signed with RSA.
                Convert to corresponding ECDSA alg. */
@@ -1536,10 +1579,16 @@ int32_t getSignatureAndHashAlgorithmEncoding(uint16_t sigAlgOid,
         hLen = SHA512_HASH_SIZE;
         break;
 #endif
+#if defined(USE_SM2) && defined(USE_SM3)
+    case OID_SM3_SM2_SIG:
+        b1 = 0x7;
+        b2 = 0x7;
+        hLen = SM3_HASH_SIZE;
+        break;
+#endif
     default:
         return PS_UNSUPPORTED_FAIL; /* algorithm not supported */
     }
-
      if (octet1 && octet2 && hashSize)
      {
          *octet1 = b1;

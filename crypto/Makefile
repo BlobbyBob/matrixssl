@@ -1,7 +1,7 @@
 #
 #   Makefile for MatrixSSL crypto static library
 #
-#   Copyright (c) 2013-2018 INSIDE Secure Corporation. All Rights Reserved.
+#   Copyright (c) 2013-2018 Rambus Inc. All Rights Reserved.
 #
 
 MATRIXSSL_ROOT:=..
@@ -37,6 +37,7 @@ SRC:=\
 	keyformat/pem_decode_mem.c \
 	keyformat/pem_decode_file.c \
 	keyformat/pkcs.c \
+	keyformat/pbkdf2.c \
 	keyformat/x509.c \
 	layer/matrix.c \
 	math/pstm.c \

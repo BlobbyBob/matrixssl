@@ -7,7 +7,7 @@
  *      Iterates over all supported protocol versions and ciphersuites.
  */
 /*
- *      Copyright (c) 2014-2018 INSIDE Secure Corporation
+ *      Copyright (c) 2014-2018 Rambus Inc
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -20,8 +20,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -532,6 +532,12 @@ const static __THREAD testCipherSpec_t ciphers[] = {
 #ifdef USE_TLS_CHACHA20_POLY1305_SHA256
     CS(TLS_CHACHA20_POLY1305_SHA256),
 #endif
+#ifdef USE_TLS_AES_128_CCM_SHA256
+    CS(TLS_AES_128_CCM_SHA256),
+#endif
+#ifdef USE_TLS_AES_128_CCM_8_SHA256
+    CS(TLS_AES_128_CCM_8_SHA256),
+#endif
 
 /* RSA */
 # ifdef USE_TLS_RSA_WITH_AES_128_CBC_SHA
@@ -776,6 +782,10 @@ const static __THREAD testCipherSpec_t ciphers[] = {
 
 # ifdef USE_SSL_RSA_WITH_NULL_MD5
     CS(SSL_RSA_WITH_NULL_MD5),
+# endif
+
+# ifdef USE_TLS_RSA_WITH_NULL_SHA256
+    CS(TLS_RSA_WITH_NULL_SHA256),
 # endif
 
     { "NULL", 0 } /* must be last */

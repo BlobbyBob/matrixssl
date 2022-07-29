@@ -1,7 +1,7 @@
 #
 #	Makefile for core static library
 #
-#	Copyright (c) 2013-2017 INSIDE Secure Corporation. All Rights Reserved.
+#	Copyright (c) 2013-2017 Rambus Inc. All Rights Reserved.
 #
 
 ifeq ($(wildcard Makefile),)

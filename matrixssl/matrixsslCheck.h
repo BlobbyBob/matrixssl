@@ -5,7 +5,7 @@
  *      Configuration validation/sanity checks.
  */
 /*
- *      Copyright (c) 2013-2018 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -239,6 +239,14 @@ extern "C" {
 #  define USE_RSA_CIPHER_SUITE
 # endif
 
+# ifdef USE_TLS_RSA_WITH_NULL_SHA256
+#  ifndef USE_RSA
+#   error "Enable USE_RSA in cryptoConfig.h for TLS_RSA_WITH_NULL_SHA256 suite"
+#  endif
+#  define USE_SHA_MAC
+#  define USE_RSA_CIPHER_SUITE
+# endif
+
 
 /******************************************************************************/
 /*
@@ -249,7 +257,8 @@ extern "C" {
  */
 # ifdef USE_TLS_1_3
 
-#  if defined(USE_TLS_AES_256_GCM_SHA384) || defined(USE_TLS_AES_128_GCM_SHA256)
+#  if defined(USE_TLS_AES_256_GCM_SHA384) || defined(USE_TLS_AES_128_GCM_SHA256) ||\
+      defined(USE_TLS_AES_128_CCM_SHA256) || defined(USE_TLS_AES_128_CCM_8_SHA256)
 #    define USE_DHE_CIPHER_SUITE
 #    ifdef USE_RSA
 #     define USE_RSA_CIPHER_SUITE
@@ -270,6 +279,15 @@ extern "C" {
 #    define USE_TLS_1_3_CIPHER_SUITE
 #  endif
 
+#  if defined(USE_TLS_SM4_GCM_SM3) || defined(USE_TLS_SM4_CCM_SM3)
+#    define USE_SM2
+#    define USE_SM3
+#    define USE_SM4
+#    define USE_ECC_CIPHER_SUITE
+#    define USE_DHE_CIPHER_SUITE
+#    define USE_TLS_1_3_CIPHER_SUITE
+#  endif
+
 # endif /* USE_TLS_1_3 */
 
 # ifdef USE_TLS_1_2
@@ -278,6 +296,15 @@ extern "C" {
 #  endif
 #  ifndef USE_SHA256
 #   error "Enable USE_SHA256 in matrixsslConfig.h for TLS_1_2 support"
+#  endif
+
+#  if defined(USE_TLS_ECDHE_SM2_WITH_SMS4_SM3) || defined(USE_TLS_ECDHE_SM2_WITH_SMS4_SHA256) ||\
+      defined(USE_TLS_ECDHE_SM2_WITH_SMS4_GCM_SM3)
+#    define USE_SM2
+#    define USE_SM3
+#    define USE_SM4
+#    define USE_ECC_CIPHER_SUITE
+#    define USE_DHE_CIPHER_SUITE
 #  endif
 
 #  ifdef USE_TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256
@@ -1246,6 +1273,26 @@ typedef int32 psX509Cert_t;
 # endif
 #endif
 
+
+/* Check SM2/3/4 algorithms support */
+#if defined(USE_SM2)
+# if !defined(USE_SM3)
+#  error "SM2 SigAlg requires SM3 support."
+# endif
+# define USE_ECC
+#  error "Need to use CL for SM2 algorithms"
+#endif
+
+#if defined(USE_SM3)
+# define USE_HMAC
+# define USE_HMAC_SM3
+# define USE_TLS_PRF2
+#  error "Need to use CL for SM3 algorithms"
+#endif
+
+#if defined(USE_SM4)
+#  error "Need to use CL for SM4 algorithms"
+#endif
 
 # ifdef __cplusplus
 }

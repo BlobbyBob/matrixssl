@@ -5,7 +5,7 @@
  *      X.509 header.
  */
 /*
- *      Copyright (c) 2013-2017 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2017 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -695,6 +695,8 @@ typedef struct psCert
     uint16_t publicKeyDerOffsetIntoUnparsedBin;
     psSize_t publicKeyDerLen;
     uint16_t subjectKeyDerOffsetIntoUnparsedBin;
+    /* Set to PS_TRUE if validation ends to this certificate. */
+    psBool_t pathEnd;
     struct psCert *next;
 } psX509Cert_t;
 

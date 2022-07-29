@@ -5,7 +5,7 @@
  *      Header file for definitions used with crypto lib.
  */
 /*
- *      Copyright (c) 2013-2018 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -162,6 +162,30 @@ extern int32_t psGetPrngLocked(unsigned char *bytes, psSize_t size,
 # define OID_MD5_ALG_STR                  "1.2.840.113549.2.5"
 # define OID_MD5_ALG                      649
 # define OID_MD5_ALG_HEX                  "\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x05"
+# define OID_SM3_ALG_STR                  "1.2.156.10197.1.401"
+# define OID_SM3_ALG                      640
+# define OID_SM3_ALG_HEX                  "\x06\x08\x2A\x81\x1C\xCF\x55\x01\x83\x11"
+# define OID_HMAC_WITH_SHA1_STR           "1.2.840.113549.2.7"
+# define OID_HMAC_WITH_SHA1               (651 + OID_COLLISION)
+# define OID_HMAC_WITH_SHA1_HEX           "\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x07"
+# define OID_HMAC_WITH_SHA224_STR         "1.2.840.113549.2.8"
+# define OID_HMAC_WITH_SHA224             (652 + OID_COLLISION * 3)
+# define OID_HMAC_WITH_SHA224_HEX         "\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x08"
+# define OID_HMAC_WITH_SHA256_STR         "1.2.840.113549.2.9"
+# define OID_HMAC_WITH_SHA256             (653 + OID_COLLISION)
+# define OID_HMAC_WITH_SHA256_HEX         "\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x09"
+# define OID_HMAC_WITH_SHA384_STR         "1.2.840.113549.2.10"
+# define OID_HMAC_WITH_SHA384             (654 + OID_COLLISION * 2)
+# define OID_HMAC_WITH_SHA384_HEX         "\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x0A"
+# define OID_HMAC_WITH_SHA512_STR         "1.2.840.113549.2.11"
+# define OID_HMAC_WITH_SHA512             (655 + OID_COLLISION * 2)
+# define OID_HMAC_WITH_SHA512_HEX         "\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x0B"
+# define OID_HMAC_WITH_SHA512_224_STR     "1.2.840.113549.2.12"
+# define OID_HMAC_WITH_SHA512_224         (656 + OID_COLLISION * 2)
+# define OID_HMAC_WITH_SHA512_224_HEX     "\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x0C"
+# define OID_HMAC_WITH_SHA512_256_STR     "1.2.840.113549.2.13"
+# define OID_HMAC_WITH_SHA512_256         (657 + OID_COLLISION * 2)
+# define OID_HMAC_WITH_SHA512_256_HEX     "\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x0D"
 
 /* Signature algorithms */
 # define OID_MD2_RSA_SIG_STR              "1.2.840.113549.1.1.2"
@@ -215,6 +239,9 @@ extern int32_t psGetPrngLocked(unsigned char *bytes, psSize_t size,
 # define OID_SHA512_ECDSA_SIG_STR         "1.2.840.10045.4.3.4"
 # define OID_SHA512_ECDSA_SIG             526
 # define OID_SHA512_ECDSA_SIG_HEX         "\x06\x08\x2A\x86\x48\xCE\x3D\x04\x03\x04"
+# define OID_SM3_SM2_SIG_STR              "1.2.156.10197.1.501"
+# define OID_SM3_SM2_SIG                  740
+# define OID_SM3_SM2_SIG_HEX              "\x06\x08\x2A\x81\x1C\xCF\x55\x01\x83\x75"
 
 /* The SSL 3.0, TLS 1.0/1.1 MD5-SHA1 based signature scheme for RSA.
    Not based on an OID (because there isn't one).
@@ -240,6 +267,9 @@ extern int32_t psGetPrngLocked(unsigned char *bytes, psSize_t size,
 # define OID_ED25519_KEY_STR              "1.3.101.112"
 # define OID_ED25519_KEY_ALG              256
 # define OID_ED25519_KEY_ALG_HEX          "\x06\x03\x2B\x65\x70"
+# define OID_SM2_KEY_ALG_STR              "1.2.156.10197.1.301.3"
+# define OID_SM2_KEY_ALG                  (670 + OID_COLLISION)
+# define OID_SM2_KEY_ALG_HEX              "\x06\x09\x2A\x81\x1C\xCF\x55\x01\x82\x2D\x03"
 
 /* Encryption algorithms */
 # define OID_DES_EDE3_CBC_STR             "1.2.840.113549.3.7"
@@ -434,6 +464,7 @@ extern int32_t psGetPrngLocked(unsigned char *bytes, psSize_t size,
 #  define sigalg_rsa_pss_pss_sha512     0x080b
 #  define sigalg_rsa_pkcs1_sha1         0x0201
 #  define sigalg_ecdsa_sha1             0x0203
+#  define sigalg_sm2sig_sm3             0x0708
 
 /* TLS 1.3 NamedGroup values. */
 #  define namedgroup_secp192r1   0x0013
@@ -451,6 +482,7 @@ extern int32_t psGetPrngLocked(unsigned char *bytes, psSize_t size,
 #  define namedgroup_ffdhe4096   0x0102
 #  define namedgroup_ffdhe6144   0x0103
 #  define namedgroup_ffdhe8192   0x0104
+#  define namedgroup_curveSM2    0x0029
 
 /******************************************************************************/
 /* These values are all mutually exlusive bits to define Cipher flags */
@@ -461,14 +493,16 @@ extern int32_t psGetPrngLocked(unsigned char *bytes, psSize_t size,
 # define CRYPTO_FLAGS_SEED   (1 << 4)
 # define CRYPTO_FLAGS_IDEA   (1 << 5)
 # define CRYPTO_FLAGS_CHACHA (1 << 6) /* Short for CHACHA20_POLY1305_IETF */
+# define CRYPTO_FLAGS_SM4    (1 << 7)
 
 # define CRYPTO_FLAGS_SHA1   (1 << 8)
 # define CRYPTO_FLAGS_SHA2   (1 << 9)
 # define CRYPTO_FLAGS_SHA3   (1 << 10)
 # define CRYPTO_FLAGS_GCM    (1 << 11)
 # define CRYPTO_FLAGS_CCM    (1 << 12)
-# define CRYPTO_FLAGS_CCM8   (1 << 13)/* CCM mode with 8 byte ICV */
+# define CRYPTO_FLAGS_CCM_8  (1 << 13)/* CCM mode with 8 byte ICV */
 # define CRYPTO_FLAGS_MD5    (1 << 14)
+# define CRYPTO_FLAGS_SM3    (1 << 15)
 
 # define CRYPTO_FLAGS_TLS        (1 << 16)
 # define CRYPTO_FLAGS_TLS_1_1    (1 << 17)

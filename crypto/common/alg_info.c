@@ -6,7 +6,7 @@
  *      algorithms such as output length.
  */
 /*
- *      Copyright (c) 2018 INSIDE Secure Corporation
+ *      Copyright (c) 2018 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -19,8 +19,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -70,6 +70,8 @@ psResSize_t psGetOutputBlockLength(psCipherType_e alg)
         return SHA384_HASHLEN;
     case HASH_SHA512:
         return SHA512_HASHLEN;
+    case HMAC_SM3:
+        return SM3_HASHLEN;
     default:
         return PS_ARG_FAIL;
     }
@@ -99,6 +101,8 @@ psResSize_t psSigAlgToHashLen(int32_t sigAlg)
     case OID_SHA512_RSA_SIG:
     case OID_SHA512_ECDSA_SIG:
         return SHA512_HASH_SIZE;
+    case OID_SM3_SM2_SIG:
+        return SM3_HASH_SIZE;
 # ifdef USE_PKCS1_PSS
     /*
       The PSS IDs are not part of the same range as the above OIDs,
@@ -400,6 +404,10 @@ uint16_t psGetNamedSigAlgId(const char *name)
     {
         return sigalg_ecdsa_sha1;
     }
+    if (!Strcmp(name, "sm2sig_sm3"))
+    {
+        return sigalg_sm2sig_sm3;
+    }
     return 0;
 }
 
@@ -424,6 +432,9 @@ psBool_t psIsEcdheGroup(uint16_t namedGroup)
 # endif
 # ifdef USE_SECP224R1
             namedGroup == namedgroup_secp224r1 ||
+# endif
+# ifdef USE_SM2
+            namedGroup == namedgroup_curveSM2 ||
 # endif
             namedGroup == namedgroup_x25519)
     {
@@ -592,7 +603,6 @@ psBool_t psIsGroupSupported(uint16_t namedGroup)
         return PS_TRUE;
     }
 # endif
-
     return PS_FALSE;
 }
 
@@ -634,6 +644,10 @@ uint16_t psGetNamedGroupId(const char *name)
     {
         return namedgroup_ffdhe8192;
     }
+    if (!Strcmp(name, "curveSM2"))
+    {
+        return namedgroup_curveSM2;
+    }
     return 0;
 }
 
@@ -650,6 +664,11 @@ psBool_t psVerifyNeedPreHash(int32_t sigAlg)
         return PS_FALSE;
     }
 # endif
-
+# if defined(USE_SM2) && defined(USE_SM3)
+    if (sigAlg == OID_SM3_SM2_SIG)
+    {
+        return PS_FALSE;
+    }
+# endif
     return PS_TRUE;
 }

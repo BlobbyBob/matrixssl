@@ -5,7 +5,7 @@
  *      Functions for decoding TLS 1.3 extensions
  */
 /*
- *      Copyright (c) 2013-2019 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2019 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -1747,12 +1747,17 @@ int32_t tls13ParseSignatureAlgorithms(ssl_t *ssl,
         /* Save the algoritm based on which extension this is */
         if (isCert)
         {
-#  ifdef USE_IDENTITY_CERTIFICATES
+# ifdef USE_IDENTITY_CERTIFICATES
             /* Make sure this sig_alg_cert is in our supported list */
             if (findFromUint16Array(
                         ssl->tls13SupportedSigAlgsCert,
                         ssl->tls13SupportedSigAlgsCertLen,
-                        sigAlg) != PS_FAILURE)
+                        sigAlg) != PS_FAILURE
+#  ifdef USE_SM2
+                && !(sigAlg != sigalg_sm2sig_sm3 &&
+                        ssl->tls13SelectedSMSuite)
+#  endif
+                )
             {
                 mask = HASH_SIG_MASK(((sigAlg >> 8) & 0xff),
                         (sigAlg & 0xff));
@@ -1769,7 +1774,12 @@ int32_t tls13ParseSignatureAlgorithms(ssl_t *ssl,
             if (findFromUint16Array(
                         ssl->supportedSigAlgs,
                         ssl->supportedSigAlgsLen,
-                        sigAlg) != PS_FAILURE)
+                        sigAlg) != PS_FAILURE
+#  ifdef USE_SM2
+                && !(sigAlg != sigalg_sm2sig_sm3 &&
+                        ssl->tls13SelectedSMSuite)
+#  endif
+                )
             {
                 mask = HASH_SIG_MASK(((sigAlg >> 8) & 0xff),
                         (sigAlg & 0xff));

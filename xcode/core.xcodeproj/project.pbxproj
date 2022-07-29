@@ -69,7 +69,7 @@
 			isa = PBXProject;
 			attributes = {
 				LastUpgradeCheck = 0700;
-				ORGANIZATIONNAME = "INSIDE Secure";
+				ORGANIZATIONNAME = "Rambus Inc.";
 				TargetAttributes = {
 					DD7EB84D1B8D2A83000F7458 = {
 						CreatedOnToolsVersion = 6.4;

@@ -5,7 +5,7 @@
  *      X.509 Parser.
  */
 /*
- *      Copyright (c) 2013-2017 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2017 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -1203,7 +1203,9 @@ static int parse_single_cert(psPool_t *pool, const unsigned char **pp,
     /* Most algorithms and APIs use pre-hashing before signature
        verification. Others (such as Ed25519) want the original
        message (i.e. TBSCertificate) as input data. */
-# if defined(USE_ROT_CRYPTO) || defined(USE_ED25519) || (defined(USE_CL_RSA) && defined(USE_PKCS1_PSS))
+# if defined(USE_ROT_CRYPTO) || defined(USE_ED25519)\
+  || (defined(USE_CL_RSA) && defined(USE_PKCS1_PSS))\
+  || (defined(USE_SM2) && defined(USE_SM3))
     if (!psVerifyNeedPreHash(cert->certAlgorithm))
     {
         /* Skip pre-hashing and instead buffer the TBS. */
@@ -3905,6 +3907,29 @@ int32_t parsePolicyMappings(psPool_t *pool,
 
 # ifdef USE_CRL
 static
+int32_t getAsnLengthWithPointers(
+    const unsigned char **pp,
+    const unsigned char *currentPtr,
+    const unsigned char *endPtr,
+    psSize_t *asnLength)
+{
+    int32_t result = PS_PARSE_FAIL;
+
+    if (endPtr > currentPtr)
+    {
+        psSizeL_t len = endPtr - currentPtr;
+
+        if ((getAsnLength(pp, len, asnLength) == PS_SUCCESS) &&
+            (len >= *asnLength))
+        {
+            result = PS_SUCCESS;
+        }
+    }
+
+    return result;
+}
+
+static
 int32_t parseAuthorityInfoAccess(psPool_t *pool,
     const unsigned char *p,
     const unsigned char *extEnd,
@@ -3940,7 +3965,7 @@ int32_t parseAuthorityInfoAccess(psPool_t *pool,
     /* AuthorityInfoAccessSyntax. */
     if (getAsnSequence(&p, (int32) (extEnd - p), &len) < 0)
     {
-        psTraceCrypto("Error parsing authKeyId extension\n");
+        psTraceCrypto("Error parsing authInfo extension\n");
         return PS_PARSE_FAIL;
     }
 
@@ -3990,7 +4015,7 @@ int32_t parseAuthorityInfoAccess(psPool_t *pool,
         /* AccessDescription. */
         if (getAsnSequence(&p, (int32) (extEnd - p), &adLen) < 0)
         {
-            psTraceCrypto("Error parsing authKeyId extension\n");
+            psTraceCrypto("Error parsing authInfo extension\n");
             return PS_PARSE_FAIL;
         }
         /* accessMethod. */
@@ -3999,8 +4024,8 @@ int32_t parseAuthorityInfoAccess(psPool_t *pool,
             psTraceCrypto("Malformed extension header\n");
             return PS_PARSE_FAIL;
         }
-        if (getAsnLength(&p, (uint32) (authInfoEnd - p), &len) < 0 ||
-            (uint32) (authInfoEnd - p) < len)
+
+        if (getAsnLengthWithPointers(&p, p, authInfoEnd, &len) < 0)
         {
             psTraceCrypto("getAsnLength failure in authInfo parsing\n");
             return PS_PARSE_FAIL;
@@ -4025,8 +4050,7 @@ int32_t parseAuthorityInfoAccess(psPool_t *pool,
         {
         case (ASN_CONTEXT_SPECIFIC + 6):
             /* uniformResourceIdentifier [6]  IA5String. */
-            if (getAsnLength(&p, (uint32) (authInfoEnd - p), &len) < 0 ||
-                (uint32) (authInfoEnd - p) < len)
+            if (getAsnLengthWithPointers(&p, p, authInfoEnd, &len) < 0)
             {
                 psTraceCrypto("getAsnLength failure in authInfo parsing\n");
                 return PS_PARSE_FAIL;
@@ -4439,10 +4463,17 @@ KNOWN_EXT:
         case OID_ENUM(id_ce_nameConstraints):
             if (critical)
             {
+#   ifdef IGNORE_CRITICAL_NAME_CONSTRAINTS_EXTENSION
+                psTraceCrypto(
+                    "WARNING: Ignoring critical Name Constraints extension "
+                    "due to #define "
+                    "IGNORE_CRITICAL_NAME_CONSTRAINTS_EXTENSION\n");
+#   else
                 /* We're going to fail if critical since no real
                     pattern matching is happening yet */
                 psTraceCrypto("ERROR: critical nameConstraints unsupported\n");
                 return PS_PARSE_FAIL;
+#   endif /* IGNORE_CRITICAL_NAME_CONSTRAINTS_EXTENSION */
             }
             if (getAsnSequence(&p, (int32) (extEnd - p), &fullExtLen) < 0)
             {
@@ -4519,7 +4550,8 @@ KNOWN_EXT:
             /* A required extension within a CRL.  Our getSerialNum is
                 the version of getInteger that allows very large
                 numbers.  Spec says this could be 20 octets long */
-            if (getSerialNum(pool, &p, (int32) (extEnd - p),
+            if (extensions->crlNum != NULL ||
+                getSerialNum(pool, &p, (int32) (extEnd - p),
                     &(extensions->crlNum), &len) < 0)
             {
                 psTraceCrypto("Error parsing ak.serialNum\n");
@@ -4671,6 +4703,15 @@ KNOWN_EXT:
                     psTraceCrypto("Error keyLen in authKeyId extension\n");
                     return PS_PARSE_FAIL;
                 }
+                if (extensions->ak.keyId != NULL)
+                {
+                    /*
+                        RFC5280: A certificate MUST NOT include more
+                        than one instance of a particular extension.
+                    */
+                    psTraceCrypto("Error: more than one authKeyId extension\n");
+                    return PS_PARSE_FAIL;
+                }
                 extensions->ak.keyId = psMalloc(pool, extensions->ak.keyLen);
                 if (extensions->ak.keyId == NULL)
                 {
@@ -4716,7 +4757,8 @@ KNOWN_EXT:
 /*
                     Treat as a serial number (not a native INTEGER)
  */
-                if (getSerialNum(pool, &p, (int32) (extEnd - p),
+                if (extensions->ak.serialNum != NULL ||
+                    getSerialNum(pool, &p, (int32) (extEnd - p),
                         &(extensions->ak.serialNum), &len) < 0)
                 {
                     psTraceCrypto("Error parsing ak.serialNum\n");
@@ -4738,6 +4780,15 @@ KNOWN_EXT:
                 (uint32) (extEnd - p) < extensions->sk.len)
             {
                 psTraceCrypto("Error parsing subjectKeyId extension\n");
+                return PS_PARSE_FAIL;
+            }
+            if (extensions->sk.id != NULL)
+            {
+                /*
+                    RFC5280: A certificate MUST NOT include more
+                    than one instance of a particular extension.
+                */
+                psTraceCrypto("Error: more than one subjectKeyId extension\n");
                 return PS_PARSE_FAIL;
             }
             extensions->sk.id = psMalloc(pool, extensions->sk.len);
@@ -5293,6 +5344,7 @@ int32_t psX509GetDNAttributes(psPool_t *pool, const unsigned char **pp,
     psSize_t llen, setlen, arcLen;
     char *stringOut;
     uint32_t i;
+    psBool_t attributeStored = PS_TRUE;
 
 #  ifdef USE_SHA1
     psSha1_t hash;
@@ -5576,8 +5628,6 @@ oid_parsing_done:
             psTraceIntCrypto("Unsupported DN attrib type %d\n", stringType);
             return PS_UNSUPPORTED_FAIL;
         }
-
-        psBool_t attributeStored = PS_TRUE;
 
         switch (id)
         {
@@ -6073,6 +6123,14 @@ int32 psX509AuthenticateCert(psPool_t *pool, psX509Cert_t *subjectCert,
                 opts.msgIsDigestInfo = PS_FALSE;
             }
 # endif /* USE_ED25519 */
+# if defined(USE_SM2) && defined(USE_SM3)
+            if (sc->sigAlgorithm == OID_SM3_SM2_SIG)
+            {
+                tbs = sc->tbsCertStart;
+                tbsLen = sc->tbsCertLen;
+                opts.msgIsDigestInfo = PS_FALSE;
+            }
+# endif
 # if defined(USE_ROT_CRYPTO) && (defined(USE_ROT_ECC) || defined(USE_ROT_RSA))
             tbs = sc->tbsCertStart;
             tbsLen = sc->tbsCertLen;
@@ -7242,7 +7300,9 @@ int32_t psOcspResponseValidate(psPool_t *pool, psX509Cert_t *trustedOCSP,
     static psValidateOCSPResponseOptions_t vOptsDefault;
     psX509Cert_t *curr, *issuer, *subject, *ocspResIssuer;
     psOcspSingleResponse_t *subjectResponse = NULL;
+#  ifdef USE_RSA
     unsigned char sigOut[MAX_HASH_SIZE];
+#  endif
     int32 sigOutLen, sigType, index;
     psPool_t *pkiPool = NULL;
 

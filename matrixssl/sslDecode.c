@@ -5,7 +5,7 @@
  *      SSL/TLS protocol message decoding portion of MatrixSSL.
  */
 /*
- *      Copyright (c) 2013-2018 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -1149,13 +1149,14 @@ ADVANCE_TO_APP_DATA:
 #  ifdef USE_SHA256
             case SHA256_HASH_SIZE:
                 psSha256PreInit(&md.u.sha256);
+                psSha256Init(&md.u.sha256);
                 break;
 #  endif
 #  ifdef USE_SHA384
             case SHA384_HASH_SIZE:
                 psSha384PreInit(&md.u.sha384);
                 psSha384Init(&md.u.sha384);
-                  break;
+                break;
 #  endif
 #  ifdef USE_SHA1
             case SHA1_HASH_SIZE:
@@ -1176,7 +1177,6 @@ ADVANCE_TO_APP_DATA:
                 {
 #  ifdef USE_SHA256
                 case SHA256_HASH_SIZE:
-                    psSha256Init(&md.u.sha256);
                     while (rc > 0)
                     {
                         psSha256Update(&md.u.sha256, tmp, 64);

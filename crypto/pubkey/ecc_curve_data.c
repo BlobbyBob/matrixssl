@@ -5,7 +5,7 @@
  *      ECC curve data.
  */
 /*
- *      Copyright (c) 2013-2018 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2021 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -195,6 +195,21 @@ const psEccCurve_t eccCurves[] = {
         "FFFFFFFFFFFFFFFFFFFFFFFF99DEF836146BC9B1B4D22831", /* order */
         "188DA80EB03090F67CBF20EB43A18800F4FF0AFD82FF1012", /* Gx */
         "07192B95FFC8DA78631011ED6B24CDD573F977A11E794811", /* Gy */
+    },
+# endif
+# ifdef USE_SM2
+    {
+        32,
+        IANA_CURVESM2,
+        1,
+        667, /* 1.2.156.10197.1.301 */
+        "curvesm2",
+        "FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00000000FFFFFFFFFFFFFFFF",
+        "FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00000000FFFFFFFFFFFFFFFC",
+        "28E9FA9E9D9F5E344D5A9E4BCF6509A7F39789F515AB8F92DDBCBD414D940E93",
+        "FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFF7203DF6B21C6052B53BBF40939D54123",
+        "32C4AE2C1F1981195F9904466A39C9948FE30BBFF2660BE1715A4589334C74C7",
+        "BC3736A2F4F6779C59BDCEE36B692153D0A9877CC62A474002DF32E52139F0A0",
     },
 # endif
     {

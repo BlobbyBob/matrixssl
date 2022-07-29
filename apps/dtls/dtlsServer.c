@@ -6,7 +6,7 @@
  *      Supports multiple simultaneous clients and non-blocking sockets
  */
 /*
- *      Copyright (c) 2014-2017 INSIDE Secure Corporation
+ *      Copyright (c) 2014-2017 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -19,8 +19,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -43,8 +43,11 @@
 
 #include "dtlsCommon.h"
 /* Currently this example uses _psTrace for tracing, so osdep.h is needed: */
+
+#ifndef ENABLE_COMBINED_TLS_DTLS
 #include "core/osdep.h"
 #include "core/psUtil.h"
+#endif
 #include "osdep_sys_time.h"
 #include "osdep_stdio.h"
 
@@ -89,7 +92,9 @@ static SOCKET newUdpSocket(char *ip, short port, int *err);
 static int sigsetup(void);
 static void sigsegv_handler(int);
 static void sigintterm_handler(int);
-static void usage(void);
+#ifndef ENABLE_COMBINED_TLS_DTLS
+static void dtls_usage(void);
+#endif
 static int32 process_cmd_options(int32 argc, char **argv);
 
 # ifdef USE_DTLS_DEBUG_TRACE
@@ -327,12 +332,12 @@ static char ecCAFile[] = "testkeys/EC/ALL_EC_CAS_EXCEPT_P192_AND_P521.pem";
 
 
 
-static int exitFlag;
+static int dtls_exitFlag;
 
-static uint32_t g_rsaKeySize;
-static uint32_t g_eccKeySize;
-static uint32_t g_ecdhKeySize;
-static int g_port;
+static uint32_t g_rsaKeySize_dtls;
+static uint32_t g_eccKeySize_dtls;
+static uint32_t g_ecdhKeySize_dtls;
+static int g_dtls_port = 4433;
 
 # ifdef USE_CERT_VALIDATOR
 /******************************************************************************/
@@ -370,7 +375,8 @@ static int32 certValidator(ssl_t *ssl, psX509Cert_t *cert, int32 alert)
 #  define certValidator NULL
 # endif /* USE_CERT_VALIDATOR */
 
-static void usage(void)
+#ifndef ENABLE_COMBINED_TLS_DTLS
+static void dtls_usage(void)
 {
     Printf("\nusage: dltsServer { option }\n"
         "\n"
@@ -387,6 +393,7 @@ static void usage(void)
         "-p <value>              - Port number to use\n"
         );
 }
+#endif
 
 /* Return 0 on good set of cmd options, return -1 if a bad cmd option is
    encountered OR a request for help is seen (i.e. '-h' option). */
@@ -395,8 +402,8 @@ static int32 process_cmd_options(int32 argc, char **argv)
     int32 optionChar;
 
     /* Set some default options: */
-    g_rsaKeySize = 2048;
-    g_eccKeySize = g_ecdhKeySize = 256;
+    g_rsaKeySize_dtls = 2048;
+    g_eccKeySize_dtls = g_ecdhKeySize_dtls = 256;
 
     opterr = 0;
     while ((optionChar = getopt(argc, argv, "hr:e:d:l:p:")) != -1)
@@ -410,9 +417,9 @@ static int32 process_cmd_options(int32 argc, char **argv)
             break;
 
         case 'r':
-            g_rsaKeySize = atoi(optarg);
-            if ((g_rsaKeySize != 1024) && (g_rsaKeySize != 2048)
-                && (g_rsaKeySize != 3072) && (g_rsaKeySize != 4096))
+            g_rsaKeySize_dtls = atoi(optarg);
+            if ((g_rsaKeySize_dtls != 1024) && (g_rsaKeySize_dtls != 2048)
+                && (g_rsaKeySize_dtls != 3072) && (g_rsaKeySize_dtls != 4096))
             {
                 Printf("invalid -r option\n");
                 return -1;
@@ -420,10 +427,10 @@ static int32 process_cmd_options(int32 argc, char **argv)
             break;
 
         case 'e':
-            g_eccKeySize = atoi(optarg);
-            if ((g_eccKeySize != 192) && (g_eccKeySize != 224)
-                && (g_eccKeySize != 256) && (g_eccKeySize != 384)
-                && (g_eccKeySize != 521))
+            g_eccKeySize_dtls = atoi(optarg);
+            if ((g_eccKeySize_dtls != 192) && (g_eccKeySize_dtls != 224)
+                && (g_eccKeySize_dtls != 256) && (g_eccKeySize_dtls != 384)
+                && (g_eccKeySize_dtls != 521))
             {
                 Printf("invalid -e option\n");
                 return -1;
@@ -431,8 +438,8 @@ static int32 process_cmd_options(int32 argc, char **argv)
             break;
 
         case 'd':
-            g_ecdhKeySize = atoi(optarg);
-            if ((g_ecdhKeySize != 256) && (g_ecdhKeySize != 521))
+            g_ecdhKeySize_dtls = atoi(optarg);
+            if ((g_ecdhKeySize_dtls != 256) && (g_ecdhKeySize_dtls != 521))
             {
                 Printf("invalid -d option\n");
                 return -1;
@@ -455,8 +462,8 @@ static int32 process_cmd_options(int32 argc, char **argv)
             break;
 # endif     /* DTLS_PACKET_LOSS_TEST */
         case 'p':
-            g_port = atoi(optarg);
-            if (g_port < 0)
+            g_dtls_port = atoi(optarg);
+            if (g_dtls_port < 0)
             {
                 Printf("invalid -p option\n");
                 return -1;
@@ -482,9 +489,6 @@ int main(int argc, char **argv)
     fd_set readfd;
     unsigned char *sslBuf, *recvfromBuf, *CAstream;
 
-# ifdef USE_DTLS_DEBUG_TRACE
-    unsigned char *addrstr;
-# endif
 # if !defined(ID_PSK) && !defined(ID_DHE_PSK)
     unsigned char *keyValue, *certValue;
     int32 keyLen, certLen;
@@ -507,8 +511,10 @@ int main(int argc, char **argv)
 
     if (0 != process_cmd_options(argc, argv))
     {
-        usage();
+#ifndef ENABLE_COMBINED_TLS_DTLS
+        dtls_usage();
         return 0;
+#endif
     }
     if (sigsetup() < 0)
     {
@@ -564,7 +570,7 @@ int main(int argc, char **argv)
 #  endif
 
 #  ifdef EXAMPLE_RSA_KEYS
-    switch (g_rsaKeySize)
+    switch (g_rsaKeySize_dtls)
     {
     case 1024:
         certValue = (unsigned char *) RSA1024;
@@ -591,7 +597,7 @@ int main(int argc, char **argv)
         keyLen = sizeof(RSA4096KEY);
         break;
     default:
-        _psTraceInt("Invalid RSA key length (%d)\n", g_rsaKeySize);
+        _psTraceInt("Invalid RSA key length (%d)\n", g_rsaKeySize_dtls);
         goto CLIENT_EXIT;
     }
 
@@ -606,7 +612,7 @@ int main(int argc, char **argv)
 
 
 #  ifdef EXAMPLE_ECDH_RSA_KEYS
-    switch (g_ecdhKeySize)
+    switch (g_ecdhKeySize_dtls)
     {
     case 256:
         certValue = (unsigned char *) ECDHRSA256;
@@ -621,7 +627,7 @@ int main(int argc, char **argv)
         keyLen = sizeof(ECDHRSA521KEY);
         break;
     default:
-        _psTraceInt("Invalid ECDH_RSA key length (%d)\n", g_ecdhKeySize);
+        _psTraceInt("Invalid ECDH_RSA key length (%d)\n", g_ecdhKeySize_dtls);
         goto CLIENT_EXIT;
     }
 
@@ -635,7 +641,7 @@ int main(int argc, char **argv)
 #  endif
 
 #  ifdef EXAMPLE_EC_KEYS
-    switch (g_eccKeySize)
+    switch (g_eccKeySize_dtls)
     {
     case 192:
         certValue = (unsigned char *) EC192;
@@ -668,7 +674,7 @@ int main(int argc, char **argv)
         keyLen = sizeof(EC521KEY);
         break;
     default:
-        _psTraceInt("Invalid ECC key length (%d)\n", g_eccKeySize);
+        _psTraceInt("Invalid ECC key length (%d)\n", g_eccKeySize_dtls);
         goto CLIENT_EXIT;
     }
 
@@ -694,7 +700,7 @@ int main(int argc, char **argv)
  */
     CAstreamLen = 0;
 #  ifdef USE_RSA
-    if (g_rsaKeySize == 3072)
+    if (g_rsaKeySize_dtls == 3072)
     {
         CAstreamLen += (int32) Strlen(rsaCA3072File) + 1;
     }
@@ -714,7 +720,7 @@ int main(int argc, char **argv)
 
     CAstreamLen = 0;
 #  ifdef USE_RSA
-    if (g_rsaKeySize == 3072)
+    if (g_rsaKeySize_dtls == 3072)
     {
         Memcpy(CAstream, rsaCA3072File, Strlen(rsaCA3072File));
         CAstreamLen += Strlen(rsaCA3072File);
@@ -799,7 +805,19 @@ int main(int argc, char **argv)
     }
 # endif /* PSK */
 
-    recvfromBufLen = matrixDtlsGetPmtu();
+    for (int i = 0; i < 10; i++) {
+        recvfromBufLen = matrixDtlsGetPmtu();
+        if (recvfromBufLen) break;
+        Sleep(1);
+    }
+    _psTraceInt("RECVFROM buf len:%d\n", recvfromBufLen);
+
+    if (recvfromBufLen == 0) {
+        rc = PS_PLATFORM_FAIL;
+        _psTrace("Init error getting pmtu?!\n");
+        goto CLIENT_EXIT;
+    }
+
     if ((recvfromBuf = psMalloc(MATRIX_NO_POOL, recvfromBufLen)) == NULL)
     {
         rc = PS_MEM_FAIL;
@@ -807,15 +825,15 @@ int main(int argc, char **argv)
         goto CLIENT_EXIT;
     }
 
-    if ((sock = newUdpSocket(NULL, g_port, &err)) == INVALID_SOCKET)
+    if ((sock = newUdpSocket(NULL, g_dtls_port, &err)) == INVALID_SOCKET)
     {
         _psTrace("Error creating UDP socket\n");
         goto DTLS_EXIT;
     }
-    _psTraceInt("DTLS server running on port %d\n", g_port);
+    _psTraceInt("DTLS server running on port %d\n", g_dtls_port);
 
     /* Server loop */
-    for (exitFlag = 0; exitFlag == 0; )
+    for (dtls_exitFlag = 0; dtls_exitFlag == 0; )
     {
         timeout.tv_sec = 1;
         timeout.tv_usec = 0;
@@ -831,12 +849,13 @@ int main(int argc, char **argv)
 
         if (val > 0 && FD_ISSET(sock, &readfd))
         {
-            _psTraceInt("Select woke %d\n", val);
             /* recvfrom data must always go into generic buffer becuase we
                don't yet know who it is from */
             inaddrlen = sizeof(struct sockaddr_in);
-            if ((recvLen = (int32) recvfrom(sock, recvfromBuf, recvfromBufLen, 0,
-                     (struct sockaddr *) &inaddr, &inaddrlen)) < 0)
+            recvLen = (int32) recvfrom(sock, recvfromBuf, recvfromBufLen, 0,
+                                       (struct sockaddr *) &inaddr, &inaddrlen);
+
+            if (recvLen < 0)
             {
 # ifdef WIN32
                 if (SOCKET_ERRNO != EWOULDBLOCK &&
@@ -854,7 +873,7 @@ int main(int argc, char **argv)
 # ifdef USE_DTLS_DEBUG_TRACE
             /* nice for debugging */
             {
-                const char *addrstr;
+                unsigned char *addrstr;
                 addrstr = getaddrstring((struct sockaddr *) &inaddr, 1);
                 _psTraceInt("Read %d bytes ", recvLen);
                 _psTraceStr("from %s\n", (char *) addrstr);
@@ -1151,6 +1170,8 @@ static SOCKET newUdpSocket(char *ip, short port, int *err)
     struct sockaddr_in addr = { 0 };
     SOCKET fd;
 
+    _psTraceInt("New UDP Socket %d\n", port);
+
     if ((fd = Socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0)
     {
         _psTraceInt("Error creating socket %d\n", SOCKET_ERRNO);
@@ -1192,7 +1213,7 @@ static void sigsegv_handler(int arg)
 /* catch ctrl-c or sigterm */
 static void sigintterm_handler(int arg)
 {
-    exitFlag = 1;   /* Rudimentary exit flagging */
+    dtls_exitFlag = 1;   /* Rudimentary exit flagging */
 }
 
 static int sigsetup(void)

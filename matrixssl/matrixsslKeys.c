@@ -5,7 +5,7 @@
  *      The session and authentication management portions of the MatrixSSL library.
  */
 /*
- *      Copyright (c) 2013-2018 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -381,7 +381,7 @@ static psRes_t sslLoadKeyPair(psPool_t *pool,
         psTraceInfo("sslLoadKeyPair(): no key material");
         key->type = PS_NOKEY;
         key->keysize = 0;
-	return PS_SUCCESS;
+        return PS_SUCCESS;
     }
     rc = psPemTryDecode(pool,
             keydata,
@@ -415,7 +415,7 @@ static psRes_t sslLoadKeyPair(psPool_t *pool,
                     unarmored_len,
                     NULL,
                     key);
-            if (err < 0)
+            if (err >= 0)
             {
                 goto out;
             }
@@ -443,7 +443,7 @@ static psRes_t sslLoadKeyPair(psPool_t *pool,
                     unarmored_len,
                     NULL,
                     key);
-            if (err < 0)
+            if (err >= 0)
             {
                 goto out;
             }
@@ -466,7 +466,12 @@ static psRes_t sslLoadKeyPair(psPool_t *pool,
             goto out;
         }
         key->keysize = 32;
+        break;
 #   endif /* USE_ED25519 */
+    default:
+        psTraceErrr("Unknown key type in sslLoadKeyPair\n");
+        err = PS_UNSUPPORTED_FAIL;
+        break;
     } /* end switch */
 
   out:
@@ -751,6 +756,7 @@ int32_t matrixSslLoadKeysMem(sslKeys_t *keys,
                 PS_ECC,
                 opts);
         break;
+# ifdef USE_ED25519
     case PS_ED25519:
         rc = matrixSslLoadKeyMaterialMem(keys,
                 certBuf,
@@ -762,9 +768,15 @@ int32_t matrixSslLoadKeysMem(sslKeys_t *keys,
                 PS_ED25519,
                 opts);
         break;
+# endif /* USE_ED25519 */
     case 0:
         {
-            int32 try[] = { PS_RSA, PS_ECC, PS_ED25519, -1}, i;
+            int32 try[] = { PS_RSA, PS_ECC,
+# ifdef USE_ED25519
+                            PS_ED25519,
+# endif /* USE_ED25519 */
+                            -1};
+            int32 i;
             for (i = 0; try[i] != -1; i++)
             {
                 rc = matrixSslLoadKeyMaterialMem(
@@ -777,7 +789,7 @@ int32_t matrixSslLoadKeysMem(sslKeys_t *keys,
                     break;
                 }
             }
-            if (CAbuf && CAlen > 0)
+            if (rc == PS_SUCCESS && CAbuf && CAlen > 0)
             {
                 rc = matrixSslLoadKeyMaterialMem(
                         keys, NULL, 0, NULL, 0,
@@ -787,6 +799,7 @@ int32_t matrixSslLoadKeysMem(sslKeys_t *keys,
         break;
     default:
         /* Unknown key type */
+        psTraceErrr("Unknown key type in matrixSslLoadKeysMem\n");
         rc = PS_FAILURE;
     }
     return rc;
@@ -976,6 +989,7 @@ static struct {
     { 27, IS_BRAIN384R1 },
     { 28, IS_BRAIN512R1 },
     { 255, IS_BRAIN224R1 },
+    { 41, IS_CURVESM2 },
     { 0, 0 }
 };
 
@@ -1412,6 +1426,7 @@ psRes_t matrixSslLoadKeys(sslKeys_t *keys,
                 PS_ECC,
                 opts);
         break;
+#  ifdef USE_ED25519
     case PS_ED25519:
         rc = matrixSslLoadKeyMaterial(keys,
                 certFile,
@@ -1421,9 +1436,15 @@ psRes_t matrixSslLoadKeys(sslKeys_t *keys,
                 PS_ED25519,
                 opts);
         break;
+#  endif /* USE_ED25519 */
     case 0:
         {
-            int32 try[] = { PS_RSA, PS_ECC, PS_ED25519, -1}, i;
+            int32 try[] = { PS_RSA, PS_ECC,
+#  ifdef USE_ED25519
+                            PS_ED25519,
+#  endif /* USE_ED25519 */
+                            -1};
+            int32 i;
             for (i = 0; try[i] != -1; i++)
             {
                 rc = matrixSslLoadKeyMaterial(
@@ -1435,7 +1456,7 @@ psRes_t matrixSslLoadKeys(sslKeys_t *keys,
                     break;
                 }
             }
-            if (CAfile)
+            if (rc == PS_SUCCESS && CAfile)
             {
                 rc = matrixSslLoadKeyMaterial(
                         keys, NULL, NULL, NULL, CAfile, 0, opts);
@@ -1444,6 +1465,7 @@ psRes_t matrixSslLoadKeys(sslKeys_t *keys,
         break;
 
     default:
+        psTraceErrr("Unknown key type in matrixSslLoadKeys\n");
         rc = PS_FAILURE;
         break;
     }

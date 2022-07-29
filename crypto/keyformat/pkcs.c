@@ -6,7 +6,7 @@
  */
 
 /*
- *      Copyright (c) 2013-2017 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2017 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -19,8 +19,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -55,12 +55,14 @@ int32_t pkcs1Pad(const unsigned char *in, psSize_t inlen,
     unsigned char *c;
     uint32_t randomLen;
 
-    randomLen = outlen - 3 - inlen;
-    if (randomLen < 8)
+    if (outlen < 3 + inlen + 8)
     {
         psTraceCrypto("pkcs1Pad failure\n");
         return PS_LIMIT_FAIL;
     }
+
+    randomLen = outlen - 3 - inlen;
+
     c = out;
     *c = 0x00;
     c++;
@@ -212,6 +214,12 @@ int32_t pkcs1Unpad(const unsigned char *in,
 #  ifdef MATRIX_USE_FILE_SYSTEM
 #   ifdef USE_PKCS8
 #    ifdef USE_PKCS12
+
+int32 pkcs12pbkdf2(psPool_t *pool, int32 hash_alg,
+                   const unsigned char *password, uint32 passLen,
+                   const unsigned char *salt, int saltLen, uint32 keyLen,
+                   uint16 count,  unsigned char **out);
+
 /******************************************************************************/
 /*
     A PKCS #7 ContentInfo, whose contentType is signedData in public-key
@@ -280,15 +288,22 @@ static int32 psParseIntegrityMode(const unsigned char **buf, int32 totLen)
     Assumptions:  hash is SHA-1, password is < 128 bytes
  */
 static int32 pkcs12pbe(psPool_t *pool, unsigned char *password, uint32 passLen,
-    unsigned char *salt, int saltLen, int32 iter, int32 id,
+    unsigned char *salt, int saltLen, int32 iter, int32 id, int32 oi,
     unsigned char **out, uint32 *outlen)
 {
     psSha1_t ctx;
+    psSha256_t sha256ctx;
     pstm_int bigb, bigone, bigtmp;
-    unsigned char diversifier[64], saltpass[192], hash[SHA1_HASH_SIZE];
+    unsigned char diversifier[64], saltpass[192], hash[SHA256_HASH_SIZE];
     unsigned char B[65];
     unsigned char *p, *front;
     int32 i, j, copy, count, cpyLen, binsize, plen;
+    uint32 hash_size = 20;
+
+    if (oi == OID_SHA256_ALG)
+    {
+        hash_size = 32;
+    }
 
     *out = NULL;
     Memset(diversifier, id, 64);
@@ -317,13 +332,13 @@ static int32 pkcs12pbe(psPool_t *pool, unsigned char *password, uint32 passLen,
         saltpass[64 + i] = password[i % passLen];
     }
 
-    if (*outlen == SHA1_HASH_SIZE)
+    if (*outlen == hash_size)
     {
         count = 1;
     }
     else
     {
-        count = (*outlen / SHA1_HASH_SIZE) + 1;
+        count = (*outlen / hash_size) + 1;
     }
     cpyLen = *outlen;
 
@@ -335,18 +350,35 @@ static int32 pkcs12pbe(psPool_t *pool, unsigned char *password, uint32 passLen,
 
     while (count)
     {
-        psSha1Init(&ctx);
-        psSha1Update(&ctx, diversifier, 64);
-        psSha1Update(&ctx, saltpass, 64 + plen);
-        psSha1Final(&ctx, hash);
-        for (j = 1; j < iter; j++)
+        if (hash_size == 20)
         {
             psSha1Init(&ctx);
-            psSha1Update(&ctx, hash, SHA1_HASH_SIZE);
+            psSha1Update(&ctx, diversifier, 64);
+            psSha1Update(&ctx, saltpass, 64 + plen);
             psSha1Final(&ctx, hash);
+            for (j = 1; j < iter; j++)
+            {
+                psSha1Init(&ctx);
+                psSha1Update(&ctx, hash, SHA1_HASH_SIZE);
+                psSha1Final(&ctx, hash);
+            }
+        }
+        else
+        if (hash_size == 32)
+        {
+            psSha256Init(&sha256ctx);
+            psSha256Update(&sha256ctx, diversifier, 64);
+            psSha256Update(&sha256ctx, saltpass, 64 + plen);
+            psSha256Final(&sha256ctx, hash);
+            for (j = 1; j < iter; j++)
+            {
+                psSha256Init(&sha256ctx);
+                psSha256Update(&sha256ctx, hash, SHA256_HASH_SIZE);
+                psSha256Final(&sha256ctx, hash);
+            }
         }
         /* Copy into outgoing key now */
-        copy = min(cpyLen, SHA1_HASH_SIZE);
+        copy = min(cpyLen, hash_size);
         Memcpy(p, hash, copy);
         p += copy;
         count--;
@@ -357,7 +389,7 @@ static int32 pkcs12pbe(psPool_t *pool, unsigned char *password, uint32 passLen,
             /* manipulate saltpass */
             for (j = 0; j < 64; j++)
             {
-                B[j] = hash[j % SHA1_HASH_SIZE];
+                B[j] = hash[j % hash_size];
             }
             if (pstm_init_for_read_unsigned_bin(pool, &bigb, 64) < 0)
             {
@@ -470,12 +502,12 @@ static int32 pkcs12import(psPool_t *pool, const unsigned char **buf,
     psCipherContext_t ctx;
     const unsigned char *p, *start, *end;
     unsigned char *iv, *decryptKey, *pt;
-    unsigned char salt[8];
+    unsigned char salt[8] = {0};
     int32 rc, oi, asnint;
     uint32_t keyLen, ivLen;
     psSize_t tmplen, tmpint;
     short cipher;
-    const short armor = PBE12;
+    short armor = PBE12;
 
     *plaintext = NULL;
     *ptLen = 0;
@@ -506,6 +538,10 @@ static int32 pkcs12import(psPool_t *pool, const unsigned char **buf,
     {
         cipher = AUTH_SAFE_3DES;
         keyLen = DES3_KEYLEN;
+    }
+    else if (oi == OID_PKCS_PBES2)
+    {
+        armor = PBES2;
     }
     else
     {
@@ -544,14 +580,14 @@ static int32 pkcs12import(psPool_t *pool, const unsigned char **buf,
             return PS_PARSE_FAIL;
         }
         if (pkcs12pbe(pool, password, passLen, salt, 8, asnint,
-                PKCS12_KEY_ID, &decryptKey, &keyLen) < 0)
+                PKCS12_KEY_ID, 0, &decryptKey, &keyLen) < 0)
         {
             psTraceCrypto("Error generating pkcs12 key\n");
             return PS_UNSUPPORTED_FAIL;
         }
         ivLen = 8;
         if (pkcs12pbe(pool, password, passLen, salt, 8, asnint,
-                PKCS12_IV_ID, &iv, &ivLen) < 0)
+                PKCS12_IV_ID, 0, &iv, &ivLen) < 0)
         {
             psTraceCrypto("Error generating pkcs12 iv\n");
             if (decryptKey)
@@ -562,6 +598,238 @@ static int32 pkcs12import(psPool_t *pool, const unsigned char **buf,
             return PS_UNSUPPORTED_FAIL;
         }
     }
+    else /* (armor == PBES2) */
+    {
+        const unsigned char *end_KDF, *end_ENC, *p_salt;
+        int prf_oi, salt_oi, enc_oi, count;
+        psSize_t salt_len = 0;
+        /* PBES2 */
+        /*
+            PBES2-params ::= SEQUENCE {
+                keyDerivationFunc AlgorithmIdentifier {{PBES2-KDFs}},
+                encryptionScheme AlgorithmIdentifier {{PBES2-Encs}}
+            }
+        */
+        if ((rc = getAsnSequence(&p, (int32) (end - p), &tmplen)) < 0)
+        {
+            psTraceCrypto("Initial PBE2 parse failure\n");
+            return rc;
+        }
+
+        end_ENC = p + tmplen;
+
+        if ((rc = getAsnSequence(&p, (int32) (end_ENC - p), &tmplen)) < 0)
+        {
+            psTraceCrypto("Initial PBKDF2 parse failure\n");
+            return rc;
+        }
+
+        end_KDF = p + tmplen;
+
+        /*
+            PBES2-KDFs ALGORITHM-IDENTIFIER ::= {
+                {PBKDF2-params IDENTIFIED BY id-PBKDF2},
+                ...
+            }
+        */
+        if ((rc = getAsnOID(&p, (int32) (end_KDF - p), &prf_oi, 0, &tmpint)) < 0)
+        {
+            psTraceCrypto("PBKDF2 algorithm parse failure\n");
+            return rc;
+        }
+
+        /* if ( oi == OID_PKCS_PBKDF2 ) */
+        /*
+            PBKDF2-params ::= SEQUENCE {
+                salt CHOICE {
+                    specified OCTET STRING,
+                    otherSource AlgorithmIdentifier {{PBKDF2-SaltSources}}
+                },
+                iterationCount INTEGER (1..MAX),
+                keyLength INTEGER (1..MAX) OPTIONAL,
+                prf AlgorithmIdentifier {{PBKDF2-PRFs}}
+                    DEFAULT algid-hmacWithSHA1
+            }
+        */
+        if ((rc = getAsnSequence(&p, (int32) (end_KDF - p), &tmplen)) < 0)
+        {
+            psTraceCrypto("PBKDF2 param parse failure\n");
+            return rc;
+        }
+
+        /*
+            salt CHOICE {
+                specified OCTET STRING,
+                otherSource AlgorithmIdentifier {{PBKDF2-SaltSources}}
+            },
+        */
+        if (tmplen > 0 && (*p == ASN_OCTET_STRING))
+        {
+            /* salt len */
+            p = p + 1;
+            if (getAsnLength(&p, (int32) (end_KDF - p), &tmplen) < 0 ||
+                (uint32) (end_KDF - p) < tmplen)
+            {
+                psTraceCrypto("Bad salt length parsing import\n");
+                return PS_PARSE_FAIL;
+            }
+            p_salt = p;
+            salt_len = tmplen;
+            p += tmplen;
+            salt_oi = -1;
+        }
+        else if ((rc = getAsnSequence(&p, (int32) (end_KDF - p), &tmplen)) < 0)
+        {
+            psTraceCrypto("Bad PBKDF2 salt parse\n");
+            return rc;
+        }
+        else
+        {
+            /* salt source algorithm
+             * reserved for future version
+             * should not enter this branch for now. */
+            if ((rc = getAsnOID(&p, (int32) (end_KDF - p), &salt_oi, 0, &tmpint)) < 0)
+            {
+                psTraceCrypto("PBKDF2 salt source algorithm parse failure\n");
+                return rc;
+            }
+            psTraceCrypto("PBKDF2 salt source not supported\n");
+            return PS_UNSUPPORTED_FAIL;
+        }
+
+        /* iteration count */
+        /*
+            iterationCount INTEGER (1..MAX),
+        */
+        if ((rc = getAsnInteger(&p, (int32) (end_KDF - p), &count)) < 0)
+        {
+            psTraceCrypto("Bad PBKDF2 iteration count\n");
+            return rc;
+        }
+
+        /* key length */
+        /*
+            keyLength INTEGER (1..MAX) OPTIONAL,
+        */
+        if (*p == ASN_INTEGER)
+        {
+            if ((rc = getAsnInteger(&p, (int32) (end_KDF - p),
+                (int32_t*)&keyLen)) < 0)
+            {
+                psTraceCrypto("Bad PBES2 key length\n");
+                return rc;
+            }
+        }
+        else
+        {
+            keyLen = -1;
+        }
+
+        /* prf algorithm */
+        /*
+            prf AlgorithmIdentifier {{PBKDF2-PRFs}}
+                DEFAULT algid-hmacWithSHA1
+        */
+        if ((rc = getAsnSequence(&p, (int32) (end_KDF - p), &tmplen)) < 0)
+        {
+            /* default prf is hmacWithSHA1 */
+            prf_oi = OID_HMAC_WITH_SHA1;
+        }
+        else
+        {
+            if ((rc = getAsnOID(&p, (int32) (end_KDF - p), &prf_oi,
+                                0, &tmpint)) < 0)
+            {
+                psTraceCrypto("PBKDF2 prf algorithm parse failure\n");
+                return rc;
+            }
+            if ((*p++ != ASN_NULL) || (*p++ != 0))
+            {
+                psTraceCrypto("PBKDF2 prf algorithm parse failure\n");
+                return PS_PARSE_FAIL;
+            }
+        }
+        if (p != end_KDF)
+        {
+            psTraceCrypto("PBKDF2 parse failure\n");
+            return PS_PARSE_FAIL;
+        }
+
+        /*
+            PBES2-Encs ALGORITHM-IDENTIFIER ::= { ... }
+        */
+        if ((rc = getAsnSequence(&p, (int32) (end_ENC - p), &tmplen)) < 0)
+        {
+            psTraceCrypto("Initial PBES2-Enc parse failure\n");
+            return rc;
+        }
+
+        if ((rc = getAsnOID(&p, (int32) (end_ENC - p), &enc_oi, 0, &tmpint))
+             < 0)
+        {
+            psTraceCrypto("PBES2 enc algorithm parse failure\n");
+            return rc;
+        }
+
+        switch (enc_oi)
+        {
+            case OID_AES_128_CBC:
+            case OID_AES_192_CBC:
+            case OID_AES_256_CBC:
+                if ((uint32) (end_ENC - p) < 18 ||
+                    (*p++ != ASN_OCTET_STRING) ||
+                    getAsnLength(&p, (int32) (end_ENC - p), &tmplen) < 0 ||
+                    tmplen != 16)
+                {
+                    /* get iv set the cipher algorithm foe later use */
+                    psTraceCrypto("PBES2 enc algorithm aram parse failure\n");
+                    return PS_PARSE_FAIL;
+                }
+                if ((iv = psMalloc(pool, tmplen)) == NULL)
+                {
+                    psTraceCrypto("Out-of-memory. \
+                                   Increase SSL_KEY_POOL_SIZE\n");
+                    return PS_MEM_FAIL;
+                }
+                Memcpy(iv, p, tmplen);
+                ivLen = tmplen;
+                p += tmplen;
+
+                switch (enc_oi)
+                {
+                    case OID_AES_128_CBC:
+                        keyLen = 16;
+                    break;
+                    case OID_AES_192_CBC:
+                        keyLen = 24;
+                    break;
+                    case OID_AES_256_CBC:
+                        keyLen = 32;
+                    break;
+                }
+                break;
+
+            default:
+                psTraceCrypto("PBE encryption algorithm not supported\n");
+                return PS_UNSUPPORTED_FAIL;
+        }
+        cipher = enc_oi;
+
+        if (p != end_ENC)
+        {
+            psTraceCrypto("PBES2-ENC parse failure\n");
+            psFree(iv, pool);
+            return PS_PARSE_FAIL;
+        }
+
+        if (pkcs12pbkdf2(pool, prf_oi, password, passLen,
+                p_salt, salt_len, keyLen, count, &decryptKey) < 0)
+        {
+            psTraceCrypto("Error generating pkcs12 key from password\n");
+            psFree(iv, pool);
+            return PS_UNSUPPORTED_FAIL;
+        }
+    }
 
     /* Got the keys but we still need to find the start of the encrypted data.
         Have seen a few different BER variations at this point in the spec
@@ -569,6 +837,7 @@ static int32 pkcs12import(psPool_t *pool, const unsigned char **buf,
      */
     if ((uint32) (end - p) < 1)
     {
+        psFree(iv, pool);
         return PS_PARSE_FAIL;
     }
     if (*p == (ASN_CONTEXT_SPECIFIC | ASN_PRIMITIVE))
@@ -702,6 +971,31 @@ static int32 pkcs12import(psPool_t *pool, const unsigned char **buf,
     }
 #    endif /* USE_RC2 */
 
+    switch (cipher)
+    {
+        case OID_AES_128_CBC:
+        case OID_AES_192_CBC:
+        case OID_AES_256_CBC:
+        {
+            if ((rc = psAesInitCBC(&ctx.aes, iv, decryptKey, keyLen,
+                                   PS_AES_DECRYPT)) < 0)
+            {
+                memset_s(&ctx, sizeof(psCipherContext_t), 0x0,
+                         sizeof(psCipherContext_t));
+                if (decryptKey)
+                {
+                    memset_s(decryptKey, keyLen, 0x0, keyLen);
+                    psFree(decryptKey, pool);
+                }
+                psFree(iv, pool);
+                psFree(pt, pool);
+                return rc;
+            }
+            psAesDecryptCBC(&ctx.aes, p, pt, tmplen);
+        }
+        break;
+    }
+
     if (decryptKey)
     {
         memset_s(decryptKey, keyLen, 0x0, keyLen);
@@ -709,8 +1003,10 @@ static int32 pkcs12import(psPool_t *pool, const unsigned char **buf,
     }
     psFree(iv, pool);
 
+
     *plaintext = pt;
     *ptLen = tmplen;
+
     return (int32) (p - start);
 }
 
@@ -1136,13 +1432,14 @@ int32 psPkcs12ParseMem(psPool_t *pool, psX509Cert_t **cert, psPubKey_t *privKey,
     int32 pLen, unsigned char *macPass, int32 macPassLen)
 {
     psHmacSha1_t hmac;
+    psHmacSha256_t sha256hmac;
     const unsigned char *p, *end, *macStart, *macEnd;
     unsigned char *macKey;
     unsigned char iwidePass[128];   /* 63 char password max */
     unsigned char mwidePass[128];
-    unsigned char mac[SHA1_HASH_SIZE];
+    unsigned char mac[SHA256_HASH_SIZE];
     unsigned char macSalt[20];
-    unsigned char digest[SHA1_HASH_SIZE];
+    unsigned char digest[SHA256_HASH_SIZE];
     psSize_t tmplen, tmpint;
     uint32 digestLen, macKeyLen;
     int32 i, j, rc, mpassLen, ipassLen, integrity, oi, asnint;
@@ -1293,7 +1590,7 @@ int32 psPkcs12ParseMem(psPool_t *pool, psX509Cert_t **cert, psPubKey_t *privKey,
                 of the content field of the authSafe field in the PFX PDU */
             macKeyLen = 20;
             if (pkcs12pbe(pool, mwidePass, mpassLen, macSalt, tmplen,
-                    asnint, PKCS12_MAC_ID, &macKey, &macKeyLen) < 0)
+                    asnint, PKCS12_MAC_ID, 0, &macKey, &macKeyLen) < 0)
             {
                 psTraceCrypto("Error generating pkcs12 hmac key\n");
                 rc = PS_UNSUPPORTED_FAIL;
@@ -1305,6 +1602,29 @@ int32 psPkcs12ParseMem(psPool_t *pool, psX509Cert_t **cert, psPubKey_t *privKey,
             psHmacSha1Final(&hmac, mac);
             psFree(macKey, pool);
             if (Memcmp(digest, mac, SHA1_HASH_SIZE) != 0)
+            {
+                psTraceCrypto("CAUTION: PKCS#12 MAC did not validate\n");
+                rc = PS_AUTH_FAIL;
+                goto ERR_PARSE;
+            }
+        }
+        else
+        if (oi == OID_SHA256_ALG)
+        {
+            macKeyLen = SHA256_HASH_SIZE;
+            if (pkcs12pbe(pool, mwidePass, mpassLen, macSalt, tmplen,
+                    asnint, PKCS12_MAC_ID, OID_SHA256_ALG, &macKey, &macKeyLen) < 0)
+            {
+                psTraceCrypto("Error generating pkcs12 hmac key\n");
+                rc = PS_UNSUPPORTED_FAIL;
+                goto ERR_PARSE;
+            }
+            digestLen = (uint32) (macEnd - macStart);
+            psHmacSha256Init(&sha256hmac, macKey, macKeyLen);
+            psHmacSha256Update(&sha256hmac, macStart, digestLen);
+            psHmacSha256Final(&sha256hmac, mac);
+            psFree(macKey, pool);
+            if (Memcmp(digest, mac, SHA256_HASH_SIZE) != 0)
             {
                 psTraceCrypto("CAUTION: PKCS#12 MAC did not validate\n");
                 rc = PS_AUTH_FAIL;

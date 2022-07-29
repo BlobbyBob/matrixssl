@@ -1,7 +1,7 @@
 #
 #       Skeleton of build file with generic rules
 #
-#       Copyright (c) 2017 INSIDE Secure Oy. All Rights Reserved.
+#       Copyright (c) 2017 Rambus Inc. All Rights Reserved.
 #
 
 # Generate list of generated executables (currently supports test)

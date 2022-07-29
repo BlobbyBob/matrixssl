@@ -7,7 +7,7 @@
  *      defined in matrixssllib.h.
  */
 /*
- *      Copyright (c) 2013-2018 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -20,8 +20,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -548,6 +548,10 @@ void psPrintSigAlgs(psSize_t indentLevel,
     {
        tlsTraceIndent(indentLevel, "ECDSA-SHA512\n");
     }
+    if (sigAlgs & HASH_SIG_SM3_SM2_MASK)
+    {
+       tlsTraceIndent(indentLevel, "SM2-SM3\n");
+    }
 
     if (addNewline)
     {
@@ -614,6 +618,9 @@ void psPrintMatrixSigAlg(psSize_t indentLevel,
         break;
     case OID_RSA_TLS_SIG_ALG:
         tlsTrace("rsa_md5sha1");
+        break;
+    case OID_SM3_SM2_SIG:
+        tlsTrace("sm2sig_sm3");
         break;
     default:
         tlsTraceInt("Unknown/unexpected sig alg: %d", alg);
@@ -707,6 +714,10 @@ void psPrintTls13SigAlg(psSize_t indentLevel,
     {
        tlsTrace("ecdsa_sha1");
     }
+    else if (alg == sigalg_sm2sig_sm3)
+    {
+       tlsTrace("sm2sig_sm3");
+    }
     else
     {
         tlsTraceInt("Unknown signature algorithm: %hu\n", alg);
@@ -752,12 +763,12 @@ void psPrintTls13SigAlgList(psSize_t indentLevel,
         psSize_t numAlgs,
         psBool_t addNewline)
 {
-    return psPrintTls13SigAlgListInner(indentLevel,
-            where,
-            algs,
-            numAlgs,
-            PS_FALSE,
-            PS_TRUE);
+    psPrintTls13SigAlgListInner(indentLevel,
+     where,
+     algs,
+     numAlgs,
+     PS_FALSE,
+     PS_TRUE);
 }
 
 void psPrintTls13SigAlgListBigEndian(psSize_t indentLevel,
@@ -766,12 +777,12 @@ void psPrintTls13SigAlgListBigEndian(psSize_t indentLevel,
         psSize_t numAlgs,
         psBool_t addNewline)
 {
-    return psPrintTls13SigAlgListInner(indentLevel,
-            where,
-            algs,
-            numAlgs,
-            PS_TRUE,
-            PS_TRUE);
+    psPrintTls13SigAlgListInner(indentLevel,
+     where,
+     algs,
+     numAlgs,
+     PS_TRUE,
+     PS_TRUE);
 }
 
 void psPrintVer(psProtocolVersion_t ver)
@@ -1005,6 +1016,10 @@ void psPrintTls13NamedGroup(psSize_t indentLevel,
     {
         tlsTrace("ffdhe8192");
     }
+    else if (namedGroup == 0x0029)
+    {
+        tlsTrace("curveSM2");
+    }
     else if (namedGroup >= 0x01fc && namedGroup <= 0x1ff)
     {
         tlsTrace("ffdhe_private_use");
@@ -1099,6 +1114,10 @@ void psPrintEcFlags(psSize_t indentLevel,
     else if (ecFlags & IS_SECP521R1)
     {
         tlsTrace("P-521\n");
+    }
+    else if (ecFlags & IS_CURVESM2)
+    {
+        tlsTrace("SM2\n");
     }
 # else
     tlsTrace("Need USE_ECC for this\n");
@@ -1598,6 +1617,12 @@ void psPrintTranscriptHashUpdate(ssl_t *ssl,
     {
         tlsTrace("SHA-256");
     }
+#ifdef USE_SM3
+    else if (hashAlg == OID_SM3_ALG)
+    {
+        tlsTrace("SM3");
+    }
+#endif
     else
     {
         tlsTrace("Unknown digest");
@@ -1670,6 +1695,9 @@ void psPrintCiphersuiteName(psSize_t indentLevel,
         break;
     case TLS_DH_anon_WITH_AES_256_CBC_SHA:
         tlsTrace("TLS_DH_anon_WITH_AES_256_CBC_SHA");
+        break;
+    case TLS_RSA_WITH_NULL_SHA256:
+        tlsTrace("TLS_RSA_WITH_NULL_SHA256");
         break;
     case TLS_RSA_WITH_AES_128_CBC_SHA256:
         tlsTrace("TLS_RSA_WITH_AES_128_CBC_SHA256");
@@ -1806,11 +1834,26 @@ void psPrintCiphersuiteName(psSize_t indentLevel,
     case TLS_CHACHA20_POLY1305_SHA256:
         tlsTrace("TLS_CHACHA20_POLY1305_SHA256");
         break;
-    case TLS_AES_128_CCM_SHA_256:
-        tlsTrace("TLS_AES_128_CCM_SHA_256");
+    case TLS_AES_128_CCM_SHA256:
+        tlsTrace("TLS_AES_128_CCM_SHA256");
         break;
     case TLS_AES_128_CCM_8_SHA256:
         tlsTrace("TLS_AES_128_CCM_8_SHA_256");
+        break;
+    case TLS_SM4_GCM_SM3:
+        tlsTrace("TLS_SM4_GCM_SM3");
+        break;
+    case TLS_SM4_CCM_SM3:
+        tlsTrace("TLS_SM4_CCM_SM3");
+        break;
+    case TLS_ECDHE_SM2_WITH_SMS4_SM3:
+        tlsTrace("TLS_ECDHE_SM2_WITH_SMS4_SM3");
+        break;
+    case TLS_ECDHE_SM2_WITH_SMS4_SHA256:
+        tlsTrace("TLS_ECDHE_SM2_WITH_SMS4_SHA256");
+        break;
+    case TLS_ECDHE_SM2_WITH_SMS4_GCM_SM3:
+        tlsTrace("TLS_ECDHE_SM2_WITH_SMS4_GCM_SM3");
         break;
     default:
         tlsTraceInt("Unknown ciphersuite: %d", cipherId);

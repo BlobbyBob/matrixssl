@@ -5,7 +5,7 @@
  *      Functions for decoding TLS 1.3 records.
  */
 /*
- *      Copyright (c) 2013-2019 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2019 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -63,7 +63,7 @@ int32_t tls13ParseRecordHeader(ssl_t* ssl,
 }
 
 static inline
-int32_t tls13ValidateRecordHeader(sslRec_t *rec)
+int32_t tls13ValidateRecordHeader(sslRec_t *rec, size_t tagLen)
 {
     /* Validate length. */
     if (rec->len > TLS_1_3_MAX_CIPHERTEXT_LEN || rec->len == 0)
@@ -73,7 +73,7 @@ int32_t tls13ValidateRecordHeader(sslRec_t *rec)
     }
     if (rec->type == SSL_RECORD_TYPE_ALERT)
     {
-        if (rec->len < 2 || rec->len > 2 + TLS_GCM_TAG_LEN)
+        if (rec->len < 2 || rec->len > 2 + tagLen)
         psTraceErrr("Invalid alert length\n");
     }
     /* Ignore legacy_version field. */
@@ -219,7 +219,7 @@ parse_next_record_header:
 #ifdef DEBUG_TLS_1_3_DECODE
     psTracePrintRecordHeader(&ssl->rec, PS_TRUE);
 #endif
-    rc = tls13ValidateRecordHeader(&ssl->rec);
+    rc = tls13ValidateRecordHeader(&ssl->rec, AEAD_TAG_LEN(ssl));
     HANDLE_PARSE_RC(rc, SSL_ALERT_ILLEGAL_PARAMETER);
 
     if (!psParseCanRead(&pb, ssl->rec.len))
@@ -283,7 +283,7 @@ parse_next_record_header:
     }
     else if (ssl->rec.type == SSL_RECORD_TYPE_ALERT)
     {
-        if (ssl->rec.len < 2 + TLS_GCM_TAG_LEN)
+        if (ssl->rec.len < 2 + AEAD_TAG_LEN(ssl))
         {
             /* If it's this short, it cannot be an encrypted. */
             rc = tls13ParseAndHandleAlert(ssl,
@@ -416,18 +416,18 @@ parse_next_record_header:
     /* Deal with the decrypted message. */
     if (innerType == SSL_RECORD_TYPE_HANDSHAKE)
     {
-	unsigned char *p_start = p;
         end = p + ptLen;
         /* Parse handshake messages until buffer runs out */
         while (p != end)
         {
-            rc = tls13ParseHandshakeMessage(ssl,
-                    &p, end);
+            unsigned char *p_start = p;
+
+            rc = tls13ParseHandshakeMessage(ssl, &p, end);
             if (rc < 0)
             {
                 if (DECRYPTING_RECORDS(ssl))
                 {
-                    p += TLS_GCM_TAG_LEN;
+                    p += AEAD_TAG_LEN(ssl);
                     p += 1;
                     p += padLen;
                 }
@@ -446,12 +446,13 @@ parse_next_record_header:
                  * Either handshake message or alert */
                 goto encodeResponse;
             }
-	    /* If we got a parse return of >= 0 but p did not move forward,
-	     * return an error to avoid infinite loop */
-	    if (p_start == p)
-	    {
-        	return PS_FAILURE;
-	    }
+
+            /* If we got a parse return of >= 0 but p did not move forward,
+             * return an error to avoid infinite loop */
+            if (p_start == p)
+            {
+                return PS_FAILURE;
+            }
         }
     }
     else if (innerType == SSL_RECORD_TYPE_APPLICATION_DATA)
@@ -1430,7 +1431,7 @@ int32_t tls13ParseServerHello(ssl_t *ssl,
     }
 
     rc = tls13ParseServerHelloExtensions(ssl, pb);
-    if (rc < 0)
+    if (rc < 0 && rc != SSL_ENCODE_RESPONSE)
     {
         /* In addition to failure cases, we can end up here
            if we negotiated TLS <1.3. In that case, return
@@ -1447,6 +1448,20 @@ int32_t tls13ParseServerHello(ssl_t *ssl,
         psTraceIntInfo("Can't support requested cipher: %d\n", cipher);
         return MATRIXSSL_ERROR;
     }
+
+    if (rc == SSL_ENCODE_RESPONSE)
+    {
+        /* Return after selecting a ciphersuite for a
+           correct Transcript Hash */
+        psTraceInfo("Need to re-send TLS 1.3 ClientHello\n");
+        return rc;
+    }
+
+    if (ssl->cipher->flags & CRYPTO_FLAGS_SM4)
+    {
+        ssl->tls13SelectedSMSuite = PS_TRUE;
+    }
+
     if (compressionMethod != 0)
     {
         ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;

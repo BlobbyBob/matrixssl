@@ -5,7 +5,7 @@
  *      MatrixSSL Public API Layer.
  */
 /*
- *      Copyright (c) 2013-2018 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -900,7 +900,6 @@ int32 matrixSslGetReadbufOfSize(ssl_t *ssl, int32 size, unsigned char **buf)
         if ((p = psRealloc(ssl->inbuf, ssl->inlen + size, ssl->bufferPool))
             == NULL)
         {
-            ssl->inbuf = NULL; ssl->insize = 0; ssl->inlen = 0;
             return PS_MEM_FAIL;
         }
         ssl->inbuf = p;
@@ -1885,10 +1884,6 @@ int32_t matrixSslEncodeRehandshake(ssl_t *ssl, sslKeys_t *keys,
     unsigned char *p;
     sslSessOpts_t options;
 
-    /* Clear extFlags for rehandshakes */
-    ssl->extFlags.truncated_hmac = 0;
-    ssl->extFlags.sni = 0;
-
     if (ssl == NULL || ssl->cipher == NULL)
     {
         return PS_ARG_FAIL;
@@ -1902,6 +1897,10 @@ int32_t matrixSslEncodeRehandshake(ssl_t *ssl, sslKeys_t *keys,
         return PS_PROTOCOL_FAIL;
     }
     psAssert(ssl->outsize > 0 && ssl->outbuf != NULL);
+
+    /* Clear extFlags for rehandshakes */
+    ssl->extFlags.truncated_hmac = 0;
+    ssl->extFlags.sni = 0;
 
 #  ifdef DISABLE_DTLS_CLIENT_CHANGE_CIPHER_FROM_GCM_TO_GCM
 #  endif  /* DISABLE_DTLS_CLIENT_CHANGE_CIPHER_FROM_GCM_TO_GCM */

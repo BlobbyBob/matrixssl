@@ -5,7 +5,7 @@
  *      SSL/TLS handshake message parsing for TLS 1.2 and below.
  */
 /*
- *      Copyright (c) 2013-2018 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -144,9 +144,9 @@ int32 parseSslv2ClientHelloContent(ssl_t *ssl,
 
 int32 parseClientHello(ssl_t *ssl, unsigned char **cp, unsigned char *end)
 {
-    unsigned char *suiteStart, *suiteEnd;
+    unsigned char *suiteStart = NULL, *suiteEnd = NULL;
     unsigned char compLen;
-    uint32 suiteLen;
+    uint32 suiteLen = 0;
     uint32 resumptionOnTrack, cipher = 0;
     int32 rc, i;
     unsigned char *c;
@@ -1399,7 +1399,6 @@ int32 parseCertificateVerify(ssl_t *ssl,
             psTraceErrr("Invalid Certificate Verify message 1\n");
             return MATRIXSSL_ERROR;
         }
-
         hashAlg = c[0];
         sigAlg = (uint16_t)((c[0] << 8) | c[1]);
         /* Convert from official SignatureAndHashAlgorithm ID to MatrixSSL
@@ -1450,6 +1449,13 @@ int32 parseCertificateVerify(ssl_t *ssl,
         case HASH_SIG_SHA512:
             sslSha512RetrieveHSHash(ssl, hsMsgHash);
             refMsgLen = SHA512_HASH_SIZE;
+            break;
+#    endif
+#    ifdef USE_SM3
+        case HASH_SIG_SM3:
+            sslSm3RetrieveHSHash(ssl, hsMsgHash);
+            refMsgLen = SM3_HASH_SIZE;
+            opts.msgIsDigestInfo = PS_TRUE;
             break;
 #    endif
         default:
@@ -1959,6 +1965,12 @@ int32 parseServerKeyExchange(ssl_t *ssl,
             /* Next is curveId */
             i = *c << 8; c++;
             i |= *c; c++;
+# if defined(USE_SM2) && defined(USE_SM3)
+            if (i == namedgroup_x448)
+            {
+                i = namedgroup_curveSM2;
+            }
+# endif
             if (!psIsEcdheGroup(i))
             {
                 ssl->err = SSL_ALERT_ILLEGAL_PARAMETER;
@@ -1966,6 +1978,12 @@ int32 parseServerKeyExchange(ssl_t *ssl,
                 psTraceIntInfo("Group ID: %d\n", i);
             }
             ssl->sec.peerCurveId = i;
+#   if defined(USE_SM2) && defined(USE_SM3)
+            if (i == namedgroup_x448)
+            {
+                i = namedgroup_curveSM2;
+            }
+#   endif
 
 #   ifdef USE_X25519
             if (i == namedgroup_x25519)
@@ -3021,6 +3039,10 @@ SKIP_CERT_CHAIN_INIT:
 
         if (i++ == 0)
         {
+            if(ssl->sec.cert)
+            {
+                psX509FreeCert(ssl->sec.cert);
+            }
             ssl->sec.cert = cert;
             currentCert = ssl->sec.cert;
         }
@@ -3176,6 +3198,13 @@ RESUME_VALIDATE_CERTS:
         default:
             break;
         }
+
+        /* Check if this is the last validated certificate. */
+        if (cert->pathEnd == PS_TRUE)
+        {
+            break;
+        }
+
         cert = cert->next;
     }
 

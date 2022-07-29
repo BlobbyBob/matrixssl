@@ -9,7 +9,7 @@
  *  and MatrixSSL software or related software components.
  */
 /*
- *      Copyright (c) 2017 INSIDE Secure Corporation
+ *      Copyright (c) 2017 Rambus Inc.
  *      All Rights Reserved
  *
  *      The latest version of this code is available at http://www.matrixssl.org
@@ -21,8 +21,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus Inc at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.

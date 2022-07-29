@@ -5,7 +5,7 @@
  *      Secure Sockets Layer protocol message encoding portion of MatrixSSL.
  */
 /*
- *      Copyright (c) 2013-2019 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2019 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -1240,6 +1240,9 @@ ok:
                 /* TLS 1.2 has a SigAndHashAlgorithm member in certRequest */
                 certReqLen += 2;
 #     ifdef USE_ECC
+#      if defined(USE_SM2) && defined(USE_SM3)
+                certReqLen += 2;
+#      endif
 #      ifdef USE_SHA384
                 certReqLen += 6;
 #      else
@@ -1247,6 +1250,9 @@ ok:
 #      endif /* USE_SHA */
 #     endif  /* USE_ECC */
 #     ifdef USE_RSA
+#      ifdef USE_SHA512
+                certReqLen += 2;
+#      endif
 #      ifdef USE_SHA384
                 certReqLen += 6;
 #      else
@@ -2738,6 +2744,9 @@ void clearPkaAfter(ssl_t *ssl)
     ssl->pkaAfter[0].data = NULL;
     ssl->pkaAfter[0].inlen = 0;
     ssl->pkaAfter[0].user = 0;
+# if defined(USE_SM2) && defined(USE_SM3)
+    ssl->pkaAfter[0].sigAlg = 0;
+# endif
 
     if (ssl->pkaAfter[1].type != 0)
     {
@@ -2746,12 +2755,18 @@ void clearPkaAfter(ssl_t *ssl)
         ssl->pkaAfter[0].data = ssl->pkaAfter[1].data;
         ssl->pkaAfter[0].inlen = ssl->pkaAfter[1].inlen;
         ssl->pkaAfter[0].user = ssl->pkaAfter[1].user;
+# if defined(USE_SM2) && defined(USE_SM3)
+        ssl->pkaAfter[0].sigAlg = ssl->pkaAfter[1].sigAlg;
+# endif
 
         ssl->pkaAfter[1].type = 0;
         ssl->pkaAfter[1].outbuf = NULL;
         ssl->pkaAfter[1].data = NULL;
         ssl->pkaAfter[1].inlen = 0;
         ssl->pkaAfter[1].user = 0;
+# if defined(USE_SM2) && defined(USE_SM3)
+        ssl->pkaAfter[1].sigAlg = 0;
+# endif
     }
 }
 
@@ -4173,8 +4188,18 @@ static int32 writeServerKeyExchange(ssl_t *ssl, sslBuf_t *out, uint32 pLen,
          2 byte - NamedCurve id
  */
         *c = 3; c++; /* NamedCurve enum */
-        *c = (ssl->sec.eccKeyPriv->curve->curveId & 0xFF00) >> 8; c++;
-        *c = (ssl->sec.eccKeyPriv->curve->curveId & 0xFF); c++;
+# if defined(USE_SM2) && defined(USE_SM3)
+        if (ssl->sec.eccKeyPriv->curve->curveId == IANA_CURVESM2)
+        {
+            *c = (30 & 0xFF00) >> 8; c++;
+            *c = (30 & 0xFF); c++;
+        }
+        else
+# endif
+        {
+            *c = (ssl->sec.eccKeyPriv->curve->curveId & 0xFF00) >> 8; c++;
+            *c = (ssl->sec.eccKeyPriv->curve->curveId & 0xFF); c++;
+        }
         *c = eccPubKeyLen & 0xFF; c++;
         if (psEccX963ExportKey(ssl->hsPool, ssl->sec.eccKeyPriv, c,
                 &eccPubKeyLen) != 0)
@@ -5202,6 +5227,13 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
         addRenegotiationScsv = 1;
         if (cipherSpecLen > 0)
         {
+            /* Free existing cipherlist if new ClientHello generated after
+               receiving HELLO_VERIFY_REQUEST. */
+            if (ssl->tlsClientCipherSuites != NULL)
+            {
+                psFree(ssl->tlsClientCipherSuites, ssl->hsPool);
+            }
+
             /* Store the initial ClientHello cipherlist for re-sending during
                possible server-initiated renegotiations. */
             ssl->tlsClientCipherSuites = psMalloc(ssl->hsPool,
@@ -5422,6 +5454,13 @@ int32_t matrixSslEncodeClientHello(ssl_t *ssl, sslBuf_t *out,
 
     for (i = 0; i < ssl->supportedSigAlgsLen; i++)
     {
+# if defined(USE_SM2) && defined(USE_SM3)
+        if (ssl->supportedSigAlgs[i] == sigalg_sm2sig_sm3)
+        {
+            ADD_SIG_HASH(0x7, 0x7);
+            continue;
+        }
+# endif
         ADD_SIG_HASH((ssl->supportedSigAlgs[i] & 0xff00) >> 8,
                      ssl->supportedSigAlgs[i] & 0xff);
     }
@@ -6654,6 +6693,12 @@ static int32 getSnapshotHSHash(ssl_t *ssl,
             break;
 #     endif
         default:
+#     ifdef USE_SM3
+            if (pka->sigAlg == OID_SM3_SM2_SIG)
+            {
+                sslSm3SnapshotHSHash(ssl, msgHash);
+            }
+#     endif
             break;
         }
     }
@@ -6675,6 +6720,7 @@ static int nowDoCvPkaInnerECDSA(ssl_t *ssl, pkaAfter_t *pka,
     unsigned char *sig;
     psSize_t sigLen;
     int32_t sigAlg;
+    psSignOpts_t opts = {0};
 
     if (chosen == NULL)
     {
@@ -6772,7 +6818,7 @@ static int nowDoCvPkaInnerECDSA(ssl_t *ssl, pkaAfter_t *pka,
             hashTbsLen,
             &sig,
             &sigLen,
-            NULL);
+            &opts);
     if (rc != PS_SUCCESS)
     {
         goto out;
@@ -7222,6 +7268,9 @@ static int32 writeCertificateVerify(ssl_t *ssl, sslBuf_t *out)
 #     endif
 
         pkaAfter->inlen = hashSize;
+# if defined(USE_SM2) && defined(USE_SM3)
+        pkaAfter->sigAlg = sigAlg;
+# endif
         pkaAfter->type = PKA_AFTER_ECDSA_SIG_GEN;
         pkaAfter->data = pkiData;
         pkaAfter->outbuf = c;
@@ -7411,6 +7460,9 @@ static int32 writeCertificateRequest(ssl_t *ssl, sslBuf_t *out, int32 certLen,
         /* TLS 1.2 has a SignatureAndHashAlgorithm type after CertType */
         sigHashLen = 2;
 #    ifdef USE_ECC
+#     if defined(USE_SM2) && defined(USE_SM3)
+        sigHashLen += 2;
+#     endif
 #     ifdef USE_SHA384
         sigHashLen += 6;
 #     else
@@ -7418,6 +7470,9 @@ static int32 writeCertificateRequest(ssl_t *ssl, sslBuf_t *out, int32 certLen,
 #     endif /* USE_SHA */
 #    endif  /* USE_ECC */
 #    ifdef USE_RSA
+#     ifdef USE_SHA512
+        sigHashLen += 2;
+#     endif
 #     ifdef USE_SHA384
         sigHashLen += 6;
 #     else
@@ -7495,6 +7550,9 @@ static int32 writeCertificateRequest(ssl_t *ssl, sslBuf_t *out, int32 certLen,
         *c++ = 0x0;
         *c++ = sigHashLen - 2;
 #    ifdef USE_ECC
+#     if defined(USE_SM2) && defined(USE_SM3)
+        *c++ = 0x7; *c++ = 0x7;
+#     endif
 #     ifdef USE_SHA384
         *c++ = 0x5; /* SHA384 */
         *c++ = 0x3; /* ECDSA */
@@ -7511,6 +7569,9 @@ static int32 writeCertificateRequest(ssl_t *ssl, sslBuf_t *out, int32 certLen,
 #    endif
 
 #    ifdef USE_RSA
+#     ifdef USE_SHA512
+        *c++ = 0x6; *c++ = 0x1;
+#     endif
 #     ifdef USE_SHA384
         *c++ = 0x5; /* SHA384 */
         *c++ = 0x1; /* RSA */

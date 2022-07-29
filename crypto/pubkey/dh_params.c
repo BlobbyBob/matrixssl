@@ -5,7 +5,7 @@
  *      Diffie-Hellman: parameters
  */
 /*
- *      Copyright (c) 2013-2018 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -94,11 +94,8 @@ int32_t psPkcs3ParseDhParamBin(psPool_t *pool, const unsigned char *dhBin,
     {
         /* Read desired length of private key.
            (Note: currently ignored by MatrixSSL). */
-        pstm_int bitlen;
-        if (pstm_init_size(pool, &bitlen, 1) < 0)
-        {
-            goto L_ERR;
-        }
+        pstm_int bitlen = PSTM_INT_INIT;
+
         if (pstm_read_asn(pool, &c, (uint16_t) (end - c), &bitlen) < 0)
         {
             pstm_clear(&bitlen);

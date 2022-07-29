@@ -6,7 +6,7 @@
  *      TLS 1.0/1.1/1.2.
  */
 /*
- *      Copyright (c) 2013-2018 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -19,8 +19,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -110,6 +110,9 @@ int32_t sslInitHSHash(ssl_t *ssl)
 #  ifdef USE_SHA512
     psSha512Init(&ssl->sec.msgHashSha512);
 #  endif
+#  ifdef USE_SM3
+    psSm3Init(&ssl->sec.msgHashSm3);
+#  endif
 # endif
 
     return 0;
@@ -171,6 +174,9 @@ int32_t sslUpdateHSHash(ssl_t *ssl, const unsigned char *in, psSize_t len)
 #  ifdef USE_SHA512
         psSha512Update(&ssl->sec.msgHashSha512, in, len);
 #  endif
+#  ifdef USE_SM3
+        psSm3Update(&ssl->sec.msgHashSm3, in, len);
+#  endif
     }
 # endif /* USE_TLS_1_2 */
 
@@ -211,6 +217,13 @@ int32 sslSha512RetrieveHSHash(ssl_t *ssl, unsigned char *out)
     return SHA512_HASH_SIZE;
 }
 #   endif
+#   ifdef USE_SM3
+int32 sslSm3RetrieveHSHash(ssl_t *ssl, unsigned char *out)
+{
+    Memcpy(out, ssl->sec.sm3Snapshot, SM3_HASH_SIZE);
+    return SM3_HASH_SIZE;
+}
+#   endif
 #  endif /* USE_SERVER_SIDE_SSL && USE_CLIENT_AUTH */
 
 #  if defined(USE_CLIENT_SIDE_SSL) && defined(USE_CLIENT_AUTH)
@@ -247,6 +260,16 @@ void sslSha512SnapshotHSHash(ssl_t *ssl, unsigned char *out)
     psSha512Final(&sha512, out);
 }
 #   endif
+#   ifdef USE_SM3
+void sslSm3SnapshotHSHash(ssl_t *ssl, unsigned char *out)
+{
+    psSm3_t sm3;
+
+    psSm3Sync(&ssl->sec.msgHashSm3, 0);
+    sm3 = ssl->sec.msgHashSm3;
+    psSm3Final(&sm3, out);
+}
+#   endif
 #  endif /* USE_CLIENT_SIDE_SSL && USE_CLIENT_AUTH */
 # endif  /* USE_TLS_1_2 */
 
@@ -271,6 +294,9 @@ static int32_t tlsGenerateFinishedHash(ssl_t *ssl,
 #   endif
 #   ifdef USE_SHA512
     psSha512_t *sha512,
+#   endif
+#   ifdef USE_SM3
+    psSm3_t *sm3,
 #   endif
 #  endif /* USE_TLS_1_2 */
     unsigned char *masterSecret,
@@ -305,6 +331,17 @@ static int32_t tlsGenerateFinishedHash(ssl_t *ssl,
                     TLS_HS_FINISHED_SIZE, CRYPTO_FLAGS_SHA3);
 #   endif
             }
+#   ifdef USE_SM3
+           else if (ssl->cipher->flags & CRYPTO_FLAGS_SM3)
+            {
+                psSm3_t sm3_backup;
+                psSm3Cpy(&sm3_backup, sm3);
+                psSm3Final(&sm3_backup, tmp + FINISHED_LABEL_SIZE);
+                return prf2(masterSecret, SSL_HS_MASTER_SIZE, tmp,
+                    FINISHED_LABEL_SIZE + SM3_HASH_SIZE, out,
+                    TLS_HS_FINISHED_SIZE, CRYPTO_FLAGS_SM3);
+            }
+#   endif
             else
             {
                 psSha256_t sha256_backup;
@@ -372,6 +409,13 @@ static int32_t tlsGenerateFinishedHash(ssl_t *ssl,
                     psSha512Final(&sha512_backup, ssl->sec.sha512Snapshot);
                 }
 #    endif
+#    ifdef USE_SM3
+                {
+                    psSm3_t sm3_backup;
+                    psSm3Cpy(&sm3_backup, sm3);
+                    psSm3Final(&sm3_backup, ssl->sec.sm3Snapshot);
+                }
+#    endif
 #    ifdef USE_SHA1
                 {
                     psSha1_t sha1_backup;
@@ -437,6 +481,15 @@ int32_t extMasterSecretSnapshotHSHash(ssl_t *ssl, unsigned char *out,
             *outLen = SHA384_HASH_SIZE;
 #  endif
         }
+# ifdef USE_SM3
+        else if (ssl->cipher->flags & CRYPTO_FLAGS_SM3)
+        {
+            psSm3_t sm3;
+            psSm3Cpy(&sm3, &ssl->sec.msgHashSm3);
+            psSm3Final(&sm3, out);
+            *outLen = SM3_HASH_SIZE;
+        }
+#  endif
         else
         {
 #  ifdef USE_SHA256
@@ -526,6 +579,9 @@ int32_t sslSnapshotHSHash(ssl_t *ssl,
 #   endif
 #   ifdef USE_SHA512
             &ssl->sec.msgHashSha512,
+#   endif
+#   ifdef USE_SM3
+            &ssl->sec.msgHashSm3,
 #   endif
 #  endif /* USE_TLS_1_2 */
             ssl->sec.masterSecret, out, senderFlag);

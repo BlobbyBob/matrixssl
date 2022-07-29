@@ -5,7 +5,7 @@
  *      DER/BER coding.
  */
 /*
- *      Copyright (c) 2013-2017 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2017 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -630,6 +630,13 @@ static void checkAsnOidDatabase(int32_t *oi,
         case OID_MD2_ALG: oid_hex = OID_MD2_ALG_HEX; break;
         case OID_MD4_ALG: oid_hex = OID_MD4_ALG_HEX; break;
         case OID_MD5_ALG: oid_hex = OID_MD5_ALG_HEX; break;
+        case OID_HMAC_WITH_SHA1: oid_hex = OID_HMAC_WITH_SHA1_HEX; break;
+        case OID_HMAC_WITH_SHA224: oid_hex = OID_HMAC_WITH_SHA224_HEX; break;
+        case OID_HMAC_WITH_SHA256: oid_hex = OID_HMAC_WITH_SHA256_HEX; break;
+        case OID_HMAC_WITH_SHA384: oid_hex = OID_HMAC_WITH_SHA384_HEX; break;
+        case OID_HMAC_WITH_SHA512: oid_hex = OID_HMAC_WITH_SHA512_HEX; break;
+        case OID_HMAC_WITH_SHA512_224: oid_hex = OID_HMAC_WITH_SHA512_224_HEX; break;
+        case OID_HMAC_WITH_SHA512_256: oid_hex = OID_HMAC_WITH_SHA512_256_HEX; break;
         case OID_MD2_RSA_SIG: oid_hex = OID_MD2_RSA_SIG_HEX; break;
         case OID_MD4_RSA_SIG: oid_hex = OID_MD4_RSA_SIG_HEX; break;
         case OID_MD5_RSA_SIG: oid_hex = OID_MD5_RSA_SIG_HEX; break;
@@ -647,6 +654,7 @@ static void checkAsnOidDatabase(int32_t *oi,
         case OID_SHA256_ECDSA_SIG: oid_hex = OID_SHA256_ECDSA_SIG_HEX; break;
         case OID_SHA384_ECDSA_SIG: oid_hex = OID_SHA384_ECDSA_SIG_HEX; break;
         case OID_SHA512_ECDSA_SIG: oid_hex = OID_SHA512_ECDSA_SIG_HEX; break;
+        case OID_SM3_SM2_SIG: oid_hex = OID_SM3_SM2_SIG_HEX; break;
         case OID_RSA_KEY_ALG: oid_hex = OID_RSA_KEY_ALG_HEX; break;
         case OID_DSA_KEY_ALG: oid_hex = OID_DSA_KEY_ALG_HEX; break;
         case OID_ECDSA_KEY_ALG: oid_hex = OID_ECDSA_KEY_ALG_HEX; break;

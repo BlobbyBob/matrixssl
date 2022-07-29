@@ -9,11 +9,11 @@
 </head>
 <body><div class="container"><h1 id="matrixssl-developer-guide">MatrixSSL Developer Guide</h1>
 
-<p><strong>MatrixSSL 4.0.0</strong></p>
+<p><strong>MatrixSSL 4.4.0</strong></p>
 
-<p>August 2018</p>
+<p>December 2021</p>
 
-<p><em>Copyright © Inside Secure 2018. All Rights Reserved.</em></p>
+<p><em>Copyright © Rambus Inc 2021. All Rights Reserved.</em></p>
 
 <p><div class="toc">
 <ul>
@@ -442,6 +442,7 @@ TLS_ECDHE_ECDS<span class="hljs-built_in">A_WITH</span>_CHACHA20_POLY1305_SHA256
 TLS_ECDHE_RS<span class="hljs-built_in">A_WITH</span>_CHACHA20_POLY1305_SHA256
 TLS_ECDHE_ECDS<span class="hljs-built_in">A_WITH</span>_AES_256_CBC_SHA384
 TLS_ECDHE_RS<span class="hljs-built_in">A_WITH</span>_AES_256_CBC_SHA384
+TLS_DHE_RSA_WITH_AES_256_GCM_SHA384
 TLS_DHE_RS<span class="hljs-built_in">A_WITH</span>_AES_256_CBC_SHA256
 TLS_DHE_RS<span class="hljs-built_in">A_WITH</span>_AES_128_CBC_SHA256
 TLS_ECDHE_ECDS<span class="hljs-built_in">A_WITH</span>_AES_128_GCM_SHA256
@@ -490,6 +491,7 @@ TLS_PSK_WITH_AES_128_CBC_SHA</code></pre>
 TLS_RS<span class="hljs-built_in">A_WITH</span>_SEED_CBC_SHA
 TLS_RS<span class="hljs-built_in">A_WITH</span>_IDE<span class="hljs-built_in">A_CBC</span>_SHA
 SSL_RS<span class="hljs-built_in">A_WITH</span>_RC4_128_MD5
+TLS_RS<span class="hljs-built_in">A_WITH</span>_NULL_SHA256
 SSL_RS<span class="hljs-built_in">A_WITH</span>_NULL_SHA
 SSL_RS<span class="hljs-built_in">A_WITH</span>_NULL_MD5
 TLS_DH_anon_WITH_AES_256_CBC_SHA
@@ -1304,7 +1306,7 @@ All other MD5 based ciphers disabled by default.</dd>
 
 <dt><code>USE_FIPS_CRYPTO</code></dt>
 <dt><code>USE_CL_CRYPTO</code></dt>
-<dd>cryptoConfig.h - <em>(MatrixSSL FIPS Edition only:)</em> Enable using the FIPS 140-2 validated SafeZone CL/FIPSLib 1.1 as the cryptographic library in MatrixSSL. For more information on FIPS 140-2 specific configuration options, please consult the <em>MatrixSSL with CL Library</em> document, included with the MatrixSSL FIPS Edition.</dd>
+<dd>cryptoConfig.h - <em>(MatrixSSL FIPS Edition only:)</em> Enable using the FIPS 140-2 validated SafeZone CL/FIPSLib 1.2 as the cryptographic library in MatrixSSL. For more information on FIPS 140-2 specific configuration options, please consult the <em>MatrixSSL with CL Library</em> document, included with the MatrixSSL FIPS Edition.</dd>
 
 <dt><code>USE_CMS</code></dt>
 <dd>cryptoConfig.h - <em>(MatrixSSL Commercial Edition only:)</em> Enable support for Cryptographic Messaging Syntax (CMS).</dd>

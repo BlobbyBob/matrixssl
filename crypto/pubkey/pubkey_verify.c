@@ -5,7 +5,7 @@
  *      Algorithm-independent signature verification API.
  */
 /*
- *      Copyright (c) 2013-2018 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -48,6 +48,10 @@ psRes_t psVerifySig(psPool_t *pool,
 {
 # ifdef USE_RSA
     unsigned char out[SHA512_HASH_SIZE] = { 0 };
+# endif
+# if defined(USE_SM2) && defined(USE_SM3)
+    unsigned char sm3_out[SM3_HASH_SIZE] = { 0 };
+    psSize_t sm3_out_len = SM3_HASH_SIZE;
 # endif
 # ifdef USE_ECC
     int32 eccRet;
@@ -136,14 +140,36 @@ psRes_t psVerifySig(psPool_t *pool,
 # endif /* USE_RSA */
 # ifdef USE_ECC
     case PS_ECC:
-        rc = psEccDsaVerify(pool,
-                &key->key.ecc,
-                msgIn,
-                msgInLen,
-                sig,
-                sigLen,
-                &eccRet,
-                NULL);
+# if defined(USE_SM2) && defined(USE_SM3)
+        if (signatureAlgorithm == OID_SM3_SM2_SIG &&
+            !(opts && opts->msgIsDigestInfo))
+        {
+            psComputeHashForSm2(msgIn, msgInLen,
+                    &key->key.ecc,
+                    "1234567812345678", 16,
+                    sm3_out, &sm3_out_len);
+            rc = psEccDsaVerify(pool,
+                    &key->key.ecc,
+                    sm3_out,
+                    sm3_out_len,
+                    sig,
+                    sigLen,
+                    &eccRet,
+                    NULL);
+        }
+        else
+# endif
+        {
+            rc = psEccDsaVerify(pool,
+                    &key->key.ecc,
+                    msgIn,
+                    msgInLen,
+                    sig,
+                    sigLen,
+                    &eccRet,
+                    NULL);
+        }
+
         if (rc < 0)
         {
             psTraceIntCrypto("psEccDsaVerify failed: %d\n", rc);
@@ -202,9 +228,27 @@ psRes_t psHashDataAndVerifySig(psPool_t *pool,
 
     *verifyResult = PS_FALSE;
 
-    rc = psComputeHashForSig(dataBegin, dataLen,
-        signatureAlgorithm, digest,
-        &digestLen);
+#if defined(USE_SM2) && defined(USE_SM3)
+    if (signatureAlgorithm == OID_SM3_SM2_SIG)
+    {
+        rc = psComputeHashForSm2(
+                dataBegin,
+                dataLen,
+                &key->key.ecc,
+                "TLSv1.3+GM+Cipher+Suite",
+                23,
+                digest,
+                &digestLen);
+        opts->msgIsDigestInfo = PS_TRUE;
+    }
+    else
+#endif
+    {
+        rc = psComputeHashForSig(dataBegin, dataLen,
+                signatureAlgorithm, digest,
+                &digestLen);
+    }
+
     if (rc != PS_SUCCESS)
     {
         return rc;

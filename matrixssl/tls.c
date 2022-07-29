@@ -8,7 +8,7 @@
  *      and handshake hashing.
  */
 /*
- *      Copyright (c) 2013-2018 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -21,8 +21,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -681,6 +681,105 @@ int32_t tlsHMACSha2(ssl_t *ssl, int32 mode, unsigned char type,
 }
 #   endif /* USE_SHA256 || USE_SHA384 */
 #  endif  /* USE_SHA_MAC */
+
+#   if defined(USE_HMAC_SM3)
+/******************************************************************************/
+/*
+    TLS SM3 HMAC generate/verify
+ */
+int32_t tlsHMACSm3(ssl_t *ssl, int32 mode, unsigned char type,
+    unsigned char *data, uint32 len, unsigned char *mac, int32 hashLen)
+{
+#    ifndef USE_HMAC_TLS
+    psHmac_t ctx;
+#    endif
+    unsigned char *key, *seq;
+    unsigned char majVer, minVer, tmp[5];
+    int32 i;
+#    ifdef USE_DTLS
+    unsigned char dtls_seq[8];
+#    endif /* USE_DTLS */
+#    ifdef USE_HMAC_TLS
+    uint32 alt_len;
+#    endif /* USE_HMAC_TLS */
+
+    majVer = psEncodeVersionMaj(GET_ACTV_VER(ssl));
+    minVer = psEncodeVersionMin(GET_ACTV_VER(ssl));
+
+    if (mode == HMAC_CREATE)
+    {
+        key = ssl->sec.writeMAC;
+        seq = ssl->sec.seq;
+    }
+    else     /* HMAC_VERIFY */
+    {
+        key = ssl->sec.readMAC;
+        seq = ssl->sec.remSeq;
+    }
+    /* Sanity */
+    if (key == NULL)
+    {
+        return PS_FAILURE;
+    }
+
+#    ifdef USE_DTLS
+    if (ACTV_VER(ssl, v_dtls_any))
+    {
+        if (mode == HMAC_CREATE)
+        {
+            seq = dtls_seq;
+            Memcpy(dtls_seq, ssl->epoch, 2);
+            Memcpy(dtls_seq + 2, ssl->rsn, 6);
+        }
+        else     /* HMAC_VERIFY */
+        {
+            seq = dtls_seq;
+            Memcpy(dtls_seq, ssl->rec.epoch, 2);
+            Memcpy(dtls_seq + 2, ssl->rec.rsn, 6);
+        }
+    }
+#    endif /* USE_DTLS */
+
+    tmp[0] = type;
+    tmp[1] = majVer;
+    tmp[2] = minVer;
+    tmp[3] = (len & 0xFF00) >> 8;
+    tmp[4] = len & 0xFF;
+
+#    ifdef USE_HMAC_TLS
+#     ifdef USE_HMAC_TLS_LUCKY13_COUNTERMEASURE
+    /* Lucky13 countermeasure is only used on the decryption side. */
+    alt_len = computeLucky13WorkAmount(ssl, mode, len);
+#     else
+    alt_len = len;
+#     endif
+    (void) psHmacSm3Tls(key, hashLen,
+        seq, 8,
+        tmp, 5,
+        data, len, alt_len,
+        mac, hashLen);
+#    else
+    if (psHmacInit(&ctx, HMAC_SM3, key, hashLen) < 0)
+    {
+        return PS_FAIL;
+    }
+    psHmacUpdate(&ctx, seq, 8);
+    psHmacUpdate(&ctx, tmp, 5);
+    psHmacUpdate(&ctx, data, len);
+    psHmacFinal(&ctx, mac);
+#    endif
+    /* Update seq (only for normal TLS) */
+    for (i = 7; i >= 0; i--)
+    {
+        seq[i]++;
+        if (seq[i] != 0)
+        {
+            break;
+        }
+    }
+    return PS_SUCCESS;
+}
+#   endif /* USE_SM3 */
 
 #  ifdef USE_MD5
 #   ifdef USE_MD5_MAC

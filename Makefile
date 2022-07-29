@@ -1,7 +1,7 @@
 #
 # Top-level Makefile for building various versions of MatrixSSL.
 #
-# Copyright (c) 2016 INSIDE Secure Corporation. All Rights Reserved.
+# Copyright (c) 2016 Rambus Inc. All Rights Reserved.
 #
 # @version $Format:%h%d$
 

@@ -3,7 +3,7 @@
 #   'make' builds debug (Default).
 #   'make gold' builds optimized.
 #
-#	Copyright (c) 2013-2019 INSIDE Secure Corporation. All Rights Reserved.
+#	Copyright (c) 2013-2019 Rambus Inc. All Rights Reserved.
 #
 
 MATRIXSSL_ROOT:=../..
@@ -15,6 +15,9 @@ SERVER_EXE:=server$(E)
 CLIENT_EXE:=client$(E)
 NET_EXE:=matrixnet$(E)
 EXE=$(SERVER_EXE) $(CLIENT_EXE)
+
+TLSDTLS_SERVER_SRC:=tlsDtlsServer.c http.c
+TLSDTLS_SERVER_EXE:=tlsDtlsServer$(E)
 
 SIMPLE_CLIENT_SRC:=simpleClient.c
 SIMPLE_CLIENT_EXE:=simpleClient$(E)
@@ -34,6 +37,8 @@ SRC+=$(IA_CLIENT_SRC)
 EXE+=$(IA_CLIENT_EXE)
 SRC+=$(IA_SERVER_SRC)
 EXE+=$(IA_SERVER_EXE)
+SRC+=$(TLSDTLS_SERVER_SRC)
+EXE+=$(TLSDTLS_SERVER_EXE)
 
 #The Mac OS X Xcode project has a target name of 'server' or 'client'
 ifneq (,$(TARGET_NAME))
@@ -71,6 +76,7 @@ STATIC_CLIENT:=\
 
 # Allow selecting the client auth identity (ID_RSA, ID_ECDH_ECDSA,
 # etc.) via an environment variable.
+CIPHER_OPTION?=ID_RSA
 ifneq '$(CIPHER_OPTION)' ''
   CFLAGS+=-D$(CIPHER_OPTION)
 endif
@@ -99,6 +105,9 @@ $(IA_SERVER_EXE): $(IA_SERVER_SRC:.c=.o) $(STATIC)
 	$(CC) -o $@ $^ $(LDFLAGS) $(CFLAGS)
 
 $(NET_EXE): $(NET_SRC:.c=.o) $(STATIC)
+	$(CC) -o $@ $^ $(LDFLAGS) $(CFLAGS)
+
+$(TLSDTLS_SERVER_EXE): $(TLSDTLS_SERVER_SRC:.c=.o) $(STATIC)
 	$(CC) -o $@ $^ $(LDFLAGS) $(CFLAGS)
 
 clean:

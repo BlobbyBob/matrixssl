@@ -5,7 +5,7 @@
  *      Public and Private key header.
  */
 /*
- *      Copyright (c) 2013-2017 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2017 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -76,6 +76,7 @@
 #  define IS_SECP256R1    0x00000004
 #  define IS_SECP384R1    0x00000008
 #  define IS_SECP521R1    0x00000010
+#  define IS_CURVESM2     0x00000020
 /* WARNING: Public points on Brainpool curves are not validated */
 #  define IS_BRAIN224R1   0x00010000
 #  define IS_BRAIN256R1   0x00020000
@@ -99,6 +100,7 @@ enum
     IANA_BRAIN512R1 = 28,
     IANA_X25519     = 29,
     IANA_X448       = 30,
+    IANA_CURVESM2   = 41, /** for tls1.2 is 30 */
     IANA_BRAIN224R1 = 255 /**< @note this is not defined by IANA */
 };
 
@@ -181,7 +183,7 @@ enum PACKED
     PS_DH,
     PS_CL_PK, /* A public key for CL Library. May contain any key format. */
     PS_X25519,
-    PS_ED25519
+    PS_ED25519,
 };
 
 /** Signature types */
@@ -191,7 +193,8 @@ enum PACKED
     ECDSA_TYPE_SIG,
     RSAPSS_TYPE_SIG,
     DSA_TYPE_SIG,
-    ED25519_TYPE_SIG
+    ED25519_TYPE_SIG,
+    SM2_TYPE_SIG
 };
 
 typedef struct psX25519Key
@@ -240,6 +243,7 @@ typedef struct
 
 # define PS_SIGN_OPTS_ECDSA_INCLUDE_SIZE      (1ULL << 0)
 # define PS_SIGN_OPTS_USE_PREALLOCATED_OUTBUF (1ULL << 1)
+# define PS_SIGN_OPTS_SM2_SIGN                (1ULL << 2)
 
 typedef struct {
     uint32_t flags;
@@ -284,6 +288,15 @@ psRes_t psComputeHashForSig(const unsigned char *dataBegin,
         int32_t signatureAlgorithm,
         unsigned char hashOut[SHA512_HASH_SIZE],
         psSize_t * hashOutLen);
+# if defined(USE_SM2) && defined(USE_SM3)
+psRes_t psComputeHashForSm2(const unsigned char *dataBegin,
+        psSizeL_t dataLen,
+        const psEccKey_t *key,
+        const char *id,
+        psSizeL_t idLen,
+        unsigned char hashOut[SM3_HASH_SIZE],
+        psSize_t *hashOutLen);
+# endif
 
 /** Algorithm-independent function for signing hashes.
 

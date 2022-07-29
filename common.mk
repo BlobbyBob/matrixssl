@@ -1,7 +1,7 @@
 ##
 # Common Makefile definitions.
 # @version $Format:%h%d$
-# Copyright (c) 2013-2017 INSIDE Secure Corporation. All Rights Reserved.
+# Copyright (c) 2013-2017 Rambus Inc. All Rights Reserved.
 #
 #-------------------------------------------------------------------------------
 

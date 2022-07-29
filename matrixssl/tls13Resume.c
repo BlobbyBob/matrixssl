@@ -5,7 +5,7 @@
  *      TLS 1.3 session resumption.
  */
 /*
- *      Copyright (c) 2018 INSIDE Secure Corporation
+ *      Copyright (c) 2018 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -158,6 +158,7 @@ int32_t tls13NewTicket(ssl_t *ssl,
     psSizeL_t stateLen, outLen;
     psTls13Psk_t *psk;
     psTls13SessionParams_t params;
+    int32_t tagLen = AEAD_TAG_LEN(ssl);
 
     if (pskValLen < 0)
     { /* this is an error code */
@@ -268,15 +269,15 @@ int32_t tls13NewTicket(ssl_t *ssl,
     psTraceBytes("ct", state, stateLen);
 # endif
 
-    tag = psMalloc(ssl->hsPool, TLS_GCM_TAG_LEN);
+    tag = psMalloc(ssl->hsPool, tagLen);
     psAesGetGCMTag(&ctx,
-            TLS_GCM_TAG_LEN,
+            tagLen,
             tag);
 # ifdef DEBUG_TLS_1_3_RESUMPTION
-    psTraceBytes("tag", tag, TLS_GCM_TAG_LEN);
+    psTraceBytes("tag", tag, tagLen);
 # endif
 
-    psDynBufAppendOctets(&buf, tag, TLS_GCM_TAG_LEN);
+    psDynBufAppendOctets(&buf, tag, tagLen);
 
     psAesClearGCM(&ctx);
 
@@ -317,6 +318,7 @@ int32_t tls13DecryptTicket(ssl_t *ssl,
     psParseBuf_t encStateBuf;
     const unsigned char *ticketEnd = ticket + ticketLen;
     psTls13Psk_t *psk;
+    int32_t tagLen = AEAD_TAG_LEN(ssl);
 
     /*
       struct {
@@ -357,7 +359,7 @@ int32_t tls13DecryptTicket(ssl_t *ssl,
         goto out_illegal_parameter;
     }
     if (encStateLen < 1 ||
-            !psParseCanRead(&encStateBuf, encStateLen + TLS_GCM_TAG_LEN))
+            !psParseCanRead(&encStateBuf, encStateLen + tagLen))
     {
         psTrace("Decrypted ticket too short\n");
         goto out_illegal_parameter;
@@ -381,7 +383,7 @@ int32_t tls13DecryptTicket(ssl_t *ssl,
 
     rc = psAesDecryptGCM(&ctx,
             encStateBuf.buf.start,
-            encStateLen + TLS_GCM_TAG_LEN,
+            encStateLen + tagLen,
             pt,
             ptLen);
 

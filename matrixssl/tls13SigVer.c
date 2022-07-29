@@ -6,7 +6,7 @@
  *      verification.
  */
 /*
- *      Copyright (c) 2018 INSIDE Secure Corporation
+ *      Copyright (c) 2018 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -19,8 +19,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -114,6 +114,13 @@ uint16_t tls13ChooseSigAlg(ssl_t *ssl,
                 ourSigAlgs[0] = sigalg_ecdsa_secp521r1_sha512;
                 ourSigAlgsLen = 1;
             }
+# ifdef USE_SM2
+            else if (p->privKey.key.ecc.curve->curveId == IANA_CURVESM2)
+            {
+                ourSigAlgs[0] = sigalg_sm2sig_sm3;
+                ourSigAlgsLen = 1;
+            }
+# endif
             else
             {
                 psTraceInfo("TODO: add support for more curves in TLS 1.3\n");
@@ -310,6 +317,12 @@ int32_t tls13Sign(psPool_t *pool,
         sigAlgOid = OID_ED25519_KEY_ALG;
         break;
 # endif
+# ifdef USE_SM2
+    case sigalg_sm2sig_sm3:
+        hashSigAlg = OID_SM3_SM2_SIG;
+        sigAlgOid = OID_SM3_SM2_SIG;
+        break;
+# endif
 # ifdef USE_RSA
     case sigalg_rsa_pss_pss_sha256:
     case sigalg_rsa_pss_rsae_sha256:
@@ -344,10 +357,24 @@ int32_t tls13Sign(psPool_t *pool,
 
     if (tls13RequiresPreHash(sigAlg))
     {
-        rc = psComputeHashForSig(tbs, tbsLen,
-                hashSigAlg,
-                hashTbs,
-                &hashTbsLen);
+#ifdef USE_SM2
+        if (sigAlg == sigalg_sm2sig_sm3)
+        {
+            rc = psComputeHashForSm2(tbs, tbsLen,
+                    &privKey->key.ecc,
+                    "TLSv1.3+GM+Cipher+Suite",
+                    23,
+                    hashTbs,
+                    &hashTbsLen);
+        }
+        else
+#endif
+        {
+            rc = psComputeHashForSig(tbs, tbsLen,
+                    hashSigAlg,
+                    hashTbs,
+                    &hashTbsLen);
+        }
         if (rc != PS_SUCCESS)
         {
             goto out_fail;
@@ -472,6 +499,12 @@ int32_t tls13Verify(psPool_t *pool,
         psAssert(pubKey->type == PS_ED25519);
         break;
 #endif
+#ifdef USE_SM2
+    case sigalg_sm2sig_sm3:
+        cryptoLayerSigAlg = OID_SM3_SM2_SIG;
+        psAssert(pubKey->key.ecc.curve->curveId == IANA_CURVESM2);
+        break;
+#endif
     default:
         psTraceIntInfo("Unsupported sig alg in tls13Verify: %u\n",
                 sigAlg);
@@ -571,7 +604,12 @@ psBool_t tls13RequiresPreHash(uint16_t alg)
     {
         return PS_FALSE;
     }
-
+# ifdef USE_SM2
+    else if (alg == sigalg_sm2sig_sm3)
+    {
+        return PS_TRUE;
+    }
+# endif
 # ifdef USE_RSA
     else if (tls13IsRsaPssSigAlg(alg))
     {

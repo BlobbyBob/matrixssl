@@ -5,7 +5,7 @@
  *      ECC curve data getter functions.
  */
 /*
- *      Copyright (c) 2013-2018 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -100,8 +100,18 @@ void psGetEccCurveIdList(unsigned char *curveList, uint8_t *len)
     {
         if (listLen < (*len - 2))
         {
-            curveList[listLen++] = (eccCurves[i].curveId & 0xFF00) >> 8;
-            curveList[listLen++] = eccCurves[i].curveId & 0xFF;
+# if defined(USE_SM2) && defined(USE_SM3)
+            if (eccCurves[i].curveId == IANA_CURVESM2)
+            {
+                curveList[listLen++] = (30 & 0xFF00) >> 8;
+                curveList[listLen++] = 30 & 0xFF;
+            }
+            else
+# endif
+            {
+                curveList[listLen++] = (eccCurves[i].curveId & 0xFF00) >> 8;
+                curveList[listLen++] = eccCurves[i].curveId & 0xFF;
+            }
         }
         i++;
     }

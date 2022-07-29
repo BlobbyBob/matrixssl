@@ -8,14 +8,7 @@
 #include "osdep_string.h"
 #include "osdep_stdlib.h"
 #include "osdep_assert.h"
-
-#ifdef USE_MULTITHREADING
-#include "osdep_pthread.h"
-#endif /* USE_MULTITHREADING */
-
-#ifdef USE_MULTITHREADING
-static pthread_mutex_t out_file_mutex = PTHREAD_MUTEX_INITIALIZER;
-#endif /* USE_MULTITHREADING */
+#include "psUtil.h"
 
 #define PS_LOGF_UNIT_MAX_LEN 64
 
@@ -43,28 +36,16 @@ typedef enum
     PS_LOGF_FATAL
 } psLogfLevel_t;
 
-/* Check if logging is on.  */
-
-/* File handle to use for log output. */
-FILE *psLogfGetFile(const char *level, const char *unit)
+/* Opening of the target file: */
+static FILE * volatile pslogf_out_file = NULL;
+static void psLogfGetFile_once(void)
 {
-    static volatile FILE *out_file = NULL;
     FILE *file;
     const char *str;
 
-    /* Note: implementation of this function may choose to use different
-       file handles for different log levels or units. */
-    (void)level;
-    (void)unit;
-
-    if (out_file == NULL)
-    {
-#ifdef USE_MULTITHREADING
-        pthread_mutex_lock(&out_file_mutex);
-#endif /* USE_MULTITHREADING */
-    }
-
-    file = (FILE *) out_file;
+    /* psLogfGetFile will open target file once. It happens inside psOnce().
+       Because of psOnce API, the file pointer needs to be passed via a global variable. */
+    file = pslogf_out_file;
     if (file == NULL)
     {
         str = getenv("PS_LOG_FILE");
@@ -115,11 +96,26 @@ FILE *psLogfGetFile(const char *level, const char *unit)
         setvbuf(file, NULL, _IONBF, 0);
     }
 
-    out_file = file;
-#ifdef USE_MULTITHREADING
-    pthread_mutex_unlock(&out_file_mutex);
-#endif /* USE_MULTITHREADING */
-    return file;
+    pslogf_out_file = file;
+}
+
+/* File handle to use for log output. */
+FILE *psLogfGetFile(const char *level, const char *unit)
+{
+
+    /* Note: implementation of this function may choose to use different
+       file handles for different log levels or units. */
+    (void)level;
+    (void)unit;
+
+    if (pslogf_out_file == NULL)
+    {
+        static psOnce_t once_control = PS_ONCE_INIT;
+
+        psOnce(&once_control, psLogfGetFile_once);
+    }
+
+    return pslogf_out_file;
 }
 
 /* Function called for fatal logs. */

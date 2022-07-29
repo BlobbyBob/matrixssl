@@ -6,7 +6,7 @@
  *      This sub-header of matrixsslApi.h contains ciphersuite IDs.
  */
 /*
- *      Copyright (c) 2013-2018 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -19,8 +19,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -53,6 +53,7 @@
 # define TLS_RSA_WITH_AES_256_CBC_SHA            0x0035 /* 53 */
 # define TLS_DHE_RSA_WITH_AES_256_CBC_SHA        0x0039 /* 57 */
 # define TLS_DH_anon_WITH_AES_256_CBC_SHA        0x003A /* 58 */
+# define TLS_RSA_WITH_NULL_SHA256                0x003B /* 59 */
 # define TLS_RSA_WITH_AES_128_CBC_SHA256         0x003C /* 60 */
 # define TLS_RSA_WITH_AES_256_CBC_SHA256         0x003D /* 61 */
 # define TLS_DHE_RSA_WITH_AES_128_CBC_SHA256     0x0067 /* 103 */
@@ -99,11 +100,18 @@
 /* Defined in https://tools.ietf.org/html/draft-ietf-tls-chacha20-poly1305 */
 #  define TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256     0xCCA8 /* 52392 */
 #  define TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256   0xCCA9 /* 52393 */
+/* TLS 1.2 ciphersuites with SM algorithms*/
+#  define TLS_ECDHE_SM2_WITH_SMS4_SM3            0xE102 /* 57602 */
+#  define TLS_ECDHE_SM2_WITH_SMS4_SHA256         0xE105 /* 57605 */
+#  define TLS_ECDHE_SM2_WITH_SMS4_GCM_SM3        0xE107 /* 57607 */
+
 /* TLS 1.3 ciphersuites. */
 #  define TLS_AES_128_GCM_SHA256                 0x1301 /* 4865 */
 #  define TLS_AES_256_GCM_SHA384                 0x1302 /* 4866 */
 #  define TLS_CHACHA20_POLY1305_SHA256           0x1303 /* 4867 */
-#  define TLS_AES_128_CCM_SHA_256                0x1304 /* 4868 */
+#  define TLS_AES_128_CCM_SHA256                 0x1304 /* 4868 */
 #  define TLS_AES_128_CCM_8_SHA256               0x1305 /* 4869 */
+#  define TLS_SM4_GCM_SM3                        0x00C6 /* 198 */
+#  define TLS_SM4_CCM_SM3                        0x00C7 /* 199 */
 
 #endif

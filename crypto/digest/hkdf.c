@@ -5,7 +5,7 @@
  *      HKDF (RFC 5869) implementation.
  */
 /*
- *      Copyright (c) 2018 INSIDE Secure Corporation
+ *      Copyright (c) 2018 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -61,7 +61,8 @@ int32_t psHkdfExpand(psCipherType_e hmacAlg,
 #endif
 
     if (hmacAlg != HMAC_MD5 && hmacAlg != HMAC_SHA1 &&
-            hmacAlg != HMAC_SHA256 && hmacAlg != HMAC_SHA384)
+            hmacAlg != HMAC_SHA256 && hmacAlg != HMAC_SHA384
+        )
     {
         return PS_ARG_FAIL;
     }
@@ -149,7 +150,8 @@ int32_t psHkdfExtract(psCipherType_e hmacAlg,
     int32_t rc;
 
     if (hmacAlg != HMAC_MD5 && hmacAlg != HMAC_SHA1 &&
-            hmacAlg != HMAC_SHA256 && hmacAlg != HMAC_SHA384)
+            hmacAlg != HMAC_SHA256 && hmacAlg != HMAC_SHA384
+        )
     {
         return PS_ARG_FAIL;
     }

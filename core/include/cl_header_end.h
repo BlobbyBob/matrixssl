@@ -1,6 +1,6 @@
 /** @file cl_header_start.h
 
-   @copyright Copyright (c) 2017 INSIDE Secure Oy. All Rights Reserved.
+   @copyright Copyright (c) 2017 Rambus Inc. All Rights Reserved.
 
    End header file.
  */

@@ -5,7 +5,7 @@
  *      TLS 1.3 secret and key derivation.
  */
 /*
- *      Copyright (c) 2018 INSIDE Secure Corporation
+ *      Copyright (c) 2018 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -76,6 +76,12 @@ static unsigned char sha384OfEmptyInput[] =
     0x4c, 0x0c, 0xc7, 0xbf, 0x63, 0xf6, 0xe1, 0xda, 0x27, 0x4e, 0xde, 0xbf,
     0xe7, 0x6f, 0x65, 0xfb, 0xd5, 0x1a, 0xd2, 0xf1, 0x48, 0x98, 0xb9, 0x5b
 };
+static unsigned char sm3OfEmptyInput[] =
+{
+    0x1a, 0xb2, 0x1d, 0x83, 0x55, 0xcf, 0xa1, 0x7f, 0x8e, 0x61, 0x19, 0x48,
+    0x31, 0xe8, 0x1a, 0x8f, 0x22, 0xbe, 0xc8, 0xc7, 0x28, 0xfe, 0xfb, 0x74,
+    0x7e, 0xd0, 0x35, 0xeb, 0x50, 0x82, 0xaa, 0x2b
+};
 
 static inline
 void tls13ClearSecret(unsigned char *secret,
@@ -122,10 +128,15 @@ int32_t tls13DeriveSecret(ssl_t *ssl,
             pHash = sha256OfEmptyInput;
             trHashLen = 32;
         }
-        else
+        else if (hmacAlg == HMAC_SHA384)
         {
             pHash = sha384OfEmptyInput;
             trHashLen = 48;
+        }
+        else if (hmacAlg == HMAC_SM3)
+        {
+            pHash = sm3OfEmptyInput;
+            trHashLen = 32;
         }
     }
 

@@ -5,7 +5,7 @@
  *      TLS 1.3 specific functions for handshake message and record encoding.
  */
 /*
- *      Copyright (c) 2018 INSIDE Secure Corporation
+ *      Copyright (c) 2018 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -140,7 +140,8 @@ int32_t tls13WriteRecordHeader(ssl_t *ssl,
     psDynBuf_t Handshake;
     unsigned char *body, *pt, *inner, *ct;
     size_t bodyLen, ptLen, innerLen, ctLen, cipherOutputLen;
-    unsigned char tagPlaceholder[TLS_GCM_TAG_LEN] = {0};
+    size_t tagLen = AEAD_TAG_LEN(ssl);
+    unsigned char tagPlaceholder[16] = {0};
     psPool_t *pool = ssl->hsPool;
     psBool_t mustFreeBody = PS_FALSE;
 
@@ -271,19 +272,20 @@ int32_t tls13WriteRecordHeader(ssl_t *ssl,
              opaque encrypted_record[TLSCiphertext.length];
           } TLSCiphertext;
         */
-        psDynBufInit(pool, &TLSCiphertext, innerLen + 5 + TLS_GCM_TAG_LEN);
+        psDynBufInit(pool, &TLSCiphertext,
+                    innerLen + 5 + tagLen);
         psDynBufAppendByte(&TLSCiphertext, SSL_RECORD_TYPE_APPLICATION_DATA);
         psDynBufAppendByte(&TLSCiphertext, TLS_MAJ_VER);
         psDynBufAppendByte(&TLSCiphertext, TLS_1_2_MIN_VER);
 
-        cipherOutputLen = innerLen + TLS_GCM_TAG_LEN;
+        cipherOutputLen = innerLen + tagLen;
         psDynBufAppendAsBigEndianUint16(&TLSCiphertext, cipherOutputLen);
 
         /* To be encrypted in-situ in encryptRecord. */
         psDynBufAppendOctets(&TLSCiphertext, inner, innerLen);
         psFree(inner, pool);
         psDynBufUninit(&TLSInnerPlaintext);
-        psDynBufAppendOctets(&TLSCiphertext, tagPlaceholder, TLS_GCM_TAG_LEN);
+        psDynBufAppendOctets(&TLSCiphertext, tagPlaceholder, tagLen);
 
         ct = psDynBufDetach(&TLSCiphertext, &ctLen);
         if (ct == NULL)
@@ -1022,6 +1024,15 @@ static int32 tls13WriteCertificate(ssl_t *ssl, sslBuf_t *out)
                     c->sigAlgorithm == OID_SHA512_ECDSA_SIG)
                 {
                     if (tls13IsEcdsaSigAlg(ssl->sec.keySelect.peerCertSigAlgs[i]))
+                    {
+                        break;
+                    }
+                }
+#  endif
+#  ifdef USE_SM2
+                if (c->sigAlgorithm == OID_SM3_SM2_SIG)
+                {
+                    if (ssl->sec.keySelect.peerCertSigAlgs[i] == sigalg_sm2sig_sm3)
                     {
                         break;
                     }
@@ -2012,6 +2023,7 @@ int32_t tls13EncryptMessage(ssl_t *ssl,
         unsigned char **end)
 {
     int32_t rc;
+    size_t tagLen = AEAD_TAG_LEN(ssl);
 
 # ifdef DEBUG_TLS_1_3_ENCODE
     switch(msg->hsMsg)
@@ -2046,7 +2058,7 @@ int32_t tls13EncryptMessage(ssl_t *ssl,
             msg->start,
             msg->len,
             SSL_RECORD_TYPE_APPLICATION_DATA,
-            msg->len + TLS_GCM_TAG_LEN);
+            msg->len + tagLen);
     if (rc < 0)
     {
         psTraceIntInfo("Error encrypting: %d\n", rc);
@@ -2059,7 +2071,7 @@ int32_t tls13EncryptMessage(ssl_t *ssl,
     *end = msg->start + rc;
     if (ENCRYPTING_RECORDS(ssl))
     {
-        *end += TLS_GCM_TAG_LEN;
+        *end += tagLen;
     }
 
     /* Update state machine after having successfully written and
@@ -2160,6 +2172,7 @@ int32_t tls13EncodeAppData(ssl_t *ssl,
     psSize_t messageSize, recLen;
     int32_t rc;
     psSizeL_t padLen = ssl->tls13PadLen;
+    size_t tagLen = AEAD_TAG_LEN(ssl);
 
     if (!isGoodStateForAppDataEncrypt(ssl))
     {
@@ -2201,7 +2214,7 @@ int32_t tls13EncodeAppData(ssl_t *ssl,
         return rc;
     }
     c += *len;
-    recLen = (encryptEnd - encryptStart) + TLS_GCM_TAG_LEN;
+    recLen = (encryptEnd - encryptStart) + tagLen;
 
     rc = tls13Encrypt(ssl,
             encryptStart,
@@ -2250,6 +2263,7 @@ int32_t tls13EncodeAlert(ssl_t *ssl,
     psBool_t mustEncrypt = PS_FALSE;
     unsigned char alertBody[2];
     psSizeL_t padLen = ssl->tls13PadLen;
+    size_t tagLen = AEAD_TAG_LEN(ssl);
 
     psTracePrintAlertEncodeInfo(ssl, type);
 
@@ -2305,7 +2319,7 @@ int32_t tls13EncodeAlert(ssl_t *ssl,
             encryptStart,
             encryptEnd - encryptStart,
             SSL_RECORD_TYPE_ALERT,
-            (encryptEnd - encryptStart) + TLS_GCM_TAG_LEN);
+            (encryptEnd - encryptStart) + tagLen);
     if (rc < 0)
     {
         psTraceIntInfo("Error encrypting: %d\n", rc);
@@ -2504,12 +2518,18 @@ int32 tls13WriteClientHello(ssl_t *ssl, sslBuf_t *out,
        in the list. This affects which PSKs we can choose to offer.
        Not relying on the user to give us compatible ciphersuite and
        PSK lists. */
+    /* Store info if a SM ciphersuite is proposed. */
     for (i = 0; i < ssl->tls13ClientCipherSuitesLen; i++)
     {
 	if (ssl->tls13ClientCipherSuites[i] == TLS_AES_256_GCM_SHA384)
 	{
 	    ssl->tls13CHContainsSha384Suite = PS_TRUE;
 	}
+        if (ssl->tls13ClientCipherSuites[i] == TLS_SM4_GCM_SM3 ||
+            ssl->tls13ClientCipherSuites[i] == TLS_SM4_CCM_SM3)
+        {
+            ssl->tls13CHContainsSMSuite = PS_TRUE;
+        }
 	else
 	{
 	    ssl->tls13CHContainsSha256Suite = PS_TRUE;

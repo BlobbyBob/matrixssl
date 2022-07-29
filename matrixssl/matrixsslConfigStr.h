@@ -122,6 +122,15 @@ static const char psConfigStrSsl[] =
 # ifdef USE_CHACHA20_POLY1305_IETF_CIPHER_SUITE
   "USE_CHACHA20_POLY1305_IETF_CIPHER_SUITE\n"
 # endif
+# ifdef USE_SM2
+  "USE_SM2\n"
+# endif
+# ifdef USE_SM3
+  "USE_SM3\n"
+# endif
+# ifdef USE_SM4
+  "USE_SM4\n"
+# endif
 # ifdef USE_CLIENT_AUTH
   "USE_CLIENT_AUTH\n"
 # endif
@@ -326,6 +335,12 @@ static const char psConfigStrSsl[] =
 # ifdef USE_TLS_CHACHA20_POLY1305_SHA256
   "USE_TLS_CHACHA20_POLY1305_SHA256\n"
 # endif
+# ifdef USE_TLS_SM4_GCM_SM3
+  "USE_TLS_SM4_GCM_SM3\n"
+# endif
+# ifdef USE_TLS_SM4_CCM_SM3
+  "USE_TLS_SM4_CCM_SM3\n"
+# endif
 # ifdef USE_TLS_DH_anon_WITH_AES_128_CBC_SHA
   "USE_TLS_DH_anon_WITH_AES_128_CBC_SHA\n"
 # endif
@@ -467,6 +482,9 @@ static const char psConfigStrSsl[] =
 # ifdef USE_TLS_PSK_WITH_AES_256_GCM_SHA384
   "USE_TLS_PSK_WITH_AES_256_GCM_SHA384\n"
 # endif
+# ifdef USE_TLS_RSA_WITH_NULL_SHA256
+  "USE_TLS_RSA_WITH_NULL_SHA256\n"
+# endif
 # ifdef USE_TLS_RSA_WITH_AES_128_CBC_SHA
   "USE_TLS_RSA_WITH_AES_128_CBC_SHA\n"
 # endif
@@ -493,6 +511,15 @@ static const char psConfigStrSsl[] =
 # endif
 # ifdef USE_TLS_RSA_WITH_SEED_CBC_SHA
   "USE_TLS_RSA_WITH_SEED_CBC_SHA\n"
+# endif
+# ifdef USE_TLS_ECDHE_SM2_WITH_SMS4_SM3
+  "USE_TLS_ECDHE_SM2_WITH_SMS4_SM3\n"
+# endif
+# ifdef USE_TLS_ECDHE_SM2_WITH_SMS4_SHA256
+  "USE_TLS_ECDHE_SM2_WITH_SMS4_SHA256\n"
+# endif
+# ifdef USE_TLS_ECDHE_SM2_WITH_SMS4_GCM_SM3
+  "USE_TLS_ECDHE_SM2_WITH_SMS4_GCM_SM3\n"
 # endif
 # ifdef USE_TRUSTED_CA_INDICATION
   "USE_TRUSTED_CA_INDICATION\n"

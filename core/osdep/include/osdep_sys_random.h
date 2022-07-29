@@ -4,14 +4,14 @@
  */
 
 /*****************************************************************************
-* Copyright (c) 2018 INSIDE Secure Oy. All Rights Reserved.
+* Copyright (c) 2018 Rambus Inc. All Rights Reserved.
 *
 * This confidential and proprietary software may be used only as authorized
-* by a licensing agreement from INSIDE Secure.
+* by a licensing agreement from Rambus Inc.
 *
 * The entire notice above must be reproduced on all authorized copies that
 * may only be made to the extent permitted by a licensing agreement from
-* INSIDE Secure.
+* Rambus Inc.
 *****************************************************************************/
 
 /* This file just includes system header sys_random.h.

@@ -5,7 +5,7 @@
  *      Adapter layer for internal TLS 1.3 APIs.
  */
 /*
- *      Copyright (c) 2013-2019 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2019 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -164,6 +164,10 @@ psBool_t peerSupportsSigAlg(int32_t sigAlg,
     else if (sigAlg == OID_SHA512_ECDSA_SIG)
     {
         yes = ((peerSigAlgs & HASH_SIG_SHA512_ECDSA_MASK) != 0);
+    }
+    else if (sigAlg == OID_SM3_SM2_SIG)
+    {
+        yes = ((peerSigAlgs & HASH_SIG_SM3_SM2_MASK) != 0);
     }
     else
     {

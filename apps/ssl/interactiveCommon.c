@@ -5,7 +5,7 @@
  *      Common parts of interactiveClient.c and interactiveServer.c
  */
 /*
- *      Copyright (c) 2013-2018 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -689,7 +689,8 @@ psRes_t getUserCiphersuites(psCipher16_t *ciphersuites,
         "(5) TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256\n" \
         "(6) TLS_RSA_WITH_AES_128_GCM_SHA256\n" \
         "(7) All TLS 1.3 suites (prefer SHA256)\n" \
-        "(8) All TLS 1.3 suites (prefer SHA384)\n";
+        "(8) All TLS 1.3 suites (prefer SHA384)\n" \
+        "(9) TLS_RSA_WITH_NULL_SHA256\n";
     int rc;
     char c;
     int got_it = 0;
@@ -734,6 +735,9 @@ psRes_t getUserCiphersuites(psCipher16_t *ciphersuites,
             ciphersuites[i++] = TLS_AES_256_GCM_SHA384;
             ciphersuites[i++] = TLS_AES_128_GCM_SHA256;
             ciphersuites[i++] = TLS_CHACHA20_POLY1305_SHA256;
+            break;
+        case '9':
+            ciphersuites[i++] = TLS_RSA_WITH_NULL_SHA256;
             break;
         case 'q':
             return PS_FAILURE;

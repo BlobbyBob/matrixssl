@@ -290,6 +290,7 @@ SLSodium_add(unsigned char *a, const unsigned char *b, const size_t len)
     }
 }
 
+#ifndef FL_EXCLUDE_FEATURE
 /* Derived from original code by CodesInChaos */
 char *
 SLSodium_bin2hex(char *const hex, const size_t hex_maxlen,
@@ -372,6 +373,7 @@ SLSodium_hex2bin(unsigned char *const bin, const size_t bin_maxlen,
     }
     return ret;
 }
+#endif /* FL_EXCLUDE_FEATURE */ 
 
 #ifndef NO_SODIUM_MEMORY_MANAGEMENT
 int
@@ -398,6 +400,7 @@ SLSodium_alloc_init(void)
 }
 #endif /* NO_SODIUM_MEMORY_MANAGEMENT */
 
+#ifndef FL_EXCLUDE_FEATURE
 int
 SLSodium_mlock(void *const addr, const size_t len)
 {
@@ -472,6 +475,7 @@ SLMprotect_readwrite(void *ptr, size_t size)
     return -1;
 # endif
 }
+#endif /* FL_EXCLUDE_FEATURE */ 
 
 #ifndef NO_SODIUM_MEMORY_MANAGEMENT
 # ifdef HAVE_ALIGNED_MALLOC
@@ -667,6 +671,7 @@ SLSodium_free(void *ptr)
 
 #endif /* NO_SODIUM_MEMORY_MANAGEMENT */
 
+#ifndef FL_EXCLUDE_FEATURE
 # ifndef HAVE_PAGE_PROTECTION
 static int
 SLSodium_mprotect(void *ptr, int (*cb)(void *ptr, size_t size))
@@ -709,5 +714,6 @@ SLSodium_mprotect_readwrite(void *ptr)
 {
     return SLSodium_mprotect(ptr, SLMprotect_readwrite);
 }
+#endif /* FL_EXCLUDE_FEATURE */
 
 #endif /* USE_SL_CHACHA20_POLY1305_IETF || USE_SL_SODIUM */

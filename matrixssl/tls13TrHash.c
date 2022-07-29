@@ -5,7 +5,7 @@
  *      TLS 1.3 Transcript-Hash, also called session hash or handshake hash.
  */
 /*
- *      Copyright (c) 2018 INSIDE Secure Corporation
+ *      Copyright (c) 2018 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -49,7 +49,12 @@ static inline int32_t getHashAlg(ssl_t *ssl)
     {
         return OID_SHA256_ALG;
     }
-
+# ifdef USE_SM3
+    if (ssl->cipher->flags & CRYPTO_FLAGS_SM3)
+    {
+        return OID_SM3_ALG;
+    }
+# endif
     if (ssl->cipher->flags & CRYPTO_FLAGS_SHA3)
     {
         return OID_SHA384_ALG;
@@ -72,6 +77,9 @@ int32_t tls13TranscriptHashInit(ssl_t *ssl)
         psTraceInfo("Initialising Transcript-Hash with both SHA-256 and 384\n");
         psSha256Init(&ssl->sec.tls13msgHashSha256);
         psSha384Init(&ssl->sec.tls13msgHashSha384);
+# ifdef USE_SM3
+        psSm3Init(&ssl->sec.tls13msgHashSm3);
+# endif
         return MATRIXSSL_SUCCESS;
     }
 
@@ -87,6 +95,12 @@ int32_t tls13TranscriptHashInit(ssl_t *ssl)
         psTraceInfo("Initialising Transcript-Hash with Hash == SHA384\n");
         psSha384Init(&ssl->sec.tls13msgHashSha384);
         break;
+# ifdef USE_SM3
+    case OID_SM3_ALG:
+        psTraceInfo("Initialising Transcript-Hash with Hash == SM3\n");
+        psSm3Init(&ssl->sec.tls13msgHashSm3);
+        break;
+# endif
     default:
         psTraceErrr("Unsupported TLS 1.3 hash alg\n");
         return PS_UNSUPPORTED_FAIL;
@@ -140,13 +154,21 @@ int32_t tls13TranscriptHashReinit(ssl_t *ssl)
                 SHA256_HASH_SIZE);
         messageHashLen += SHA256_HASH_SIZE;
     }
-    else
+    else if (alg == OID_SHA384_ALG)
     {
         messageHash[3] = SHA384_HASH_SIZE;
         Memcpy(messageHash + 4,
                 ssl->sec.tls13TrHashSnapshotCH1,
                 SHA384_HASH_SIZE);
         messageHashLen += SHA384_HASH_SIZE;
+    }
+    else if (alg == OID_SM3_ALG)
+    {
+        messageHash[3] = SM3_HASH_SIZE;
+        Memcpy(messageHash + 4,
+                ssl->sec.tls13TrHashSnapshotCH1,
+                SM3_HASH_SIZE);
+        messageHashLen += SM3_HASH_SIZE;
     }
 
     rc = tls13TranscriptHashUpdate(ssl,
@@ -190,9 +212,15 @@ int32_t tls13TranscriptHashUpdate(ssl_t *ssl,
            Update both.*/
         psSha256Update(&ssl->sec.tls13msgHashSha256, in, len);
         psSha384Update(&ssl->sec.tls13msgHashSha384, in, len);
+# ifdef USE_SM3
+        psSm3Update(&ssl->sec.tls13msgHashSm3, in, len);
+# endif
 # ifdef DEBUG_TLS_1_3_TRANSCRIPT_HASH
         psTracePrintTranscriptHashUpdate(ssl, in, len, OID_SHA256_ALG);
         psTracePrintTranscriptHashUpdate(ssl, in, len, OID_SHA384_ALG);
+# ifdef USE_SM3
+        psTracePrintTranscriptHashUpdate(ssl, in, len, OID_SM3_ALG);
+# endif
 # endif
         return MATRIXSSL_SUCCESS;
     }
@@ -207,6 +235,11 @@ int32_t tls13TranscriptHashUpdate(ssl_t *ssl,
     case OID_SHA384_ALG:
         psSha384Update(&ssl->sec.tls13msgHashSha384, in, len);
         break;
+# ifdef USE_SM3
+    case OID_SM3_ALG:
+        psSm3Update(&ssl->sec.tls13msgHashSm3, in, len);
+        break;
+# endif
     default:
         psTraceErrr("Unsupported TLS 1.3 hash alg\n");
         return PS_UNSUPPORTED_FAIL;
@@ -248,6 +281,19 @@ int32_t tls13TranscriptHashFinish(ssl_t *ssl,
 # endif
         }
         break;
+# ifdef USE_SM3
+    case OID_SM3_ALG:
+        {
+            psSm3_t sm3;
+
+            psSm3Cpy(&sm3, &ssl->sec.tls13msgHashSm3);
+            psSm3Final(&sm3, out);
+# ifdef DEBUG_TLS_1_3_TRANSCRIPT_HASH
+            psTraceBytes("Transcript-Hash SM3 snapshot", out, 32);
+# endif
+        }
+        break;
+# endif
     default:
         psTraceErrr("Unsupported TLS 1.3 hash alg\n");
         return PS_UNSUPPORTED_FAIL;
@@ -287,6 +333,19 @@ int32_t tls13TranscriptHashSnapshotAlg(ssl_t *ssl,
 # endif
         }
         break;
+# ifdef USE_SM3
+    case OID_SM3_ALG:
+        {
+            psSm3_t sm3;
+
+            psSm3Cpy(&sm3, &ssl->sec.tls13msgHashSm3);
+            psSm3Final(&sm3, out);
+# ifdef DEBUG_TLS_1_3_TRANSCRIPT_HASH
+            psTraceBytes("Transcript-Hash SM3 snapshot", out, 32);
+# endif
+        }
+        break;
+# endif
     default:
         psTraceErrr("Unsupported TLS 1.3 hash alg\n");
         return PS_UNSUPPORTED_FAIL;

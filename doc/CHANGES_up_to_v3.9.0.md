@@ -6,7 +6,7 @@ Changes in 3.9.0
 
 > **Version 3.9.0**
 > March 2017
-> (C) Copyright 2017 INSIDE Secure - All Rights Reserved
+> (C) Copyright 2017 Rambus Inc.- All Rights Reserved
 
 1. BUG FIXES SINCE 3.8.7b
  - Fixed server-side handling of client authentication with Server Name Indication
@@ -133,7 +133,7 @@ Changes in 3.8.7b
 
 > **Version 3.8.7b**
 > January 2017
-> (C) Copyright 2017 INSIDE Secure - All Rights Reserved
+> (C) Copyright 2017 Rambus Inc.- All Rights Reserved
 
 
 
@@ -154,7 +154,7 @@ Changes in 3.8.7
 
 > **Version 3.8.7**
 > November 2016
-> (C) Copyright 2016 INSIDE Secure - All Rights Reserved
+> (C) Copyright 2016 Rambus Inc.- All Rights Reserved
 
 
 
@@ -327,7 +327,7 @@ Changes in 3.8.6
 
 > **Version 3.8.6**
 > October 2016
-> (C) Copyright 2016 INSIDE Secure - All Rights Reserved
+> (C) Copyright 2016 Rambus Inc.- All Rights Reserved
 
 1. BUG FIXES
  - Critical parsing bug for X.509 certificates
@@ -424,7 +424,7 @@ Changes in 3.8.4
 
 > **Version 3.8.4**
 > July 2016
-> (C) Copyright 2016 INSIDE Secure - All Rights Reserved
+> (C) Copyright 2016 Rambus Inc.- All Rights Reserved
 
 1. FEATURES AND IMPROVEMENTS
  - Coverity coverage
@@ -486,7 +486,7 @@ Changes in 3.8.3
 
 > **Version 3.8.3**
 > April 2016
-> (C) Copyright 2016 INSIDE Secure - All Rights Reserved
+> (C) Copyright 2016 Rambus Inc.- All Rights Reserved
 
 1. FEATURES AND IMPROVEMENTS
   - Simplified Configuration Options
@@ -631,7 +631,7 @@ Changes in 3.8.2
 
 > **Version 3.8.2**
 > December 2015
-> (C) Copyright 2015 INSIDE Secure - All Rights Reserved
+> (C) Copyright 2015 Rambus Inc.- All Rights Reserved
 
 1. FILE/API REORGANIZATION
   - File Locations

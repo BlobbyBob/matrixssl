@@ -5,7 +5,7 @@
  *      ASN.1 header.
  */
 /*
- *      Copyright (c) 2013-2017 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2017 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -109,7 +109,7 @@ extern int32_t getAsnOID(const unsigned char **pp, psSizeL_t size,
 			 uint8_t checkForParams, psSize_t *paramLen);
 
 # define MAX_OID_LEN     16     /**< Maximum number of segments in OID */
-# define MAX_OID_BYTES   32     /**< Maximum number of bytes in OID. */
+# define MAX_OID_BYTES   48     /**< Maximum number of bytes in OID. */
 # define MAX_OID_PRINTED_LEN_NAMED 64 /* Maximum length of known OID in
                                          printed form. */
 # define MAX_OID_PRINTED_LEN_BYTES (4 * MAX_OID_BYTES) /* Maximum length of

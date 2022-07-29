@@ -10,7 +10,7 @@
  *  and MatrixSSL software or related software components.
  */
 /*
- *      Copyright (c) 2017 INSIDE Secure Corporation
+ *      Copyright (c) 2017 Rambus Inc.
  *      All Rights Reserved
  *
  *      The latest version of this code is available at http://www.matrixssl.org
@@ -22,8 +22,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus Inc at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -132,6 +132,51 @@ void *psFreeFRR(void (*free_func)(void *ptr), void *ptr, void *ret)
 {
     free_func(ptr);
     return ret;
+}
+
+#ifdef USE_MULTITHREADING
+#include "osdep_pthread.h"
+#ifdef PTHREAD_MUTEX_INITIALIZER
+#define PS_ONCE_CAN_LOCK 1
+#endif /* PTHREAD_MUTEX_INITIALIZER */
+#endif /* USE_MULTITHREADING */
+
+static
+void psOnce_internal(psOnce_t *once_control, psOnceInitFunction init_routine);
+
+void psOnce(psOnce_t *once_control, psOnceInitFunction init_routine)
+{
+    if (*once_control == PS_ONCE_INIT)
+    {
+        /* slow path: not yet initialized. */
+        psOnce_internal(once_control, init_routine);
+    }
+}
+
+/* Perform initialization. */
+static
+void psOnce_internal(psOnce_t *once_control, psOnceInitFunction init_routine)
+{
+#ifdef PS_ONCE_CAN_LOCK
+    static pthread_mutex_t once_mutex = PTHREAD_MUTEX_INITIALIZER;
+#endif /* PS_ONCE_CAN_LOCK */
+
+#ifdef PS_ONCE_CAN_LOCK
+    Pthread_mutex_lock(&once_mutex);
+#endif /* PS_ONCE_CAN_LOCK */
+
+    /* Ensure *once_control is still uninitialized. */
+    if (*once_control == PS_ONCE_INIT)
+    {
+        /* slow path: perform initialization. */
+        init_routine();
+        *once_control = 1;
+    }
+
+#ifdef PS_ONCE_CAN_LOCK
+    Pthread_mutex_unlock(&once_mutex);
+#endif /* PS_ONCE_CAN_LOCK */
+        
 }
 
 /* end of file psUtil.c */

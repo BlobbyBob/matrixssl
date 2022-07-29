@@ -4,7 +4,7 @@
  */
 
 /*****************************************************************************
-* Copyright (c) 2018 INSIDE Secure Oy. All Rights Reserved.
+* Copyright (c) 2018 Rambus Inc. All Rights Reserved.
 *
 * The latest version of this code is available at http://www.matrixssl.org
 *
@@ -15,8 +15,8 @@
 *
 * This General Public License does NOT permit incorporating this software
 * into proprietary programs.  If you are unable to comply with the GPL, a
-* commercial license for this software may be purchased from INSIDE at
-* http://www.insidesecure.com/
+* commercial license for this software may be purchased from Rambus Inc at
+* http://www.rambus.com/
 *
 * This program is distributed in WITHOUT ANY WARRANTY; without even the
 * implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -165,6 +165,7 @@ typedef enum
     PS_STAT_ID_IKEV2_EXTRACT_SKEYSEED_REKEY,
     PS_STAT_ID_IKEV1_DERIVE_KEYING_MATERIAL,
     PS_STAT_ID_RBG_TEST_VECTOR,
+    PS_STAT_ID_RBG_RAW_ENTROPY,
     PS_STAT_ID_ASSET_ALLOCATE_EX,
     PS_STAT_ID_ASSET_REBIND,
     PS_STAT_ID_ASSET_ALLOCATE_AND_ASSOCIATE_KEY_EXTRA_EX,

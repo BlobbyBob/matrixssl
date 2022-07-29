@@ -5,7 +5,7 @@
  *      TLS 1.3 specific functions for extension encoding.
  */
 /*
- *      Copyright (c) 2018 INSIDE Secure Corporation
+ *      Copyright (c) 2018 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -1419,6 +1419,11 @@ int32_t tls13WriteClientHelloExtensions(ssl_t *ssl,
     {
         return rc;
     }
+
+    /* mark the flag for elliptic_curve extension because it shares
+     * the same ID with supported_group, the server may send it back
+     * if downgrade to TLS 1.2 */
+    ssl->extFlags.req_elliptic_curve = 1;
 
     rc = tls13WriteClientKeyShare(ssl, extBuf);
     if (rc < 0)

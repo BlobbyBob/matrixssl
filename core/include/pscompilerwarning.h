@@ -6,7 +6,7 @@
  *      to support as many compilers as possible.
  */
 /*
- *      Copyright (c) 2018 INSIDE Secure Corporation
+ *      Copyright (c) 2018 Rambus Inc.
  *      All Rights Reserved
  *
  *      The latest version of this code is available at http://www.matrixssl.org
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus Inc at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -54,8 +54,12 @@
 # endif /* for compilers with #warning support. */
 
 /* Default branches for for common compile time warnings. */
-# if defined WARNING_MESSAGE_DEFAULT_KEY && defined COMPILER_CAN_DO_WARNING
-#  warning "DO NOT USE THESE DEFAULT KEYS IN PRODUCTION ENVIRONMENTS."
+# if defined COMPILER_CAN_DO_WARNING
+#  if defined WARNING_MESSAGE_DEFAULT_KEY
+#   warning "DO NOT USE THESE DEFAULT KEYS IN PRODUCTION ENVIRONMENTS."
+#  elif defined WARNING_LOC_DEPRECATED
+#   warning "WARNING: libopenssl-compat HAS BEEN DEPRECATED AND WILL NO LONGER BE SUPPORTED. THE PACKAGE WILL BE REMOVED FROM FUTURE RELEASES."
+#  endif
 /* Use the common #pragma message syntax for producing warnings. */
 # elif !defined COMPILER_DOES_NOT_SUPPORT_PRAGMA_MESSAGE
 #  define PSCOMPILERWARNING_STRING_(m_arg_) #m_arg_

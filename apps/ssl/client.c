@@ -5,7 +5,7 @@
  *      Simple MatrixSSL blocking client example.
  */
 /*
- *      Copyright (c) 2013-2017 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2017 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -45,7 +45,7 @@
 # define NEED_PS_TIME_CONCRETE
 #endif
 
-#ifndef USE_MULTITHREADING
+#if !defined(NO_MULTITHREADING) && !defined(USE_MULTITHREADING)
 # define USE_MULTITHREADING
 #endif
 
@@ -1885,6 +1885,12 @@ static int32 certCb(ssl_t *ssl, psX509Cert_t *cert, int32 alert)
                     psTrace("Maximum cert chain verify depth exceeded\n");
                     return SSL_ALERT_UNKNOWN_CA;
                 }
+
+                /* Check if this is the last validated certificate. */
+                if (next->pathEnd == PS_TRUE)
+                {
+                    break;
+                }
             }
         }
         /* Example to allow anonymous connections based on a define */
@@ -1963,6 +1969,12 @@ static int32 certCb(ssl_t *ssl, psX509Cert_t *cert, int32 alert)
             alert = SSL_ALERT_BAD_CERTIFICATE;
             break;
         }
+
+        /* Check if this is the last validated certificate. */
+        if (next->pathEnd == PS_TRUE)
+        {
+            break;
+        }
     }
 
     /*
@@ -2012,6 +2024,12 @@ static int32 certCb(ssl_t *ssl, psX509Cert_t *cert, int32 alert)
             {
                 psTrace("Cert extendedKeyUsage extension doesn't allow TLS\n");
             }
+        }
+
+        /* Check if this is the last validated certificate. */
+        if (next->pathEnd == PS_TRUE)
+        {
+            break;
         }
     }
 
@@ -2145,6 +2163,12 @@ RETRY_CRL_TEST_ONCE:
                 alert = SSL_ALERT_CERTIFICATE_REVOKED;
                 break;
             default:
+                break;
+            }
+
+            /* Check if this is the last validated certificate. */
+            if (next->pathEnd == PS_TRUE)
+            {
                 break;
             }
         }

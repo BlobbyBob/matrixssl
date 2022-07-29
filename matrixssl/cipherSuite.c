@@ -6,7 +6,7 @@
  *      Enable specific suites at compile time in matrixsslConfig.h
  */
 /*
- *      Copyright (c) 2013-2017 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2017 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -19,8 +19,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -590,6 +590,229 @@ int32 csChacha20Poly1305IetfDecrypt(void *ssl, unsigned char *ct,
 }
 #endif /* USE_CHACHA20_POLY1305_IETF_CIPHER_SUITE */
 
+#  ifdef USE_SM4
+/******************************************************************************/
+int32 csSm4GcmInit(sslSec_t *sec, int32 type, uint32 keysize)
+{
+    int32 err;
+
+    if (type == INIT_ENCRYPT_CIPHER)
+    {
+        Memset(&sec->encryptCtx.sm4gcm, 0, sizeof(psSm4Gcm_t));
+        if ((err = psSm4InitGCM(&sec->encryptCtx.sm4gcm, sec->writeKey,
+                 keysize)) < 0)
+        {
+            return err;
+        }
+    }
+    else
+    {
+        Memset(&sec->decryptCtx.sm4gcm, 0, sizeof(psSm4Gcm_t));
+        if ((err = psSm4InitGCM(&sec->decryptCtx.sm4gcm, sec->readKey,
+                 keysize)) < 0)
+        {
+            return err;
+        }
+    }
+    return 0;
+}
+int32 csSm4GcmEncrypt(void *ssl, unsigned char *pt,
+    unsigned char *ct, uint32 len)
+{
+    ssl_t *lssl = ssl;
+    psSm4Gcm_t *ctx;
+    unsigned char nonce[12];
+    unsigned char aad[TLS_GCM_AAD_LEN];
+    int32 i, ptLen, seqNotDone;
+
+    if (len == 0)
+    {
+        return PS_SUCCESS;
+    }
+
+    if (len < 16 + 1)
+    {
+        return PS_LIMIT_FAIL;
+    }
+    ptLen = len - TLS_GCM_TAG_LEN;
+    ctx = &lssl->sec.encryptCtx.sm4gcm;
+    Memcpy(nonce, lssl->sec.writeIV, 4);
+
+    seqNotDone = 1;
+    /* Each value of the nonce_explicit MUST be distinct for each distinct
+        invocation of the GCM encrypt function for any fixed key.  Failure to
+        meet this uniqueness requirement can significantly degrade security.
+        The nonce_explicit MAY be the 64-bit sequence number. */
+#     ifdef USE_DTLS
+    if (NGTD_VER(lssl, v_dtls_any))
+    {
+        Memcpy(nonce + 4, lssl->epoch, 2);
+        Memcpy(nonce + 4 + 2, lssl->rsn, 6);
+        /* In the case of DTLS the counter is formed from the concatenation of
+            the 16-bit epoch with the 48-bit sequence number.*/
+        Memcpy(aad, lssl->epoch, 2);
+        Memcpy(aad + 2, lssl->rsn, 6);
+        seqNotDone = 0;
+    }
+#     endif
+
+    if (seqNotDone)
+    {
+        Memcpy(nonce + 4, lssl->sec.seq, TLS_EXPLICIT_NONCE_LEN);
+        Memcpy(aad, lssl->sec.seq, 8);
+    }
+    aad[8] = lssl->outRecType;
+    aad[9] = psEncodeVersionMaj(GET_NGTD_VER(lssl));
+    aad[10] = psEncodeVersionMin(GET_NGTD_VER(lssl));
+    aad[11] = ptLen >> 8 & 0xFF;
+    aad[12] = ptLen & 0xFF;
+
+    psSm4ReadyGCM(ctx, nonce, aad, TLS_GCM_AAD_LEN);
+    psSm4EncryptGCMImplicitIV(ctx, pt, ct, ptLen);
+    psSm4GetGCMTag(ctx, 16, ct + ptLen);
+
+#     ifdef USE_DTLS
+    if (NGTD_VER(lssl, v_dtls_any))
+    {
+        return len;
+    }
+#     endif
+
+    /* Normally HMAC would increment the sequence */
+    for (i = 7; i >= 0; i--)
+    {
+        lssl->sec.seq[i]++;
+        if (lssl->sec.seq[i] != 0)
+        {
+            break;
+        }
+    }
+    return len;
+}
+int32 csSm4GcmDecrypt(void *ssl, unsigned char *ct,
+    unsigned char *pt, uint32 len)
+{
+    ssl_t *lssl = ssl;
+    psAesGcm_t *ctx;
+    int32 i, ctLen, bytes, seqNotDone;
+    unsigned char nonce[12];
+    unsigned char aad[TLS_GCM_AAD_LEN];
+
+    /*
+      Minimum GCM ciphertext length in TLS 1.2:
+      25 = 1 + 16 (tag) + 8 (nonce_explicit).
+    */
+    if (len < 25)
+    {
+        psTraceErrr("Invalid GCM ciphertext length\n");
+        psTraceIntInfo("(%u)\n", len);
+        return PS_FAILURE;
+    }
+    ctx = &lssl->sec.decryptCtx.sm4gcm;
+
+    seqNotDone = 1;
+    Memcpy(nonce, lssl->sec.readIV, 4);
+    Memcpy(nonce + 4, ct, TLS_EXPLICIT_NONCE_LEN);
+    ct += TLS_EXPLICIT_NONCE_LEN;
+    len -= TLS_EXPLICIT_NONCE_LEN;
+
+#    ifdef USE_DTLS
+    if (NGTD_VER(lssl, v_dtls_any))
+    {
+        /* In the case of DTLS the counter is formed from the concatenation of
+            the 16-bit epoch with the 48-bit sequence number.  */
+        Memcpy(aad, lssl->rec.epoch, 2);
+        Memcpy(aad + 2, lssl->rec.rsn, 6);
+        seqNotDone = 0;
+    }
+#    endif
+
+    if (seqNotDone)
+    {
+        Memcpy(aad, lssl->sec.remSeq, 8);
+    }
+    ctLen = len - TLS_GCM_TAG_LEN;
+    aad[8] = lssl->rec.type;
+    aad[9] = psEncodeVersionMaj(GET_NGTD_VER(lssl));
+    aad[10] = psEncodeVersionMin(GET_NGTD_VER(lssl));
+    aad[11] = ctLen >> 8 & 0xFF;
+    aad[12] = ctLen & 0xFF;
+
+    psSm4ReadyGCM(ctx, nonce, aad, TLS_GCM_AAD_LEN);
+
+    if ((bytes = psSm4DecryptGCM(ctx, ct, len, pt, len - TLS_GCM_TAG_LEN)) < 0)
+    {
+        return -1;
+    }
+    for (i = 7; i >= 0; i--)
+    {
+        lssl->sec.remSeq[i]++;
+        if (lssl->sec.remSeq[i] != 0)
+        {
+            break;
+        }
+    }
+    return bytes;
+}
+int32 csSm4Init(sslSec_t *sec, int32 type, uint32 keysize)
+{
+    int32 err;
+
+    if (type == INIT_ENCRYPT_CIPHER)
+    {
+        Memset(&(sec->encryptCtx), 0, sizeof(psSm4Cbc_t));
+        if ((err = psSm4InitCBC(&sec->encryptCtx.sm4, sec->writeIV, sec->writeKey,
+                 keysize, PS_TRUE)) < 0)
+        {
+            return err;
+        }
+    }
+    else     /* Init for decrypt */
+    {
+        Memset(&(sec->decryptCtx), 0, sizeof(psSm4Cbc_t));
+        if ((err = psSm4InitCBC(&sec->decryptCtx.sm4, sec->readIV, sec->readKey,
+                 keysize, PS_FALSE)) < 0)
+        {
+            return err;
+        }
+    }
+    return PS_SUCCESS;
+}
+
+int32 csSm4Encrypt(void *ssl, unsigned char *pt,
+    unsigned char *ct, uint32 len)
+{
+    ssl_t *lssl = ssl;
+    psAesCbc_t *ctx = &lssl->sec.encryptCtx.sm4;
+
+    if ((len & 0xf) != 0)
+    {
+        psTraceErrr("Invalid plaintext size in csSm4Encrypt.\n");
+        return PS_FAILURE;
+    }
+
+    psSm4EncryptCBC(ctx, pt, ct, len);
+    return len;
+}
+
+int32 csSm4Decrypt(void *ssl, unsigned char *ct,
+    unsigned char *pt, uint32 len)
+{
+    ssl_t *lssl = ssl;
+    psAesCbc_t *ctx = &lssl->sec.decryptCtx.sm4;
+
+    if ((len & 0xf) != 0)
+    {
+        psTraceErrr("Invalid ciphertext size in csSm4Decrypt.\n");
+        return PS_FAILURE;
+    }
+
+    psSm4DecryptCBC(ctx, ct, pt, len);
+    return len;
+}
+#  endif /*USE_SM4 */
+
+
 /******************************************************************************/
 
 #if defined(USE_IDEA) && defined(USE_IDEA_CIPHER_SUITE)
@@ -816,6 +1039,71 @@ static int32 csShaVerifyMac(void *sslv, unsigned char type,
 #endif /* USE_SHA_MAC */
 /******************************************************************************/
 
+#ifdef USE_HMAC_SM3
+/******************************************************************************/
+static int32 csSm3GenerateMac(void *sslv, unsigned char type,
+    unsigned char *data, uint32 len, unsigned char *macOut)
+{
+    ssl_t *ssl = (ssl_t *) sslv;
+    unsigned char mac[SM3_HASH_SIZE];
+
+    if (NGTD_VER(ssl, v_tls_with_hmac))
+    {
+        switch (ssl->nativeEnMacSize)
+        {
+# ifdef USE_SM3
+        case SM3_HASH_SIZE:
+            tlsHMACSm3(ssl, HMAC_CREATE, type,
+                    data, len, mac, ssl->nativeEnMacSize);
+            break;
+# endif /* USE_SM3 */
+        default:
+            return PS_ARG_FAIL;
+        }
+    }
+    else
+    {
+        return PS_ARG_FAIL;
+    }
+
+    Memcpy(macOut, mac, ssl->enMacSize);
+    return ssl->enMacSize;
+}
+
+static int32 csSm3VerifyMac(void *sslv, unsigned char type,
+    unsigned char *data, uint32 len, unsigned char *mac)
+{
+    unsigned char buf[SM3_HASH_SIZE];
+    ssl_t *ssl = (ssl_t *) sslv;
+
+    if (NGTD_VER(ssl, v_tls_with_hmac))
+    {
+        switch (ssl->nativeDeMacSize)
+        {
+# ifdef USE_SM3
+        case SM3_HASH_SIZE:
+            tlsHMACSm3(ssl, HMAC_VERIFY, type, data, len, buf,
+                ssl->nativeDeMacSize);
+            break;
+# endif
+        default:
+            memzero_s(buf, ssl->nativeDeMacSize); /* Will fail below */
+            break;
+        }
+    }
+    else
+    {
+        memzero_s(buf, SM3_HASH_SIZE); /* Will fail below */
+    }
+    if (memcmpct(buf, mac, ssl->deMacSize) == 0)
+    {
+        return PS_SUCCESS;
+    }
+    return PS_FAILURE;
+}
+#endif /* USE_HMAC_SM3 */
+/******************************************************************************/
+
 /******************************************************************************/
 #if defined(USE_MD5) && defined(USE_MD5_MAC)
 /******************************************************************************/
@@ -949,7 +1237,40 @@ const static sslCipherSpec_t supportedCiphers[] = {
       NULL,                                                       /* generateMac */
       NULL },                                                     /* verifyMac */
 # endif /* USE_TLS_CHACHA20_POLY1305_SHA256 */
+
+# if defined(USE_CL_CRYPTO) && \
+     defined(USE_SM2) && defined(USE_SM3) && defined(USE_SM4)
+#  ifdef USE_TLS_SM4_GCM_SM3
+    { TLS_SM4_GCM_SM3,                                            /* ident */
+      CS_TLS13,                                                   /* type */
+      CRYPTO_FLAGS_SM4 | CRYPTO_FLAGS_GCM | CRYPTO_FLAGS_SM3,     /* flags */
+      0,                                                          /* macSize */
+      16,                                                         /* keySize */
+      12,                                                         /* ivSize */
+      0,                                                          /* blocksize */
+      csSm4GcmInitTls13,                                          /* init */
+      csSm4GcmEncryptTls13,                                       /* encrypt */
+      csSm4GcmDecryptTls13,                                       /* decrypt */
+      NULL,                                                       /* generateMac */
+      NULL },                                                     /* verifyMac */
+#  endif /* USE_TLS_SM4_GCM_SM3 */
+#  ifdef USE_TLS_SM4_CCM_SM3
+    { TLS_SM4_CCM_SM3,                                            /* ident */
+      CS_TLS13,                                                   /* type */
+      CRYPTO_FLAGS_SM4 | CRYPTO_FLAGS_CCM | CRYPTO_FLAGS_SM3,     /* flags */
+      0,                                                          /* macSize */
+      16,                                                         /* keySize */
+      12,                                                         /* ivSize */
+      0,                                                          /* blocksize */
+      csSm4CcmInitTls13,                                          /* init */
+      csSm4CcmEncryptTls13,                                       /* encrypt */
+      csSm4CcmDecryptTls13,                                       /* decrypt */
+      NULL,                                                       /* generateMac */
+      NULL },                                                     /* verifyMac */
+#  endif /* USE_TLS_SM4_CCM_SM3 */
+# endif
 #endif /* USE_TLS_1_3 */
+
 /* Ephemeral ciphersuites */
 #ifdef USE_TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
     { TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,                    /* ident */
@@ -1296,6 +1617,52 @@ const static sslCipherSpec_t supportedCiphers[] = {
       csShaGenerateMac,
       csShaVerifyMac },
 #endif /* USE_TLS_DHE_PSK_WITH_AES_128_CBC_SHA */
+
+#if defined(USE_CL_CRYPTO) && \
+    defined(USE_SM2) && defined(USE_SM3) && defined(USE_SM4)
+#ifdef USE_TLS_ECDHE_SM2_WITH_SMS4_SM3
+    { TLS_ECDHE_SM2_WITH_SMS4_SM3,                                /* ident */
+      CS_ECDHE_SM2,                                               /* type */
+      CRYPTO_FLAGS_SM4 | CRYPTO_FLAGS_SM3,                        /* flags */
+      32,                                                         /* macSize */
+      16,                                                         /* keySize */
+      16,                                                         /* ivSize */
+      16,                                                         /* blocksize */
+      csSm4Init,                                                  /* init */
+      csSm4Encrypt,                                               /* encrypt */
+      csSm4Decrypt,                                               /* decrypt */
+      csSm3GenerateMac,                                           /* generateMac */
+      csSm3VerifyMac },                                           /* verifyMac */
+#endif /* USE_TLS_ECDHE_SM2_WITH_SMS4_SM3 */
+#ifdef USE_TLS_ECDHE_SM2_WITH_SMS4_SHA256
+    { TLS_ECDHE_SM2_WITH_SMS4_SHA256,                             /* ident */
+      CS_ECDHE_SM2,                                               /* type */
+      CRYPTO_FLAGS_SM4 | CRYPTO_FLAGS_SHA2,                       /* flags */
+      32,                                                         /* macSize */
+      16,                                                         /* keySize */
+      16,                                                         /* ivSize */
+      16,                                                         /* blocksize */
+      csSm4Init,                                                  /* init */
+      csSm4Encrypt,                                               /* encrypt */
+      csSm4Decrypt,                                               /* decrypt */
+      csShaGenerateMac,                                           /* generateMac */
+      csShaVerifyMac },                                           /* verifyMac */
+#endif /* USE_TLS_ECDHE_SM2_WITH_SMS4_SHA256 */
+#ifdef USE_TLS_ECDHE_SM2_WITH_SMS4_GCM_SM3
+    { TLS_ECDHE_SM2_WITH_SMS4_GCM_SM3,                            /* ident */
+      CS_ECDHE_SM2,                                               /* type */
+      CRYPTO_FLAGS_SM4 | CRYPTO_FLAGS_GCM | CRYPTO_FLAGS_SM3,     /* flags */
+      0,                                                          /* macSize */
+      16,                                                         /* keySize */
+      4,                                                          /* ivSize */
+      0,                                                          /* blocksize */
+      csSm4GcmInit,                                               /* init */
+      csSm4GcmEncrypt,                                            /* encrypt */
+      csSm4GcmDecrypt,                                            /* decrypt */
+      NULL,                                                       /* generateMac */
+      NULL },                                                     /* verifyMac */
+#endif /* USE_TLS_ECDHE_SM2_WITH_SMS4_GCM_SM3 */
+#endif
 
 /* Non-ephemeral ciphersuites */
 
@@ -1708,6 +2075,21 @@ const static sslCipherSpec_t supportedCiphers[] = {
 
 /* @security Deprecated unencrypted ciphers */
 
+#ifdef USE_TLS_RSA_WITH_NULL_SHA256
+    { TLS_RSA_WITH_NULL_SHA256,
+      CS_RSA,
+      CRYPTO_FLAGS_SHA2,
+      32,           /* macSize */
+      0,            /* keySize */
+      0,            /* ivSize */
+      0,            /* blocksize */
+      csNullInit,
+      csNullEncrypt,
+      csNullDecrypt,
+      csShaGenerateMac,
+      csShaVerifyMac },
+#endif /* USE_TLS_RSA_WITH_NULL_SHA256 */
+
 #ifdef USE_SSL_RSA_WITH_NULL_SHA
     { SSL_RSA_WITH_NULL_SHA,
       CS_RSA,
@@ -1950,7 +2332,8 @@ static uint16 getKeyTypeFromCipherType(uint16 type, uint16 *dhParamsRequired,
     case CS_ECDH_RSA:
         *ecKeyExchange = 1;
         return RSA_TYPE_SIG;
-
+    case CS_ECDHE_SM2:
+        return SM2_TYPE_SIG;
     default:            /* CS_NULL or CS_PSK type */
         return CS_NULL; /* a cipher suite with no pub key or DH */
     }
@@ -1960,7 +2343,11 @@ static uint16 getKeyTypeFromCipherType(uint16 type, uint16 *dhParamsRequired,
 # define KEY_ALG_ANY     1
 # define KEY_ALG_FIRST   2
 
-#if defined(USE_SERVER_SIDE_SSL) && !defined(USE_ONLY_PSK_CIPHER_SUITE)
+
+#ifndef USE_ONLY_PSK_CIPHER_SUITE
+# if ((defined(USE_SERVER_SIDE_SSL) && defined(USE_X509)) ||             \
+      (defined(USE_CLIENT_SIDE_SSL) && defined(USE_ECC_CIPHER_SUITE) &&  \
+       defined(USE_CERT_PARSE)))
 
 /*
     This is the signature algorithm that the client will be using to encrypt
@@ -1981,13 +2368,22 @@ static int32 haveCorrectSigAlg(psX509Cert_t *cert, int32 sigType)
     {
         return PS_SUCCESS;
     }
+# ifdef USE_SM2
+    if (sigType == SM2_TYPE_SIG && cert->pubKeyAlgorithm == OID_ECDSA_KEY_ALG
+                                && cert->sigAlgorithm == OID_SM3_SM2_SIG)
+    {
+        return PS_SUCCESS;
+    }
+# endif
 # else
     /* Without certificate parsing assume success by proper configuration */
     return PS_SUCCESS;
 # endif
     return PS_FAILURE;
 }
+# endif
 
+# ifdef USE_SERVER_SIDE_SSL
 /* If using TLS 1.2 we need to test agains the sigHashAlg and eccParams */
 static psRes_t validateKeyForExtensions(ssl_t *ssl, const sslCipherSpec_t *spec,
     sslIdentity_t *givenKey)
@@ -2034,7 +2430,7 @@ static psRes_t validateKeyForExtensions(ssl_t *ssl, const sslCipherSpec_t *spec,
                 suites where we'll be sending a signature in the
                 ServerKeyExchange message */
             if (spec->type == CS_DHE_RSA || spec->type == CS_ECDHE_RSA ||
-                spec->type == CS_ECDHE_ECDSA)
+                spec->type == CS_ECDHE_ECDSA || spec->type == CS_ECDHE_SM2)
             {
 #    ifdef USE_CERT_PARSE
 #     ifdef USE_RSA
@@ -2068,6 +2464,9 @@ static psRes_t validateKeyForExtensions(ssl_t *ssl, const sslCipherSpec_t *spec,
 #      endif
 #      ifdef USE_SHA512
                         !(ssl->peerSigAlg & HASH_SIG_SHA512_ECDSA_MASK) &&
+#      endif
+#      if defined(USE_SM2) && defined(USE_SM3)
+                        !(ssl->peerSigAlg & HASH_SIG_SM3_SM2_MASK) &&
 #      endif
                         !(ssl->peerSigAlg & HASH_SIG_SHA256_ECDSA_MASK))
                     {
@@ -2118,6 +2517,7 @@ static psRes_t validateKeyForExtensions(ssl_t *ssl, const sslCipherSpec_t *spec,
     return PS_SUCCESS;
 }
 # endif /* USE_SERVER_SIDE_SSL */
+#endif /* USE_ONLY_PSK_CIPHER_SUITE*/
 
 #if defined(USE_X509) && !defined(USE_ONLY_PSK_CIPHER_SUITE)
 /* if firstMatch == true, then the subject cert keyAlg on the chain needs to
@@ -2152,6 +2552,33 @@ static psBool_t certValidForUse(psX509Cert_t *certs,
     return PS_TRUE;
 #endif
 }
+
+# if defined (USE_ECC_CIPHER_SUITE) && defined(USE_CLIENT_SIDE_SSL)
+static psBool_t certValidForUseSig(psX509Cert_t *certs,
+        int32 sigType,
+        psBool_t firstMatch)
+{
+# if !defined(USE_ONLY_PSK_CIPHER_SUITE) && defined(USE_CERT_PARSE)
+    psX509Cert_t *cert;
+
+    for (cert = certs; cert; cert = cert->next)
+    {
+        if (sigType == 0 || haveCorrectSigAlg(cert, sigType))
+        {
+            return PS_TRUE;
+        }
+        if (firstMatch)
+        {
+            return PS_FALSE;
+        }
+    }
+    return PS_FALSE;
+#else
+    /* PSK only or no certificate parsing - assume OK. */
+    return PS_TRUE;
+#endif
+}
+#endif
 #endif
 
 #if defined(USE_SERVER_SIDE_SSL) && !defined(USE_ONLY_PSK_CIPHER_SUITE)
@@ -2276,7 +2703,8 @@ int32_t haveKeyMaterial(const ssl_t *ssl,
         identity and clients have a CA so we don't repeat them everywhere */
     if (cipherType == CS_RSA || cipherType == CS_DHE_RSA ||
         cipherType == CS_ECDHE_RSA || cipherType == CS_ECDH_RSA ||
-        cipherType == CS_ECDHE_ECDSA || cipherType == CS_ECDH_ECDSA)
+        cipherType == CS_ECDHE_ECDSA || cipherType == CS_ECDH_ECDSA ||
+        cipherType == CS_ECDHE_SM2)
     {
         if (ssl->flags & SSL_FLAGS_SERVER)
         {
@@ -2497,6 +2925,34 @@ int32_t haveKeyMaterial(const ssl_t *ssl,
 #   endif
         }
     }
+
+/*
+    ECDHE_SM2 ciphers must have SM2 keys
+ */
+    if (cipherType == CS_ECDHE_SM2)
+    {
+        if (ssl->flags & SSL_FLAGS_SERVER)
+        {
+#   ifdef USE_SERVER_SIDE_SSL
+            if (haveKeyForAlg(ssl->keys,
+                    OID_ECDSA_KEY_ALG, SM2_TYPE_SIG,
+                    KEY_ALG_FIRST) < 0)
+            {
+                return PS_FAILURE;
+            }
+#   endif
+#   ifdef USE_CLIENT_SIDE_SSL
+        }
+        else
+        {
+            if (!certValidForUseSig(ssl->keys->CAcerts, SM2_TYPE_SIG, PS_FALSE))
+            {
+                return PS_FAILURE;
+            }
+#   endif
+        }
+    }
+
 #  endif /* USE_ECC_CIPHER_SUITE */
 # endif  /* USE_ONLY_PSK_CIPHER_SUITE   */
 
@@ -2595,6 +3051,10 @@ chooseCS(ssl_t *ssl, uint32_t *suites, psSize_t nsuites)
 #  ifdef USE_IDENTITY_CERTIFICATES
                 ssl->chosenIdentity = ssl->keys->identity;
 #  endif
+                if (spec->flags & CRYPTO_FLAGS_SM4)
+                {
+                    ssl->tls13SelectedSMSuite = PS_TRUE;
+                }
                 goto out_ok;
             }
             else
@@ -2709,7 +3169,8 @@ chooseCS(ssl_t *ssl, uint32_t *suites, psSize_t nsuites)
                 {
                     reqKeyAlg = OID_RSA_KEY_ALG;
                 }
-                else if (reqSigType == ECDSA_TYPE_SIG)
+                else if (reqSigType == ECDSA_TYPE_SIG ||
+                         reqSigType == SM2_TYPE_SIG)
                 {
                     reqKeyAlg = OID_ECDSA_KEY_ALG;
                 }
@@ -2719,7 +3180,6 @@ chooseCS(ssl_t *ssl, uint32_t *suites, psSize_t nsuites)
                     reqKeyAlg = 0;
                 }
             }
-
             if (haveCorrectKeyAlg(idKey,
                                   reqKeyAlg, reqSigType,
                                   KEY_ALG_FIRST) < 0 ||
@@ -2908,6 +3368,15 @@ int32_t eccSuitesSupported(const ssl_t *ssl,
 # ifdef USE_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
                 || sslGetCipherSpec(ssl, TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256)
 # endif
+# ifdef USE_TLS_ECDHE_SM2_WITH_SMS4_SM3
+                    || cipherSpecs[i] == TLS_ECDHE_SM2_WITH_SMS4_SM3
+# endif
+# ifdef USE_TLS_ECDHE_SM2_WITH_SMS4_SHA256
+                    || cipherSpecs[i] == TLS_ECDHE_SM2_WITH_SMS4_SHA256
+# endif
+# ifdef USE_TLS_ECDHE_SM2_WITH_SMS4_GCM_SM3
+                    || cipherSpecs[i] == TLS_ECDHE_SM2_WITH_SMS4_GCM_SM3
+# endif
 # endif /* USE_TLS_1_2 */
             )
         {
@@ -3001,6 +3470,15 @@ int32_t eccSuitesSupported(const ssl_t *ssl,
 # ifdef USE_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
                     || cipherSpecs[i] == TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
 # endif
+# ifdef USE_TLS_ECDHE_SM2_WITH_SMS4_SM3
+                    || cipherSpecs[i] == TLS_ECDHE_SM2_WITH_SMS4_SM3
+# endif
+# ifdef USE_TLS_ECDHE_SM2_WITH_SMS4_SHA256
+                    || cipherSpecs[i] == TLS_ECDHE_SM2_WITH_SMS4_SHA256
+# endif
+# ifdef USE_TLS_ECDHE_SM2_WITH_SMS4_GCM_SM3
+                    || cipherSpecs[i] == TLS_ECDHE_SM2_WITH_SMS4_GCM_SM3
+# endif
 #endif /* USE_TLS_1_2 */
                 )
             {
@@ -3034,7 +3512,7 @@ int32 csCheckCertAgainstCipherSuite(int32 pubKey, int32 cipherType)
     if (pubKey == PS_ECC)
     {
         if (cipherType == CS_ECDHE_ECDSA || cipherType == CS_ECDH_ECDSA ||
-            cipherType == CS_ECDH_RSA)
+            cipherType == CS_ECDH_RSA || cipherType == CS_ECDHE_SM2)
         {
             return 1;
         }
@@ -3183,6 +3661,44 @@ const sslCipherSpec_t *sslGetCipherSpec(const ssl_t *ssl, uint16_t id)
             return NULL;
         }
 #endif
+
+#if defined(USE_SM2) && defined(USE_SM3) && \
+    defined(USE_SM4) && defined(USE_CL_CRYPTO)
+        if (supportedCiphers[i].flags &
+            (CRYPTO_FLAGS_SM4 | CRYPTO_FLAGS_SM3))
+        {
+            if (flps_provider_is_fl())
+            {
+                return NULL;
+            }
+
+            if (findFromUint16Array(
+                        ssl->supportedSigAlgs,
+                        ssl->supportedSigAlgsLen,
+                        sigalg_sm2sig_sm3) == PS_FAILURE)
+            {
+                return NULL;
+            }
+            if (supportedCiphers[i].type == CS_TLS13 &&
+                (findFromUint16Array(
+                        ssl->tls13SupportedSigAlgsCert,
+                        ssl->tls13SupportedSigAlgsCertLen,
+                        sigalg_sm2sig_sm3) == PS_FAILURE
+                || findFromUint16Array(
+                        ssl->tls13SupportedGroups,
+                        ssl->tls13SupportedGroupsLen,
+                        namedgroup_curveSM2) == PS_FAILURE))
+            {
+                return NULL;
+            }
+        }
+#else
+        if (supportedCiphers[i].flags &
+            (CRYPTO_FLAGS_SM4 | CRYPTO_FLAGS_SM3))
+        {
+            return NULL;
+        }
+#endif
 #ifdef USE_SEC_CONFIG
         if (!ciphersuiteAllowedBySecConfig(ssl, id))
         {
@@ -3314,6 +3830,7 @@ const sslCipherSpec_t *sslGetCipherSpec(const ssl_t *ssl, uint16_t id)
                    know of server public key yet. */
                 return &supportedCiphers[i];
             }
+
             if (haveKeyMaterial(ssl, &supportedCiphers[i], 0)
                 == PS_SUCCESS)
             {
@@ -3331,7 +3848,6 @@ const sslCipherSpec_t *sslGetCipherSpec(const ssl_t *ssl, uint16_t id)
 #endif  /* VALIDATE_KEY_MATERIAL */
     }
     while (supportedCiphers[i++].ident != SSL_NULL_WITH_NULL_NULL);
-
     return NULL;
 }
 
@@ -3586,7 +4102,8 @@ void matrixSslSetKexFlags(ssl_t *ssl)
         ssl->flags |= SSL_FLAGS_DHE_KEY_EXCH;
         ssl->flags |= SSL_FLAGS_DHE_WITH_RSA;
     }
-    if (ssl->cipher->type == CS_ECDHE_ECDSA)
+    if (ssl->cipher->type == CS_ECDHE_ECDSA ||
+        ssl->cipher->type == CS_ECDHE_SM2)
     {
         ssl->flags |= SSL_FLAGS_ECC_CIPHER;
         ssl->flags |= SSL_FLAGS_DHE_KEY_EXCH;

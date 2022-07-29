@@ -5,7 +5,7 @@
  *      Functions for TLS 1.3 ciphersuites.
  */
 /*
- *      Copyright (c) 2013-2018 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -508,6 +508,11 @@ int32_t tls13GetCipherHmacAlg(ssl_t *ssl)
         return 0;
     }
 
+    if (ssl->cipher->flags & CRYPTO_FLAGS_SM3)
+    {
+        return HMAC_SM3;
+    }
+
     if (ssl->cipher->flags & CRYPTO_FLAGS_SHA3)
     {
         return HMAC_SHA384;
@@ -529,11 +534,14 @@ int32_t tls13CipherIdToHmacAlg(uint32_t cipherId)
     {
     case TLS_AES_128_GCM_SHA256:
     case TLS_CHACHA20_POLY1305_SHA256:
-    case TLS_AES_128_CCM_SHA_256:
+    case TLS_AES_128_CCM_SHA256:
     case TLS_AES_128_CCM_8_SHA256:
         return HMAC_SHA256;
     case TLS_AES_256_GCM_SHA384:
         return HMAC_SHA384;
+    case TLS_SM4_GCM_SM3:
+    case TLS_SM4_CCM_SM3:
+        return HMAC_SM3;
     }
 
     return 0;
@@ -545,9 +553,11 @@ psBool_t isTls13Ciphersuite(uint16_t suite)
     {
     case TLS_AES_128_GCM_SHA256:
     case TLS_CHACHA20_POLY1305_SHA256:
-    case TLS_AES_128_CCM_SHA_256:
+    case TLS_AES_128_CCM_SHA256:
     case TLS_AES_128_CCM_8_SHA256:
     case TLS_AES_256_GCM_SHA384:
+    case TLS_SM4_GCM_SM3:
+    case TLS_SM4_CCM_SM3:
         return PS_TRUE;
     default:
         return PS_FALSE;

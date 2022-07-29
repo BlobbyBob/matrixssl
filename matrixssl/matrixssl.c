@@ -5,7 +5,7 @@
  *      The session and authentication management portions of the MatrixSSL library.
  */
 /*
- *      Copyright (c) 2013-2018 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -44,7 +44,7 @@
 /******************************************************************************/
 
 static const char copyright[] =
-    "Copyright Inside Secure Corporation. All rights reserved.";
+    "Copyright Rambus Inc. All rights reserved.";
 
 #ifdef USE_SERVER_SIDE_SSL
 
@@ -180,6 +180,9 @@ void matrixSslClose(void)
 {
 # ifdef USE_SERVER_SIDE_SSL
     int i;
+#  ifdef USE_STATELESS_SESSION_TICKETS
+    psDestroyMutex(&g_sessTicketLock);
+#  endif /* USE_STATELESS_SESSION_TICKETS */
 
     psLockMutex(&g_sessionTableLock);
     for (i = 0; i < SSL_SESSION_TABLE_SIZE; i++)
@@ -2352,6 +2355,9 @@ int32 matrixValidateCertsExt(psPool_t *pool, psX509Cert_t *subjectCerts,
     x509v3extensions_t *ext;
     char ip[16];
     int32 rc, foundSupportedSAN, pathLen = 0;
+    int32 crossCertPathLen = 0;
+    int32 previousAuthStatus = PS_FALSE;
+    psBool_t crossCertLoopActive = PS_FALSE;
 
     /*
        Check for illegal option combinations.
@@ -2467,6 +2473,7 @@ int32 matrixValidateCertsExt(psPool_t *pool, psX509Cert_t *subjectCerts,
      If subject cert was a chain, that has already been authenticated above so
      we only need to pass in the single parent-most cert to be tested against
  */
+    crossCertPathLen = pathLen;
     *foundIssuer = NULL;
     ic = issuerCerts;
     while (ic != NULL)
@@ -2475,6 +2482,22 @@ int32 matrixValidateCertsExt(psPool_t *pool, psX509Cert_t *subjectCerts,
         if ((rc = psX509AuthenticateCert(pool, sc, ic, foundIssuer, hwCtx,
                  poolUserPtr)) == PS_SUCCESS)
         {
+            /* Validation ends to this certificate. */
+            sc->pathEnd = PS_TRUE;
+
+            /* If cross-certificate loop is active set PS_CERT_AUTH_FAIL to
+               other certificates in the chain. */
+            if (crossCertLoopActive == PS_TRUE)
+            {
+                psX509Cert_t *nextSc = sc->next;
+
+                while (nextSc != NULL)
+                {
+                    nextSc->authStatus = PS_CERT_AUTH_FAIL;
+                    nextSc = nextSc->next;
+                }
+            }
+
             rc = checkPathLenConstraint(ic, sc, pathLen);
             if (rc < 0)
             {
@@ -2635,6 +2658,42 @@ int32 matrixValidateCertsExt(psPool_t *pool, psX509Cert_t *subjectCerts,
             return rc;
         }
         ic = ic->next;
+
+        /*
+           It is possible that the issuer cert which authenticates the last cert
+           in the chain is not in the list of issuer certs. Instead, the list of
+           issuer certs may contain a cross-certificate for some other cert in
+           the chain. Therefore, check if the loop has to be started again and
+           try to authenticate the previous certs in the chain against the
+           issuer certs.
+         */
+        if (ic == NULL)
+        {
+            if (crossCertLoopActive == PS_TRUE)
+            {
+                /* Restore authStatus from previous round. */
+                sc->authStatus = previousAuthStatus;
+            }
+
+            if (crossCertPathLen > 0)
+            {
+                uint32 i;
+
+                sc = subjectCerts;
+                for (i = 1; i < crossCertPathLen && sc->next != NULL; i++)
+                {
+                    sc = sc->next;
+                }
+
+                crossCertPathLen--;
+                pathLen = crossCertPathLen;
+
+                ic = issuerCerts;
+
+                previousAuthStatus = sc->authStatus;
+                crossCertLoopActive = PS_TRUE;
+            }
+        }
     }
 /*
     Success would have returned if it happen

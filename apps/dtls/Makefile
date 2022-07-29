@@ -3,7 +3,7 @@
 #   'make' builds debug (Default).
 #   'make gold' builds optimized.
 #
-#	Copyright (c) 2013-2016 INSIDE Secure Corporation. All Rights Reserved.
+#	Copyright (c) 2013-2016 Rambus Inc. All Rights Reserved.
 #
 
 MATRIXSSL_ROOT:=../..

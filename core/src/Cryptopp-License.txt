@@ -1,4 +1,4 @@
-Most of the files in this package have been implemented by INSIDE Secure
+Most of the files in this package have been implemented by Rambus Inc.
 and are copyrighted accordingly.
 
 sl_neon.c and sl_cpu.c are based on public domain files from Crypto++.

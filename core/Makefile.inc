@@ -1,7 +1,7 @@
 #
 #	Path and linkage information for core static library
 #
-#	Copyright (c) 2017 INSIDE Secure. All Rights Reserved.
+#	Copyright (c) 2017 Rambus Inc. All Rights Reserved.
 #
 
 # This Makefile.inc is used from other Makefiles to reference
@@ -17,5 +17,6 @@ CFLAGS_CORE_INCLUDE=\
 -I$(CORE_PATH)/config -I$(CORE_PATH)/include -I$(CORE_PATH)/osdep/include \
 -I$(CORE_PATH)/include/sfzcl -I$(CORE_PATH)/osdep/include
 
+LIBTHREAD=-lpthread
 LIB_CORE_S=$(CORE_PATH)/libcore_s.a
-LDADD_CORE_S=$(CORE_PATH)/libcore_s.a -lpthread
+LDADD_CORE_S=$(CORE_PATH)/libcore_s.a $(LIBTHREAD)

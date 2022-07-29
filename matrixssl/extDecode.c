@@ -5,7 +5,7 @@
  *      CLIENT_HELLO and SERVER_HELLO extension parsing
  */
 /*
- *      Copyright (c) 2013-2018 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -102,6 +102,13 @@ int32_t tlsParseSignatureAlgorithms(ssl_t *ssl,
         sigAlg = (c[0] << 8) + c[1];
         /* Those algorithms that are not supported by us will be filtered
            out here; ssl->hashSigAlg will contain the shared ones. */
+#if defined(USE_SM2) && defined(USE_SM3)
+        /*Fix SM2-SM3 in message*/
+        if (sigAlg == 0x0707)
+        {
+            sigAlg = sigalg_sm2sig_sm3;
+        }
+#endif
         if (findFromUint16Array(ssl->supportedSigAlgs,
                         ssl->supportedSigAlgsLen,
                         sigAlg) != PS_FAILURE)
@@ -176,6 +183,12 @@ int32_t tlsParseSupportedGroups(ssl_t *ssl,
 
         curveId = *c << 8; c++;
         curveId += *c; c++;
+# if defined(USE_SM2) && defined(USE_SM3)
+        if (curveId == namedgroup_x448)
+        {
+            curveId = namedgroup_curveSM2;
+        }
+# endif
         dataLen -= 2;
         extLen -= 2;
 # ifdef USE_TLS_1_3

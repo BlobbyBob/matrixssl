@@ -1,7 +1,7 @@
 #
 #	Makefile for unit testing applications.
 #
-#	Copyright (c) 2018 INSIDE Secure Corporation. All Rights Reserved.
+#	Copyright (c) 2018 Rambus Inc. All Rights Reserved.
 #
 #
 

@@ -5,7 +5,7 @@
  *      TLS 1.3 specific functions for parameter negotiation.
  */
 /*
- *      Copyright (c) 2018 INSIDE Secure Corporation
+ *      Copyright (c) 2018 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -90,6 +90,14 @@ int32_t tls13TryNegotiateParams(ssl_t *ssl,
             break;
         }
 #  endif
+#  ifdef USE_SM2
+        if (givenKey->privKey.type == PS_ECC &&
+                ssl->sec.keySelect.peerSigAlgs[i] == sigalg_sm2sig_sm3)
+        {
+            peerCanVerifyCvSig = PS_TRUE;
+            break;
+        }
+#  endif
     }
 
     if (!peerCanVerifyCvSig)
@@ -146,6 +154,13 @@ int32_t tls13TryNegotiateParams(ssl_t *ssl,
 #  ifdef USE_ED25519
             else if (cert->sigAlgorithm == OID_ED25519_KEY_ALG &&
                 ssl->sec.keySelect.peerSigAlgs[i] == sigalg_ed25519)
+            {
+                peerCanVerifyCert = PS_TRUE;
+            }
+#  endif
+#  ifdef USE_SM2
+            else if (cert->sigAlgorithm == OID_SM3_SM2_SIG &&
+                ssl->sec.keySelect.peerSigAlgs[i] == sigalg_sm2sig_sm3)
             {
                 peerCanVerifyCert = PS_TRUE;
             }

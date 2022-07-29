@@ -1,7 +1,7 @@
 #
 #	Build rules file for test applications using CL.
 #
-#	Copyright (c) 2016-2017 INSIDE Secure Corporation. All Rights Reserved.
+#	Copyright (c) 2016-2017 Rambus Inc. All Rights Reserved.
 #
 #       This file is included from Makefile with include rules.mk
 
@@ -26,6 +26,10 @@ RULES_MK=$(CORE_DIR)/makefiles/rules.mk
 
 ifneq '$(USE_EXPORT_LEVEL_CRYPTO)' ''
 CPPFLAGS += -DUSE_EXPORT_LEVEL_CRYPTO
+endif
+
+ifneq '$(USE_CRYPTO_SM)' ''
+CPPFLAGS += -DUSE_CRYPTO_SM
 endif
 
 # Provide CFLAGS if it has not been specified on command line or base makefile

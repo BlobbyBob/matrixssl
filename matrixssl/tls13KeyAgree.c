@@ -5,7 +5,7 @@
  *      TLS 1.3 specific functions for key agreement.
  */
 /*
- *      Copyright (c) 2018 INSIDE Secure Corporation
+ *      Copyright (c) 2018 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -628,6 +628,13 @@ uint16_t tls13NegotiateGroup(ssl_t *ssl,
     uint16_t negotiatedGroup;
     int32_t rc;
 
+# ifdef USE_SM2
+    if (ssl->tls13SelectedSMSuite == PS_TRUE)
+    {
+        return namedgroup_curveSM2;
+    }
+# endif
+
     psAssert(ssl->tls13SupportedGroups[0] != 0);
 
     /* Default. If anything goes wrong, use this. */
@@ -1053,6 +1060,13 @@ psBool_t tls13WeSupportGroup(ssl_t *ssl,
     {
         if (ssl->tls13SupportedGroups[i] == namedGroup)
         {
+#ifdef USE_SM2
+            if (ssl->tls13SelectedSMSuite == PS_TRUE &&
+                namedGroup != namedgroup_curveSM2)
+            {
+                return PS_FALSE;
+            }
+#endif
             return PS_TRUE;
         }
     }

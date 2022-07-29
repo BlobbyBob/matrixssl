@@ -2,7 +2,7 @@
 #       Construct header files from keys and other cryptographic properties.
 #       The constructed files can be built during packaging.
 #
-#       Copyright (c) 2013-2016 INSIDE Secure Corporation. All Rights Reserved.
+#       Copyright (c) 2013-2016 Rambus Inc. All Rights Reserved.
 #
 
 # Check if prepkg has already been done

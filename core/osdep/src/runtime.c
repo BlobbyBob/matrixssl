@@ -48,7 +48,7 @@ SLSodium_runtime_arm_cpu_features(CPUFeatures * const cpu_features)
 #else /* some ARM platform. */
 #  define NO_INTEL /* This architecture is definitely not x86/x86-64.
                       No need to probe for Intel CPU features. */
-    /* Customization for INSIDE Secure FIPS Toolkit: */
+    /* Customization for Rambus Inc.FIPS Toolkit: */
     /* Use sl_cpu.c for ARM feature detection, instead of
        the default sodium code. */
     

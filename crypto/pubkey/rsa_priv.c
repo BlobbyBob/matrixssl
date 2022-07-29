@@ -5,7 +5,7 @@
  *      RSA private key operations.
  */
 /*
- *      Copyright (c) 2013-2018 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -62,15 +62,26 @@ static const unsigned char asn384dsWrap[] =
 {
     0x30, 0x41, 0x30, 0x0D, 0x06, 0x09, 0x60, 0x86,
     0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02, 0x05,
-    0x00,  0x04, 0x30
+    0x00, 0x04, 0x30
 };
 # endif
 
+# ifdef USE_SHA512
+static const unsigned char asn512dsWrap[] =
+{
+    0x30, 0x51, 0x30, 0x0D, 0x06, 0x09, 0x60, 0x86,
+    0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03, 0x05,
+    0x00, 0x04, 0x40
+};
+# endif
+
+# ifdef USE_SHA1
 static const unsigned char asn1dsWrap[] =
 {
     0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2B, 0x0E,
     0x03, 0x02, 0x1A, 0x05, 0x00, 0x04, 0x14
 };
+# endif
 
 int32_t privRsaEncryptSignedElement(psPool_t *pool, psRsaKey_t *key,
     const unsigned char *in, psSize_t inlen,
@@ -100,6 +111,13 @@ int32_t privRsaEncryptSignedElement(psPool_t *pool, psRsaKey_t *key,
     case SHA384_HASH_SIZE:
         inlenWithAsn = inlen + ASN_OVERHEAD_LEN_RSA_SHA2;
         Memcpy(c, asn384dsWrap, ASN_OVERHEAD_LEN_RSA_SHA2);
+        Memcpy(c + ASN_OVERHEAD_LEN_RSA_SHA2, in, inlen);
+        break;
+# endif
+# ifdef USE_SHA512
+    case SHA512_HASH_SIZE:
+        inlenWithAsn = inlen + ASN_OVERHEAD_LEN_RSA_SHA2;
+        Memcpy(c, asn512dsWrap, ASN_OVERHEAD_LEN_RSA_SHA2);
         Memcpy(c + ASN_OVERHEAD_LEN_RSA_SHA2, in, inlen);
         break;
 # endif

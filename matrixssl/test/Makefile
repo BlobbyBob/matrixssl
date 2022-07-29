@@ -1,14 +1,15 @@
 #
 #	Makefile for MatrixSSL testing
 #
-#	Copyright (c) 2013-2016 INSIDE Secure Corporation. All Rights Reserved.
+#	Copyright (c) 2013-2016 Rambus Inc. All Rights Reserved.
 #
 
 MATRIXSSL_ROOT:=../..
 TEST_SRC:=sslTest.c
 CERT_SRC:=certValidate.c
 PROVIDER_SRC:=provider.c
-SRC:=$(TEST_SRC) $(CERT_SRC) $(PROVIDER_SRC)
+PKCS_SRC:=pkcs12Test.c
+SRC:=$(TEST_SRC) $(CERT_SRC) $(PROVIDER_SRC) $(PKCS_SRC)
 
 # Linked files
 STATIC:=../libssl_s.a $(MATRIXSSL_ROOT)/crypto/libcrypt_s.a $(MATRIXSSL_ROOT)/core/libcore_s.a
@@ -26,6 +27,7 @@ STATIC+=$(LIBDRIVER_VAL_UP_PATH)
 CERT_EXE:=certValidate$(E)
 TEST_EXE:=sslTest$(E)
 PROVIDER_EXE:=provider$(E)
+PKCS_EXE:=pkcs12Test$(E)
 
 ifeq '$(CL_NO_PKCS)' ''
 CFLAGS+=-DUSE_CL_PKCS -DUSE_CL_CERTLIB
@@ -59,5 +61,8 @@ $(CERT_EXE): $(CERT_SRC:.c=.o) $(STATIC)
 $(PROVIDER_EXE): $(PROVIDER_SRC:.c=.o) $(STATIC)
 	$(CC) -o $@ $^ $(EXTRA_CFLAGS) $(LDFLAGS)
 
+$(PKCS_EXE): $(PKCS_SRC:.c=.o) $(STATIC)
+	$(CC) -o $@ $^ $(EXTRA_CFLAGS) $(LDFLAGS)
+
 clean:
-	rm -f $(TEST_EXE) $(CERT_EXE) $(PROVIDER_EXE) $(OBJS) $(CLEAN_EXTRA_FILES) *.map
+	rm -f $(TEST_EXE) $(PKCS_EXE) $(CERT_EXE) $(PROVIDER_EXE) $(OBJS) $(CLEAN_EXTRA_FILES) *.map

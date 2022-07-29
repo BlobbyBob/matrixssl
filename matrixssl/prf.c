@@ -5,7 +5,7 @@
  *      "Native" Pseudo Random Function.
  */
 /*
- *      Copyright (c) 2013-2017 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2017 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -54,6 +54,13 @@ int32_t prf2(const unsigned char *sec, psSize_t secLen,
     const unsigned char *seed, psSize_t seedLen,
     unsigned char *out, psSize_t outLen, uint32_t flags)
 {
+# ifdef USE_SM3
+    if (flags & CRYPTO_FLAGS_SM3)
+    {
+        return psPrf2_Sm3(sec, secLen, seed, seedLen,
+                   out, outLen, SM3_HASH_SIZE);
+    }
+# endif
     return psPrf2(sec, secLen, seed, seedLen, out, outLen,
         (flags & CRYPTO_FLAGS_SHA3) ?
         SHA384_HASH_SIZE : SHA256_HASH_SIZE);

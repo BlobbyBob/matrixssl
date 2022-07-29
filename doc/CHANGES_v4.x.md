@@ -1,5 +1,36 @@
 # MatrixSSL 4.x changelog
 
+## Changes between 4.5.0 and 4.5.1 [July 2022]
+
+    * Fix a usage of return value of psX509ParseCert when a flag is set
+
+## Changes between 4.4.0 and 4.5.0 [June 2022]
+
+    * Enabled RSA SHA512 signature algorithm in TLS1.2 certrequest.
+    * Enabled SHA512 in privRsaEncryptSignedElement.
+    * Fixed DTLS change cipher spec retransmit epoch.
+    * Compilation warning fixes.
+    * Memory leak fixes.
+
+## Changes between 4.3.0 and 4.4.0 [December 2021]
+
+    * Fixed a type mismatch in matrixCmsParseEnvelopedDataBuf.
+    * Increased the value of MAX_OID_BYTES to 48.
+    * Changes to the handling of the validity time in self generated certs.
+    * Fixed a possible vulnerability in parseAuthorityInfoAccess 
+	  discovered by Tavis Ormandy (Github issue #44). 
+    * Fixed a memory leak in getExplicitExtensions 
+	  discovered by Tavis Ormandy (Github issue #43). 
+    * Fixed vulnerability in SHA256 intialisation discovered by Marcel Maehren,
+      Philipp Nieting, Sven Hebrok, Robert Merget, Juraj Somorovsky and
+      Jörg Schwenk from Ruhr University Bochum and Paderborn-University.
+    * Fixes in cross certificate handling.
+    * Fixed a bug in pkcs1Pad.
+    * Fixed a bug in psX963KeyDerivation.
+    * Fixed the default behaviour when TLS version is not explicitly specified.
+    * Fixed compilation errors when using debugging.
+    * Memory leak fixes.
+
 ## Changes between 4.2.2 and 4.3.0 [June 2020]
 
     * Added a constant-time variant of eccMulmod, in response to the Minerva attack.

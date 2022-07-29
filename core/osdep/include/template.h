@@ -11,18 +11,18 @@ __END__
 
 #ifdef MATRIX_COMMERCIAL
 /*****************************************************************************
-* Copyright (c) 2017 INSIDE Secure Oy. All Rights Reserved.
+* Copyright (c) 2017 Rambus Inc. All Rights Reserved.
 *
 * This confidential and proprietary software may be used only as authorized
-* by a licensing agreement from INSIDE Secure.
+* by a licensing agreement from Rambus Inc.
 *
 * The entire notice above must be reproduced on all authorized copies that
 * may only be made to the extent permitted by a licensing agreement from
-* INSIDE Secure.
+* Rambus Inc.
 *****************************************************************************/
 #else
 /*****************************************************************************
-* Copyright (c) 2017 INSIDE Secure Oy. All Rights Reserved.
+* Copyright (c) 2017 Rambus Inc. All Rights Reserved.
 *
 * The latest version of this code is available at http://www.matrixssl.org
 *
@@ -33,8 +33,8 @@ __END__
 *
 * This General Public License does NOT permit incorporating this software
 * into proprietary programs.  If you are unable to comply with the GPL, a
-* commercial license for this software may be purchased from INSIDE at
-* http://www.insidesecure.com/
+* commercial license for this software may be purchased from Rambus Inc at
+* http://www.rambus.com/
 *
 * This program is distributed in WITHOUT ANY WARRANTY; without even the
 * implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.

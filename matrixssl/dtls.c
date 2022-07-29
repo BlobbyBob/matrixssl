@@ -5,7 +5,7 @@
  *      DTLS specific code.
  */
 /*
- *      Copyright (c) 2013-2017 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2017 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -359,7 +359,9 @@ static int32 fragmentHSMessage(ssl_t *ssl, unsigned char *msg, int32 msgLen,
 
     overhead = ssl->recordHeadLen + ssl->hshakeHeadLen;
 
-    if ((ssl->flags & SSL_FLAGS_WRITE_SECURE) && (ssl->enBlockSize > 1))
+    if ((ssl->flags & SSL_FLAGS_WRITE_SECURE) &&
+        ((ssl->enBlockSize > 1) ||
+         ((ssl->enBlockSize == 0) && (ssl->enMacSize > 0))))
     {
         secureOverhead = ssl->enMacSize +        /* handshake msg hash */
                          (ssl->enBlockSize * 2); /* explictIV and max pad */
@@ -384,8 +386,10 @@ static int32 fragmentHSMessage(ssl_t *ssl, unsigned char *msg, int32 msgLen,
         }
 
         /* Make secure adjustments */
-        if ((ssl->flags & SSL_FLAGS_WRITE_SECURE) && (ssl->enBlockSize > 1))
-        {
+        if ((ssl->flags & SSL_FLAGS_WRITE_SECURE) &&
+            ((ssl->enBlockSize > 1) ||
+             ((ssl->enBlockSize == 0) && (ssl->enMacSize > 0))))
+         {
             recordLen = fragLen + ssl->hshakeHeadLen + ssl->enMacSize +
                         ssl->enBlockSize;
             padLen = psPadLenPwr2(recordLen, ssl->enBlockSize);
@@ -541,7 +545,7 @@ int32 dtlsEncryptFragRecord(ssl_t *ssl, flightEncode_t *msg,
         ssl->outRecType = (unsigned char) msg->type;
     }
 
-    if ((ssl->flags & SSL_FLAGS_WRITE_SECURE) && (ssl->enBlockSize > 1))
+    if ((ssl->flags & SSL_FLAGS_WRITE_SECURE) && (ssl->enMacSize > 1))
     {
         *c += ssl->generateMac(ssl, (unsigned char) msg->type,
             encryptStart + ssl->enBlockSize,
@@ -790,12 +794,6 @@ void dtlsIncrRsn(ssl_t *ssl)
 void incrTwoByte(ssl_t *ssl, unsigned char *c, int sending)
 {
     int32 i;
-
-    if (sending)
-    {
-        c[0] = ssl->largestEpoch[0];
-        c[1] = ssl->largestEpoch[1];
-    }
 
     for (i = 1; i >= 0; i--)
     {

@@ -1,7 +1,7 @@
 ##
 # Environment detection: detect flags for ar.
 # @version $Format:%h%d$
-# Copyright (c) 2018 INSIDE Secure Oy. All Rights Reserved.
+# Copyright (c) 2018 Rambus Inc. All Rights Reserved.
 #
 #-------------------------------------------------------------------------------
 

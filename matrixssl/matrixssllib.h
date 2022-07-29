@@ -6,7 +6,7 @@
  *      Only modifiers of the library should be intersted in this file
  */
 /*
- *      Copyright (c) 2013-2018 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -19,8 +19,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -264,14 +264,14 @@ extern "C" {
 # define TLS_GCM_TAG_LEN                 16
 # define TLS_CHACHA20_POLY1305_IETF_TAG_LEN   16
 # define TLS_CCM_TAG_LEN                 16
-# define TLS_CCM8_TAG_LEN                8
+# define TLS_CCM_8_TAG_LEN                8
 
 # define TLS_AEAD_NONCE_MAXLEN           12/* Maximum length for an AEAD's nonce */
 # define TLS_EXPLICIT_NONCE_LEN          8
 # define TLS_CHACHA20_POLY1305_IETF_NONCE_LEN 0
 
 # define AEAD_NONCE_LEN(SSL) ((SSL->flags & SSL_FLAGS_NONCE_W) ? TLS_EXPLICIT_NONCE_LEN : 0)
-# define AEAD_TAG_LEN(SSL) ((SSL->cipher->flags & CRYPTO_FLAGS_CCM8) ? 8 : 16)
+# define AEAD_TAG_LEN(SSL) ((SSL->cipher->flags & CRYPTO_FLAGS_CCM_8) ? 8 : 16)
 
 /*
     matrixSslSetSessionOption defines
@@ -383,7 +383,9 @@ enum PACKED
     CS_ECDHE_RSA,
     CS_ECDH_ECDSA,
     CS_ECDH_RSA,
-    CS_TLS13 /* TLS 1.3 suites only specify the symmetric and hash algs. */
+    CS_TLS13, /* TLS 1.3 suites only specify the symmetric and hash algs. */
+    CS_ECDHE_SM2,
+    CS_SM2
 };
 
 /*
@@ -495,13 +497,15 @@ enum PACKED
     HASH_SIG_SHA1,
     HASH_SIG_SHA256 = 4,
     HASH_SIG_SHA384,
-    HASH_SIG_SHA512
+    HASH_SIG_SHA512,
+    HASH_SIG_SM3
 };
 
 enum PACKED
 {
     HASH_SIG_RSA = 1,
-    HASH_SIG_ECDSA = 3 /* This 3 is correct for hashSigAlg */
+    HASH_SIG_ECDSA = 3, /* This 3 is correct for hashSigAlg */
+    HASH_SIG_SM2 = 7
 };
 
 /* Internal flag format for algorithms */
@@ -519,6 +523,7 @@ enum PACKED
     HASH_SIG_SHA256_ECDSA_MASK = 0x100 << HASH_SIG_SHA256,
     HASH_SIG_SHA384_ECDSA_MASK = 0x100 << HASH_SIG_SHA384,
     HASH_SIG_SHA512_ECDSA_MASK = 0x100 << HASH_SIG_SHA512,
+    HASH_SIG_SM3_SM2_MASK = 0x100 << HASH_SIG_SM3,
 };
 
 /** Return a unique flag for the given HASH_SIG_ALG. */
@@ -895,6 +900,9 @@ struct sslSec
     tls13_flight_state_t tls13KsState;
     psSha256_t tls13msgHashSha256;
     psSha384_t tls13msgHashSha384;
+#  ifdef USE_SM3
+    psSm3_t tls13msgHashSm3;
+#  endif
 # endif /* USE_TLS_1_3 */
 
 # ifdef USE_NATIVE_TLS_ALGS
@@ -963,6 +971,9 @@ struct sslSec
 #   ifdef USE_SHA512
     psSha512_t msgHashSha512;
 #   endif
+#   ifdef USE_SM3
+    psSm3_t msgHashSm3;
+#   endif
 #  endif
 # endif  /* USE_TLS_1_2 */
 
@@ -971,6 +982,9 @@ struct sslSec
     unsigned char sha384Snapshot[SHA384_HASH_SIZE];       /* HW crypto uses
                                                              outside TLS 1.2 */
     unsigned char sha512Snapshot[SHA512_HASH_SIZE];
+# ifdef USE_SM3
+    unsigned char sm3Snapshot[SM3_HASH_SIZE];
+# endif
 # endif
 
 # if defined(USE_PSK_CIPHER_SUITE) && defined(USE_CLIENT_SIDE_SSL)
@@ -1109,6 +1123,9 @@ typedef struct
     uint16_t type;        /* one of PKA_AFTER_* */
     uint16_t user;        /* user size */
     psPool_t *pool;
+# if defined(USE_SM2) && defined(USE_SM3)
+    uint16_t sigAlg;
+# endif
 } pkaAfter_t;
 
 typedef struct nextMsgInFlight
@@ -1338,6 +1355,7 @@ struct ssl
     psBool_t tls13CiphersuitesEnabledClient;
     psBool_t tls13CHContainsSha256Suite;
     psBool_t tls13CHContainsSha384Suite;
+    psBool_t tls13CHContainsSMSuite;
     unsigned char *tls13CertRequestContext;
     psSize_t tls13CertRequestContextLen;
     psBool_t tls13GotCertificateRequest;
@@ -1349,6 +1367,7 @@ struct ssl
     uint32_t tls13EarlyDataStatus;
     psSizeL_t tls13PadLen;
     psSizeL_t tls13BlockSize;
+    psBool_t tls13SelectedSMSuite;
 #endif
     /* This is shared between all TLS versions. */
     uint16_t supportedSigAlgs[TLS_MAX_SIGNATURE_ALGORITHMS];
@@ -2141,6 +2160,39 @@ extern int32 csChacha20Poly1305IetfDecryptTls13(void *ssl,
         unsigned char *ct,
         unsigned char *pt,
         uint32 len);
+extern int32 csAesCcmInitTls13(sslSec_t *sec,
+        int32 type,
+        uint32 keysize);
+extern int32 csAesCcmEncryptTls13(void *ssl,
+        unsigned char *pt,
+        unsigned char *ct,
+        uint32 ptLen);
+extern int32 csAesCcmDecryptTls13(void *ssl,
+        unsigned char *ct,
+        unsigned char *pt,
+        uint32 len);
+extern int32 csSm4CcmInitTls13(sslSec_t *sec,
+        int32 type,
+        uint32 keysize);
+extern int32 csSm4CcmEncryptTls13(void *ssl,
+        unsigned char *pt,
+        unsigned char *ct,
+        uint32 ptLen);
+extern int32 csSm4CcmDecryptTls13(void *ssl,
+        unsigned char *ct,
+        unsigned char *pt,
+        uint32 len);
+extern int32 csSm4GcmInitTls13(sslSec_t *sec,
+        int32 type,
+        uint32 keysize);
+extern int32 csSm4GcmEncryptTls13(void *ssl,
+        unsigned char *pt,
+        unsigned char *ct,
+        uint32 ptLen);
+extern int32 csSm4GcmDecryptTls13(void *ssl,
+        unsigned char *ct,
+        unsigned char *pt,
+        uint32 len);
 
 /* Misc. */
 extern void tls13ClearPeerSupportedGroupList(ssl_t *ssl);
@@ -2254,6 +2306,11 @@ extern int32 tlsHMACSha2(ssl_t *ssl, int32 mode, unsigned char type,
                          unsigned char *data, uint32 len, unsigned char *mac,
                          int32 hashSize);
 #  endif
+#  ifdef  USE_SM3
+extern int32 tlsHMACSm3(ssl_t *ssl, int32 mode, unsigned char type,
+                         unsigned char *data, uint32 len, unsigned char *mac,
+                         int32 hashSize);
+#  endif
 
 /******************************************************************************/
 
@@ -2266,6 +2323,9 @@ extern int32 sslSha384RetrieveHSHash(ssl_t *ssl, unsigned char *out);
 #    ifdef USE_SHA512
 extern int32 sslSha512RetrieveHSHash(ssl_t *ssl, unsigned char *out);
 #    endif
+#    ifdef USE_SM3
+extern int32 sslSm3RetrieveHSHash(ssl_t *ssl, unsigned char *out);
+#    endif
 #   endif
 #   ifdef USE_CLIENT_SIDE_SSL
 extern void sslSha1SnapshotHSHash(ssl_t *ssl, unsigned char *out);
@@ -2274,6 +2334,9 @@ extern void sslSha384SnapshotHSHash(ssl_t *ssl, unsigned char *out);
 #    endif
 #    ifdef USE_SHA512
 extern void sslSha512SnapshotHSHash(ssl_t *ssl, unsigned char *out);
+#    endif
+#    ifdef USE_SM3
+extern void sslSm3SnapshotHSHash(ssl_t *ssl, unsigned char *out);
 #    endif
 #   endif
 #  endif /* USE_TLS_1_2 */

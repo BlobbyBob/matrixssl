@@ -10,7 +10,7 @@
 
 /*
  *      Copyright (c) 2019 Verimatrix
- *      Copyright (c) 2013-2019 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2019 Rambus Inc.
  *      All Rights Reserved
  *
  *      This file can be edited to modify exact set of accessor functions
@@ -19,11 +19,11 @@
  *      The copyright notice above does not evidence any actual or intended
  *      publication of such source code.
  *
- *      This Module contains Proprietary Information of INSIDE and should be
+ *      This Module contains Proprietary Information of Rambus and should be
  *      treated as Confidential.
  *
  *      The information in this file is provided for the exclusive use of the
- *      licensees of INSIDE. Such users have the right to use, modify,
+ *      licensees of Rambus. Such users have the right to use, modify,
  *      and incorporate this code into products for purposes authorized by the
  *      license agreement provided they include this notice and the associated
  *      copyright notice with any such product.

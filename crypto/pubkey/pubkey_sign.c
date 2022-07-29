@@ -5,7 +5,7 @@
  *      Algorithm-independent signing API.
  */
 /*
- *      Copyright (c) 2013-2018 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2018 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -68,6 +68,7 @@ int32_t psSignHashEcdsaInternal(psPool_t *pool,
     }
 
     sigLen = sizeof(tmp);
+
     rc = psEccDsaSign(pool,
             &privKey->key.ecc,
             in,
@@ -76,6 +77,7 @@ int32_t psSignHashEcdsaInternal(psPool_t *pool,
             &sigLen,
             includeSize,
             opts ? opts->userData : NULL);
+
     if (rc < 0)
     {
         return rc;
@@ -203,6 +205,15 @@ int32_t psSignHash(psPool_t *pool,
         }
         break;
 # endif /* USE_ECC */
+# ifdef USE_SM2
+    case OID_SM3_SM2_SIG:
+        if (privKey->type == PS_ECC)
+        {
+            return psSignHashEcdsaInternal(pool, privKey, sigAlg,
+                in, inLen, out, outLen, opts);
+        }
+	break;
+# endif
 # ifdef USE_RSA
 #  ifdef USE_PKCS1_PSS
     case OID_RSASSA_PSS:
@@ -246,7 +257,10 @@ int32_t psSign(psPool_t *pool,
     psSizeL_t sigLen;
 # endif
     psSize_t sigLenPsSize = 0;
-
+# if defined(USE_SM2) && defined(USE_SM3)
+    unsigned char sm3_out[SM3_HASH_SIZE] = { 0 };
+    psSize_t sm3_out_len = SM3_HASH_SIZE;
+# endif
 # ifdef DEBUG_PUBKEY_SIGN
     psTraceBytes("psSign in", in, inLen);
 # endif
@@ -285,14 +299,34 @@ int32_t psSign(psPool_t *pool,
 # endif /* USE_ED25519 */
     default:
         /* All sig algs other than Ed25519 operate on hashes. */
-        rc = psSignHash(pool,
-                privKey,
-                sigAlg,
-                in,
-                inLen,
-                &sigOut,
-                &sigLenPsSize,
-                opts);
+# if defined(USE_SM2) && defined(USE_SM3)
+        if (opts && (opts->flags & PS_SIGN_OPTS_SM2_SIGN))
+        {
+            psComputeHashForSm2(in, inLen,
+                    &privKey->key.ecc,
+                    "1234567812345678", 16,
+                    sm3_out, &sm3_out_len);
+            rc = psSignHash(pool,
+                    privKey,
+                    OID_SM3_SM2_SIG,
+                    sm3_out,
+                    sm3_out_len,
+                    &sigOut,
+                    &sigLenPsSize,
+                    opts);
+        }
+        else
+# endif
+        {
+            rc = psSignHash(pool,
+                    privKey,
+                    sigAlg,
+                    in,
+                    inLen,
+                    &sigOut,
+                    &sigLenPsSize,
+                    opts);
+        }
         *outLen = sigLenPsSize;
     }
 
@@ -304,6 +338,61 @@ int32_t psSign(psPool_t *pool,
 
     return rc;
 }
+
+#if defined(USE_SM2) && defined(USE_SM3)
+psRes_t psComputeHashForSm2(const unsigned char *dataBegin,
+    psSizeL_t dataLen,
+    const psEccKey_t *key,
+    const char *id,
+    psSizeL_t idLen,
+    unsigned char hashOut[SM3_HASH_SIZE],
+    psSize_t *hashOutLen)
+{
+    unsigned char hashTmp[SM3_HASH_SIZE];
+    unsigned char idBits[2];
+    psDigestContext_t hash;
+    unsigned char parameters[] =
+    {
+        0xFF, 0xFF, 0xFF, 0xFE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFC, 0x28, 0xE9, 0xFA, 0x9E, 0x9D, 0x9F, 0x5E, 0x34,
+        0x4D, 0x5A, 0x9E, 0x4B, 0xCF, 0x65, 0x09, 0xA7, 0xF3, 0x97,
+        0x89, 0xF5, 0x15, 0xAB, 0x8F, 0x92, 0xDD, 0xBC, 0xBD, 0x41,
+        0x4D, 0x94, 0x0E, 0x93, 0x32, 0xC4, 0xAE, 0x2C, 0x1F, 0x19,
+        0x81, 0x19, 0x5F, 0x99, 0x04, 0x46, 0x6A, 0x39, 0xC9, 0x94,
+        0x8F, 0xE3, 0x0B, 0xBF, 0xF2, 0x66, 0x0B, 0xE1, 0x71, 0x5A,
+        0x45, 0x89, 0x33, 0x4C, 0x74, 0xC7, 0xBC, 0x37, 0x36, 0xA2,
+        0xF4, 0xF6, 0x77, 0x9C, 0x59, 0xBD, 0xCE, 0xE3, 0x6B, 0x69,
+        0x21, 0x53, 0xD0, 0xA9, 0x87, 0x7C, 0xC6, 0x2A, 0x47, 0x40,
+        0x02, 0xDF, 0x32, 0xE5, 0x21, 0x39, 0xF0, 0xA0
+    };
+
+    if (*hashOutLen < SM3_HASH_SIZE)
+    {
+        return PS_OUTPUT_LENGTH;
+    }
+    *hashOutLen = SM3_HASH_SIZE;
+    idBits[0] = ((idLen * 8) >> 8) % 256;
+    idBits[1] = (idLen * 8) % 256;
+
+    psSm3PreInit(&hash.u.sm3);
+    psSm3Init(&hash.u.sm3);
+    psSm3Update(&hash.u.sm3, idBits, 2);
+    psSm3Update(&hash.u.sm3, id, idLen);
+    psSm3Update(&hash.u.sm3, parameters, sizeof(parameters));
+    psSm3Update(&hash.u.sm3, key->pubvalue, key->pubvalue_len);
+    psSm3Final(&hash.u.sm3, hashTmp);
+
+    psSm3PreInit(&hash.u.sm3);
+    psSm3Init(&hash.u.sm3);
+    psSm3Update(&hash.u.sm3, hashTmp, SM3_HASH_SIZE);
+    psSm3Update(&hash.u.sm3, dataBegin, dataLen);
+    psSm3Final(&hash.u.sm3, hashOut);
+    return PS_SUCCESS;
+}
+#endif
+
 psRes_t psComputeHashForSig(const unsigned char *dataBegin,
     psSizeL_t dataLen,
     int32_t signatureAlgorithm,

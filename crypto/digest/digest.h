@@ -5,7 +5,7 @@
  *      Header for internal symmetric key cryptography support.
  */
 /*
- *      Copyright (c) 2013-2017 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2017 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -45,6 +45,7 @@
 # define MD2_HASH_SIZE       16
 # define MD5_HASH_SIZE       16
 # define MD5SHA1_HASH_SIZE   36
+# define SM3_HASH_SIZE       32
 
 # define SHA1_HASHLEN        20
 # define SHA224_HASHLEN      28
@@ -55,12 +56,13 @@
 # define MD4_HASHLEN         16
 # define MD5_HASHLEN         16
 # define MD5SHA1_HASHLEN     36
+# define SM3_HASHLEN         32
 
 # if defined(USE_SHA512)
 #  define MAX_HASH_SIZE SHA512_HASHLEN
 # elif defined(USE_SHA384)
 #  define MAX_HASH_SIZE SHA384_HASHLEN
-# elif defined(USE_SHA256)
+# elif defined(USE_SHA256) || defined(USE_SM3)
 #  define MAX_HASH_SIZE SHA256_HASHLEN
 # else
 #  define MAX_HASH_SIZE SHA1_HASHLEN
@@ -109,6 +111,9 @@ typedef struct
 # ifdef USE_MD4
         psMd4_t md4;
 # endif
+# ifdef USE_SM3
+        psSm3_t sm3;
+# endif
     } u;
     int32_t hashAlgId;
 } psDigestContext_t;
@@ -128,6 +133,9 @@ typedef struct
 # endif
 # ifdef USE_HMAC_SHA384
         psHmacSha384_t sha384;
+# endif
+# ifdef USE_HMAC_SM3
+        psHmacSm3_t sm3;
 # endif
     }               u;
     uint8_t type;         /* psCipherType_e */

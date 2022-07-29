@@ -6,7 +6,7 @@
  *
  */
 /*
- *      Copyright (c) 2018 INSIDE Secure Corporation
+ *      Copyright (c) 2018 Rambus Inc.
  *      All Rights Reserved
  *
  *      The latest version of this code is available at http://www.matrixssl.org
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -68,6 +68,9 @@ static const uint16_t tls12SigAlgs[] =
     sigalg_rsa_pss_rsae_sha384,
     sigalg_rsa_pss_rsae_sha512,
 # endif
+# ifdef USE_SM2
+    sigalg_sm2sig_sm3,
+# endif
     0
 };
 
@@ -80,6 +83,9 @@ static const uint16_t tls13SigAlgs[] =
     sigalg_ecdsa_secp521r1_sha512,
 # ifdef USE_ED25519
     sigalg_ed25519,
+# endif
+# ifdef USE_SM2
+    sigalg_sm2sig_sm3,
 # endif
     sigalg_rsa_pss_rsae_sha256,
     sigalg_rsa_pss_rsae_sha384,
@@ -102,6 +108,9 @@ static const uint16_t allSigAlgs[] =
     sigalg_ecdsa_secp521r1_sha512,
 # ifdef USE_ED25519
     sigalg_ed25519,
+# endif
+# ifdef USE_SM2
+    sigalg_sm2sig_sm3,
 # endif
 # ifdef USE_PKCS1_PSS
     sigalg_rsa_pss_rsae_sha256,
@@ -295,6 +304,7 @@ int32 getDefaultVersions(ssl_t *ssl)
            enabled via compile-time config. */
         if (!supportTls13Draft && (mask & v_tls_1_3_draft_any))
         {
+            mask >>= 1;
             continue;
         }
         /* Supported by the build-time config? */

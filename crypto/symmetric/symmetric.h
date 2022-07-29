@@ -5,7 +5,7 @@
  *      Header for symmetric key API implementations.
  */
 /*
- *      Copyright (c) 2013-2017 INSIDE Secure Corporation
+ *      Copyright (c) 2013-2017 Rambus Inc.
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -18,8 +18,8 @@
  *
  *      This General Public License does NOT permit incorporating this software
  *      into proprietary programs.  If you are unable to comply with the GPL, a
- *      commercial license for this software may be purchased from INSIDE at
- *      http://www.insidesecure.com/
+ *      commercial license for this software may be purchased from Rambus at
+ *      http://www.rambus.com/
  *
  *      This program is distributed in WITHOUT ANY WARRANTY; without even the
  *      implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -54,10 +54,14 @@
 # define SEED_KEYLEN     16
 # define CHACHA20POLY1305_IETF_IV_FIXED_LENGTH    12
 # define CHACHA20POLY1305_IETF  /* Always use IETF mode */
+# define SM4_BLOCKLEN    16
+# define SM4_IVLEN       SM4_BLOCKLEN
+# define SM4_KEYLEN      16
 
 # define MAX_IVLEN       AES_IVLEN
 # define MAX_KEYLEN      AES256_KEYLEN
 # define AES_MAXKEYLEN   AES256_KEYLEN
+# define SM4_MAXKEYLEN   16
 
 /******************************************************************************/
 /* Layer includes */
@@ -83,6 +87,9 @@ typedef union
 # ifdef USE_AES_GCM
     psAesGcm_t aesgcm;
 # endif
+# ifdef USE_AES_CCM
+    psAesCcm_t aesccm;
+# endif
 # ifdef USE_AES_CBC
     psAesCbc_t aes;
 # endif
@@ -103,6 +110,11 @@ typedef union
 # endif
 # ifdef USE_MATRIX_SEED
     psSeed_t seed;
+# endif
+# ifdef USE_SM4
+    psSm4Gcm_t sm4gcm;
+    psSm4Ccm_t sm4ccm;
+    psSm4Cbc_t sm4;
 # endif
 } psCipherContext_t;
 
