@@ -44,6 +44,7 @@
 # include "osdep-types.h"
 
 #ifdef USE_MATRIX_ED25519
+/* The pubkey must be the genuine key matching the privKey */
 int32_t psEd25519Sign(const unsigned char *msg,
         psSizeL_t msgLen,
         unsigned char *sigOut,

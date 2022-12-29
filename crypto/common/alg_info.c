@@ -86,6 +86,7 @@ psResSize_t psSigAlgToHashLen(int32_t sigAlg)
     case OID_MD5_RSA_SIG:
         return MD5_HASH_SIZE;
     case OID_SHA1_RSA_SIG:
+    case OID_SHA1_RSA_SIG2:
     case OID_SHA1_ECDSA_SIG:
     case OID_SHA1_DSA_SIG:
         return SHA1_HASH_SIZE;
@@ -132,7 +133,7 @@ psResSize_t psSigAlgToHashLen(int32_t sigAlg)
     }
 }
 
-# ifdef USE_PKCS1_PSS
+# if defined(USE_PKCS1_PSS) || defined(USE_PKCS1_OAEP)
 psResSize_t psPssHashAlgToHashLen(int32_t pssHashAlg)
 {
     switch(pssHashAlg)
@@ -420,8 +421,8 @@ psBool_t psIsEcdheGroup(uint16_t namedGroup)
             namedGroup == namedgroup_secp256r1 ||
             namedGroup == namedgroup_secp384r1 ||
             namedGroup == namedgroup_secp521r1 ||
-# ifdef USE_BRAIN521R1
-            namedGroup == namedgroup_brain521r1 ||
+# ifdef USE_BRAIN512R1
+            namedGroup == namedgroup_brain512r1 ||
 # endif
 # ifdef USE_BRAIN384R1
             namedGroup == namedgroup_brain384r1 ||

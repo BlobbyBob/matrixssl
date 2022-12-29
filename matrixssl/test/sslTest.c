@@ -7,7 +7,7 @@
  *      Iterates over all supported protocol versions and ciphersuites.
  */
 /*
- *      Copyright (c) 2014-2018 Rambus Inc
+ *      Copyright (c) 2014-2018 INSIDE Secure Corporation
  *      Copyright (c) PeerSec Networks, 2002-2011
  *      All Rights Reserved
  *
@@ -362,6 +362,9 @@ static __THREAD uint32_t ECCKEY_SIZE, ECC_SIZE, ECCCA_SIZE;
 #   include "testkeys/DH/2048_DH_PARAMS.h"
 #   include "testkeys/DH/3072_DH_PARAMS.h"
 #   include "testkeys/DH/4096_DH_PARAMS.h"
+#   include "testkeys/DH/ffdhe2048_DH_PARAMS.h"
+#   include "testkeys/DH/ffdhe3072_DH_PARAMS.h"
+#   include "testkeys/DH/ffdhe4096_DH_PARAMS.h"
 #   ifdef USE_LARGE_DH_GROUPS
 #    include "testkeys/DH/ffdhe6144_DH_PARAMS.h"
 #    include "testkeys/DH/ffdhe8192_DH_PARAMS.h"
@@ -1660,16 +1663,28 @@ L_NEXT_DH:
             switch (DH_SIZE)
             {
             case 0:
-                DHPARAM = DHPARAM1024; DH_SIZE = DHPARAM1024_SIZE;
-                keysize = 1024;
-                break;
+                {
+                    DHPARAM = DHPARAM1024; DH_SIZE = DHPARAM1024_SIZE;
+                    keysize = 1024;
+                    break;
+                }
             case DHPARAM1024_SIZE:
-                DHPARAM = DHPARAM2048; DH_SIZE = DHPARAM2048_SIZE;
-                keysize = 2048;
-                break;
+                {
+                    DHPARAM = DHPARAM2048; DH_SIZE = DHPARAM2048_SIZE;
+                    keysize = 2048;
+                    break;
+                }
             case DHPARAM2048_SIZE:
                 DHPARAM = DHPARAM3072; DH_SIZE = DHPARAM3072_SIZE;
                 keysize = 3072;
+                break;
+            case ffdhe2048_DH_PARAMS_SIZE:
+                DHPARAM = ffdhe3072_DH_PARAMS; DH_SIZE = ffdhe3072_DH_PARAMS_SIZE;
+                keysize = 3072;
+                break;
+            case ffdhe3072_DH_PARAMS_SIZE:
+                DHPARAM = ffdhe4096_DH_PARAMS; DH_SIZE = ffdhe4096_DH_PARAMS_SIZE;
+                keysize = 4096;
                 break;
             case DHPARAM3072_SIZE:
 #   if !defined(EMBEDDED) || defined(USE_LARGE_DH_GROUPS)
@@ -1677,7 +1692,7 @@ L_NEXT_DH:
                 keysize = 4096;
                 break;
 #   if defined(USE_LARGE_DH_GROUPS)
-            case DHPARAM4096_SIZE:
+            case DHPARAM4096_SIZE:case ffdhe4096_DH_PARAMS_SIZE:
                 DHPARAM = ffdhe6144_DH_PARAMS;
                 DH_SIZE = ffdhe6144_DH_PARAMS_SIZE;
                 keysize = 6144;
@@ -1689,7 +1704,7 @@ L_NEXT_DH:
                 break;
             case ffdhe8192_DH_PARAMS_SIZE:
 #   else
-            case DHPARAM4096_SIZE:
+            case DHPARAM4096_SIZE:case ffdhe4096_DH_PARAMS_SIZE:
 #   endif
 #   endif       /* !EMBEDDED || USE_LARGE_DH_GROUPS */
                 DH_SIZE = 0;
@@ -1701,6 +1716,7 @@ L_NEXT_DH:
             }
         }
 #  endif /* REQUIRE_DH_PARAMS */
+
 
 # ifdef USE_PSK_CIPHER_SUITE
         if (spec->type == CS_PSK)

@@ -5,7 +5,7 @@
  *      Test program that tries out the new extensions to pkcs12 parsing.
  */
 /*
- *      Copyright (c) 2020 Rambus Inc
+ *      Copyright (c) 2020 INSIDE Secure Corporation
  *      All Rights Reserved
  *
  *      The latest version of this code is available at http://www.matrixssl.org

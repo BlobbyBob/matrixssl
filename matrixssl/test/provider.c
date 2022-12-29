@@ -5,7 +5,7 @@
  *      Example how to set crypto provider programmatically.
  */
 /*
- *      Copyright (c) 2017-2017 Rambus Inc
+ *      Copyright (c) 2017-2017 INSIDE Secure Corporation
  *      All Rights Reserved
  *
  *      The latest version of this code is available at http://www.matrixssl.org

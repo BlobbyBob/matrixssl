@@ -474,7 +474,7 @@ extern int32_t psGetPrngLocked(unsigned char *bytes, psSize_t size,
 #  define namedgroup_secp521r1   0x0019
 #  define namedgroup_brain256r1  0x001a
 #  define namedgroup_brain384r1  0x001b
-#  define namedgroup_brain521r1  0x001c
+#  define namedgroup_brain512r1  0x001c
 #  define namedgroup_x25519      0x001d
 #  define namedgroup_x448        0x001e
 #  define namedgroup_ffdhe2048   0x0100

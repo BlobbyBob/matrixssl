@@ -1934,7 +1934,7 @@ static int32 sighandlers(void)
 /* Warn on segmentation violation */
 static void sigsegv_handler(int unused)
 {
-    Printf("Segfault! Please report this as a bug to support@peersec.com\n");
+    Printf("Segfault! Please report this as a bug to matrixssl@rambus.com\n");
     exit(EXIT_FAILURE);
 }
 

@@ -269,7 +269,14 @@ parse_next_record_header:
         }
         /* Done - tell the caller what we've consumed. */
         *in += parsedBytes;
-        *len -= parsedBytes;
+        if (*len >= parsedBytes)
+        {
+            *len -= parsedBytes;
+        }
+        else
+        {
+            return MATRIXSSL_ERROR;
+        }
         *remaining -= PS_MIN(parsedBytes, *remaining);
         /* If there's handshake message waiting in outbuf then send it */
         if (ssl->outlen > 0)

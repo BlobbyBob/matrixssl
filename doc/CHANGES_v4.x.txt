@@ -1,5 +1,11 @@
                             MatrixSSL 4.x changelog
 
+Changes between 4.5.1 and 4.6.0 [December 2022]
+
+* Fixed a integer overflow (CVE-2022-43974) The vulnerability was found by
+  Robert Hörr and Alissar Ibrahim, Security Evaluators of the Telekom
+  Security Evaluation Facility.
+
 Changes between 4.5.0 and 4.5.1 [July 2022]
 
 * Fix a usage of return value of psX509ParseCert when a flag is set
